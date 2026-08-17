@@ -95,7 +95,8 @@ LEGACY_PHOTO_INDEX_PATH = LEGACY_THUMB_CACHE_DIR / 'photos_index_v1.json'
 # Thumbnails may be cached in any of these formats depending on ffmpeg build.
 THUMB_FORMATS = (('.webp', 'image/webp'), ('.jpg', 'image/jpeg'), ('.png', 'image/png'))
 
-PREWARM_ENABLED = os.environ.get('MEDIA_PREWARM', '1').lower() not in ('0', 'false', 'no')
+_PREWARM_DEFAULT = '0' if STORAGE_MODE == 'drive' else '1'
+PREWARM_ENABLED = os.environ.get('MEDIA_PREWARM', _PREWARM_DEFAULT).lower() not in ('0', 'false', 'no')
 THUMB_MEMORY_LIMIT = 64 * 1024 * 1024
 STREAM_CACHE_MAX_BYTES = int(os.environ.get('MEDIA_STREAM_CACHE_GB', '20')) * 1024 ** 3
 
@@ -142,10 +143,8 @@ def get_drive_storage():
 
 
 def resolve_media_path(rel_path):
-    """Return a local Path for serving; downloads from Drive when needed."""
+    """Return a local Path for serving (local mode only)."""
     rel_path = str(rel_path).replace('\\', '/').lstrip('/')
-    if STORAGE_MODE == 'drive':
-        return get_drive_storage().ensure_local(rel_path)
     filepath = Path(rel_path)
     return filepath if filepath.is_file() else None
 
@@ -159,6 +158,8 @@ def media_exists(rel_path):
 
 
 def vthumb_available():
+    if STORAGE_MODE == 'drive':
+        return True
     return bool(_ffmpeg_path or _qlmanage_path)
 
 
@@ -930,6 +931,100 @@ def _serve_ranged_file_body(handler, filepath):
                 break
 
 
+def serve_drive_media(handler, rel_path):
+    """Proxy a Drive file on demand with Range support — no full download."""
+    global _active_streams
+    drive = get_drive_storage()
+    meta = drive.get_meta(rel_path)
+    if not meta:
+        handler.send_error(404)
+        return
+    file_size = int(meta.get('size') or 0)
+    content_type = (
+        meta.get('mime')
+        or mimetypes.guess_type(meta['name'])[0]
+        or 'application/octet-stream'
+    )
+    range_header = handler.headers.get('Range')
+    parsed = parse_range_header(range_header, file_size) if file_size else None
+    if parsed == 'unsatisfiable':
+        handler.send_response(416)
+        handler.send_header('Content-Range', f'bytes */{file_size}')
+        handler.end_headers()
+        return
+
+    outgoing_range = None
+    if parsed:
+        start, end = parsed
+        outgoing_range = f'bytes={start}-{end}'
+    elif range_header:
+        outgoing_range = range_header
+
+    with _active_streams_lock:
+        _active_streams += 1
+    resp = None
+    try:
+        resp = drive.open_media(meta['id'], outgoing_range)
+        if resp.status_code not in (200, 206):
+            handler.send_error(502, f'Drive returned {resp.status_code}')
+            return
+        handler.send_response(resp.status_code)
+        handler.send_header('Content-Type', content_type)
+        content_length = resp.headers.get('Content-Length')
+        if content_length:
+            handler.send_header('Content-Length', content_length)
+        content_range = resp.headers.get('Content-Range')
+        if content_range:
+            handler.send_header('Content-Range', content_range)
+        elif parsed:
+            start, end = parsed
+            handler.send_header('Content-Range', f'bytes {start}-{end}/{file_size}')
+        handler.send_header('Accept-Ranges', 'bytes')
+        handler.send_header('Cache-Control', 'public, max-age=3600')
+        handler.end_headers()
+        for chunk in resp.iter_content(256 * 1024):
+            if not chunk or not safe_write(handler.wfile, chunk):
+                break
+    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+        pass
+    except Exception:
+        try:
+            handler.send_error(502, 'Drive stream failed')
+        except Exception:
+            pass
+    finally:
+        if resp is not None:
+            resp.close()
+        with _active_streams_lock:
+            _active_streams -= 1
+
+
+def serve_drive_thumb(handler, rel_path):
+    """Serve Drive's generated thumbnail; never downloads the source file."""
+    found = get_drive_storage().fetch_thumbnail(rel_path, size=400)
+    if not found:
+        handler.send_error(404)
+        return
+    data, mime = found
+    handler.send_response(200)
+    handler.send_header('Content-Type', mime)
+    handler.send_header('Content-Length', str(len(data)))
+    handler.send_header('Cache-Control', 'public, max-age=86400')
+    handler.end_headers()
+    safe_write(handler.wfile, data)
+
+
+def serve_media(handler, rel_path):
+    if STORAGE_MODE == 'drive':
+        serve_drive_media(handler, rel_path)
+        return
+    filepath = resolve_media_path(rel_path)
+    if filepath:
+        serve_ranged_file(handler, filepath)
+        return
+    handler.send_error(404)
+
+
 def respond_json(handler, obj):
     data = json.dumps(obj).encode()
     handler.send_response(200)
@@ -982,6 +1077,28 @@ class VideoHandler(SimpleHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', 'Range')
         self.send_header('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges')
         super().end_headers()
+
+    def do_HEAD(self):
+        path = unquote(self.path).split('?', 1)[0]
+        rel = path.lstrip('/')
+        if STORAGE_MODE == 'drive' and rel and '..' not in rel:
+            suffix = Path(rel).suffix.lower()
+            if suffix in VIDEO_EXTENSIONS or suffix in IMAGE_EXTENSIONS:
+                meta = get_drive_storage().get_meta(rel)
+                if meta:
+                    ctype = (
+                        meta.get('mime')
+                        or mimetypes.guess_type(meta['name'])[0]
+                        or 'application/octet-stream'
+                    )
+                    self.send_response(200)
+                    self.send_header('Content-Type', ctype)
+                    if meta.get('size'):
+                        self.send_header('Content-Length', str(meta['size']))
+                    self.send_header('Accept-Ranges', 'bytes')
+                    self.end_headers()
+                    return
+        super().do_HEAD()
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -1075,6 +1192,20 @@ class VideoHandler(SimpleHTTPRequestHandler):
         # API endpoint: returns metadata from PNG/WebP (ComfyUI prompt, workflow, etc.)
         if path.startswith('/api/metadata/'):
             rel = unquote(path[14:])
+            if STORAGE_MODE == 'drive':
+                meta = get_drive_storage().get_meta(rel)
+                if not meta:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                respond_json(self, {
+                    'file': rel,
+                    'size': meta.get('size', 0),
+                    'modified': meta.get('modified', 0),
+                    'format': Path(meta['name']).suffix.lstrip('.').upper() or None,
+                    'note': 'Gateway mode returns Drive metadata only (file is not downloaded).',
+                })
+                return
             filepath = resolve_media_path(rel)
             if filepath and filepath.is_file():
                 meta = extract_image_metadata(filepath)
@@ -1092,18 +1223,23 @@ class VideoHandler(SimpleHTTPRequestHandler):
         # Serve files by absolute path (for photos outside CWD)
         if path.startswith('/file/'):
             rel = unquote(path[6:])
-            filepath = resolve_media_path(rel)
-            if filepath and filepath.is_file():
-                serve_ranged_file(self, filepath)
+            if media_exists(rel):
+                serve_media(self, rel)
                 return
-            else:
-                self.send_response(404)
-                self.end_headers()
-                return
+            self.send_response(404)
+            self.end_headers()
+            return
 
         # Thumbnail endpoint: /thumb/path/to/image.jpg
         if path.startswith('/thumb/'):
             rel = unquote(path[7:])
+            if STORAGE_MODE == 'drive':
+                if media_exists(rel):
+                    serve_drive_thumb(self, rel)
+                    return
+                self.send_response(404)
+                self.end_headers()
+                return
             filepath = resolve_media_path(rel)
             if filepath and filepath.is_file():
                 try:
@@ -1171,6 +1307,13 @@ class VideoHandler(SimpleHTTPRequestHandler):
         # Video thumbnail endpoint: /vthumb/path/to/video.mp4
         if path.startswith('/vthumb/'):
             rel = unquote(path[8:])
+            if STORAGE_MODE == 'drive':
+                if media_exists(rel):
+                    serve_drive_thumb(self, rel)
+                    return
+                self.send_response(404)
+                self.end_headers()
+                return
             filepath = resolve_media_path(rel)
             if filepath and filepath.is_file():
                 cached = get_cached_video_thumbnail(filepath)
@@ -1213,14 +1356,13 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 return
 
-        # Stream video/audio with byte-range support (required for mobile playback)
+        # Stream video/images with byte-range support (required for mobile playback)
         rel_path = bare_path.lstrip('/')
         if rel_path and '..' not in rel_path:
             suffix = Path(rel_path).suffix.lower()
-            if suffix in VIDEO_EXTENSIONS and media_exists(rel_path):
-                filepath = resolve_media_path(rel_path)
-                if filepath and filepath.is_file():
-                    serve_ranged_file(self, filepath)
+            if suffix in VIDEO_EXTENSIONS or suffix in IMAGE_EXTENSIONS:
+                if media_exists(rel_path):
+                    serve_media(self, rel_path)
                     return
 
         # Serve other static files (HTML, images) normally
@@ -1274,10 +1416,13 @@ if __name__ == '__main__':
     print(f'   App files: {script_dir}')
     if STORAGE_MODE == 'drive':
         print(f'   Drive folder: {os.environ.get("DRIVE_ROOT_FOLDER_ID")}')
+        print(f'   Videos: {VIDEO_DIR}')
+        print(f'   Photos: {PHOTO_DIRS}')
+        print('   Gateway: streams Drive bytes on demand (no full-file cache)')
     else:
         print(f'   MEDIA_ROOT: {os.getcwd()}')
-    print(f'   Videos: {os.path.abspath(VIDEO_DIR)}')
-    print(f'   Photos: {[os.path.abspath(d) if not Path(d).is_absolute() else d for d in PHOTO_DIRS]}')
+        print(f'   Videos: {os.path.abspath(VIDEO_DIR)}')
+        print(f'   Photos: {[os.path.abspath(d) if not Path(d).is_absolute() else d for d in PHOTO_DIRS]}')
     if _ffmpeg_path:
         codec = 'webp' if _ffmpeg_has_webp else 'jpeg (no libwebp in this ffmpeg)'
         print(f'   Video thumbnails: ffmpeg -> {codec}')
@@ -1290,14 +1435,15 @@ if __name__ == '__main__':
     t0 = time.time()
     video_count = len(get_videos_cached())
     print(f'   Ready: {video_count} videos ({(time.time() - t0) * 1000:.0f} ms)')
-    threading.Thread(target=_faststart_worker, daemon=True).start()
-    if PREWARM_ENABLED:
-        prewarm_workers = 2
-        for worker_id in range(prewarm_workers):
-            threading.Thread(
-                target=_prewarm_worker, args=(worker_id, prewarm_workers), daemon=True
-            ).start()
-        print(f'   Thumbnail prewarm: on, {prewarm_workers} idle workers (MEDIA_PREWARM=0 to disable)')
+    if STORAGE_MODE != 'drive':
+        threading.Thread(target=_faststart_worker, daemon=True).start()
+        if PREWARM_ENABLED:
+            prewarm_workers = 2
+            for worker_id in range(prewarm_workers):
+                threading.Thread(
+                    target=_prewarm_worker, args=(worker_id, prewarm_workers), daemon=True
+                ).start()
+            print(f'   Thumbnail prewarm: on, {prewarm_workers} idle workers (MEDIA_PREWARM=0 to disable)')
     print(f'   Press Ctrl+C to stop')
     try:
         httpd.serve_forever()

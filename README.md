@@ -1,15 +1,17 @@
 # Comfy Media Gallery
 
-Browse **ComfyUI videos** and **Stable Diffusion photos** from **Google Drive**, with a Python server for ffmpeg thumbnails, byte-range streaming, and caching.
+Browse **ComfyUI videos** and **Stable Diffusion photos** from **Google Drive**.
+
+In cloud mode the Python server is a **gateway**: it lists your Drive folder, then **streams bytes on demand** when you play a video or open a photo. It does not download whole libraries, run ffmpeg, or pre-warm caches.
 
 ## Two ways to run
 
-| Mode | Where | Best for |
-|------|--------|----------|
-| **Cloud (recommended)** | [Render](https://render.com) deploys from GitHub | Access from anywhere, no Mac running |
-| **Local** | Your Mac + Google Drive desktop sync | Fastest, private LAN |
+| Mode | Where | What the server does |
+|------|--------|----------------------|
+| **Cloud (gateway)** | [Render](https://render.com) from GitHub | List Drive → proxy Range streams + Drive thumbnails |
+| **Local** | Your Mac + Drive desktop sync | Fast ffmpeg thumbs and local disk streaming |
 
-> **GitHub Pages cannot run this server** — it has no Python, ffmpeg, or video streaming. The repo lives on GitHub; the server runs on **Render** (free tier) and reads your Drive folder via API.
+> **GitHub Pages cannot run this server.** The repo lives on GitHub; the gateway runs on **Render** and talks to Drive via API.
 
 ---
 
@@ -45,9 +47,25 @@ Open `/index.html` (videos) or `/photos.html`.
 
 ---
 
+## How the gateway works
+
+```text
+Phone / browser
+    │  GET /api/videos?summary=1     →  JSON list (Drive metadata only)
+    │  GET /vthumb/...clip.mp4       →  Drive thumbnail (small)
+    │  GET /...clip.mp4  Range: ...  →  proxy those bytes from Drive
+    ▼
+Render (video_server.py)
+    └─ Google Drive API ──▶ your shared folder
+```
+
+Nothing is copied until someone actually watches or opens it. Seeking in a video sends HTTP Range requests; the gateway forwards them to Drive.
+
+---
+
 ## Local setup (optional)
 
-For maximum speed when you're on the same Wi‑Fi as your Mac:
+For maximum speed on the same Wi‑Fi as your Mac (ffmpeg thumbs, local files):
 
 ```bash
 git clone https://github.com/EitanYarimi/comfy-media.git
@@ -71,21 +89,6 @@ Requires Google Drive **desktop app** syncing `ComfyUI/` locally, plus `brew ins
 | `MEDIA_ROOT` | — | Google Drive "My Drive" path |
 | `VIDEO_DIR` | `ComfyUI/output/video` | same |
 | `PHOTO_DIRS` | `ComfyUI/output,...` | same |
-| `MEDIA_CACHE_DIR` | `/tmp/...` (ephemeral) | `~/Library/Caches/...` |
-| `MEDIA_PREWARM` | `0` (default in Docker) | `1` |
-
----
-
-## Architecture (cloud)
-
-```text
-GitHub repo  ──auto-deploy──▶  Render (Docker)
-                                  │
-                                  ├─ video_server.py + ffmpeg
-                                  ├─ index.html / photos.html
-                                  └─ Google Drive API ──▶ your shared folder
-                                       └─ local cache for thumbs/streams
-```
 
 ---
 
@@ -96,9 +99,9 @@ GitHub repo  ──auto-deploy──▶  Render (Docker)
 | `GET /api/videos?summary=1` | Video count + months |
 | `GET /api/videos?month=2026-08&limit=40` | Paginated videos |
 | `GET /api/photos?summary=1` | Photo count + months |
-| `GET /thumb/{path}` | Photo thumbnail |
-| `GET /vthumb/{path}` | Video thumbnail |
-| `GET /{path}` | Stream media (Range requests) |
+| `GET /thumb/{path}` | Photo thumbnail (Drive, on demand) |
+| `GET /vthumb/{path}` | Video thumbnail (Drive, on demand) |
+| `GET /{path}` | Stream media (Range requests proxied to Drive) |
 
 Delete is disabled in cloud/Drive mode.
 
