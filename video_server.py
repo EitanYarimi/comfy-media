@@ -45,13 +45,13 @@ PORT = int(os.environ.get('PORT', sys.argv[1] if len(sys.argv) > 1 else 8080))
 SITE_PASSWORD = os.environ.get('SITE_PASSWORD', '')
 AUTH_COOKIE = 'comfy_auth'
 
-# Media paths are relative to MEDIA_ROOT (see __main__)
-VIDEO_DIR = os.environ.get('VIDEO_DIR', 'ComfyUI/output/video')
+# Media paths are relative to MEDIA_ROOT (local) or the shared Drive folder (cloud).
+_VIDEO_DIR_DEFAULT = 'output/video' if STORAGE_MODE == 'drive' else 'ComfyUI/output/video'
+_PHOTO_DIRS_DEFAULT = 'output' if STORAGE_MODE == 'drive' else 'ComfyUI/output,stable-diffusion-webui/outputs'
+VIDEO_DIR = os.environ.get('VIDEO_DIR', _VIDEO_DIR_DEFAULT)
 PHOTO_DIRS = [
     p.strip()
-    for p in os.environ.get(
-        'PHOTO_DIRS', 'ComfyUI/output,stable-diffusion-webui/outputs'
-    ).split(',')
+    for p in os.environ.get('PHOTO_DIRS', _PHOTO_DIRS_DEFAULT).split(',')
     if p.strip()
 ]
 

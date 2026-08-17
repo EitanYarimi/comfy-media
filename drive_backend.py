@@ -53,6 +53,7 @@ class DriveStorage:
         self._files = {}
         self._index_mtime = 0.0
         self._index_lock = threading.Lock()
+        self._root_name = ''
         self._load_index()
 
     def _build_clients(self):
@@ -106,7 +107,7 @@ class DriveStorage:
         while True:
             resp = self._drive_list(
                 q=f"'{folder_id}' in parents and trashed=false",
-                fields='nextPageToken, files(id, name, mimeType, size, modifiedTime, thumbnailLink, hasThumbnail)',
+                fields='nextPageToken, files(id, name, mimeType, size, modifiedTime, thumbnailLink, hasThumbnail, shortcutDetails)',
                 page_token=page_token,
             )
             items.extend(resp.get('files', []))
@@ -132,6 +133,11 @@ class DriveStorage:
     def _folder_id_for_path(self, rel_path):
         current = self.root_folder_id
         parts = [p for p in rel_path.replace('\\', '/').strip('/').split('/') if p]
+        root_name = (self._root_name or '').lower()
+        if parts and root_name and parts[0].lower() == root_name:
+            parts = parts[1:]
+        if not parts:
+            return current
         for part in parts:
             found = self._find_child_folder(current, part)
             if not found:
@@ -141,9 +147,22 @@ class DriveStorage:
 
     def _list_folder_tree(self, folder_id, prefix=''):
         items = []
-        for item in self._list_children(folder_id):
+        try:
+            children = self._list_children(folder_id)
+        except Exception as exc:
+            print(f'   Drive list failed for {prefix or folder_id}: {exc}')
+            return items
+        for item in children:
             name = item.get('name', '')
-            if item.get('mimeType') == 'application/vnd.google-apps.folder':
+            mime = item.get('mimeType') or ''
+            if mime == 'application/vnd.google-apps.shortcut':
+                target_id = (item.get('shortcutDetails') or {}).get('targetId')
+                target_mime = (item.get('shortcutDetails') or {}).get('targetMimeType') or ''
+                if target_id and target_mime == 'application/vnd.google-apps.folder':
+                    sub = f'{prefix}/{name}' if prefix else name
+                    items.extend(self._list_folder_tree(target_id, sub))
+                continue
+            if mime == 'application/vnd.google-apps.folder':
                 sub = f'{prefix}/{name}' if prefix else name
                 items.extend(self._list_folder_tree(item['id'], sub))
                 continue
@@ -155,7 +174,7 @@ class DriveStorage:
                 'id': item['id'],
                 'size': size,
                 'modified': _parse_drive_time(item.get('modifiedTime')),
-                'mime': item.get('mimeType') or '',
+                'mime': mime,
                 'thumbnailLink': item.get('thumbnailLink') or '',
                 'hasThumbnail': bool(item.get('hasThumbnail')),
             })
@@ -170,11 +189,12 @@ class DriveStorage:
             if not force and self._files and (now - self._index_mtime) < ttl:
                 return
             try:
-                self.service.files().get(
+                root = self.service.files().get(
                     fileId=self.root_folder_id,
                     fields='id, name',
                     supportsAllDrives=True,
                 ).execute()
+                self._root_name = root.get('name') or ''
             except Exception as exc:
                 email = getattr(self.creds, 'service_account_email', 'the service account')
                 raise RuntimeError(
@@ -186,18 +206,23 @@ class DriveStorage:
             if self.video_prefix:
                 roots.append(self.video_prefix)
             roots.extend(self.photo_prefixes)
-            seen = set()
+            # Always crawl the shared root too, so videos inside output/ are not missed.
+            roots.append('')
+            seen_ids = set()
             for rel in roots:
-                if not rel or rel in seen:
+                if rel in seen_ids:
                     continue
-                seen.add(rel)
-                folder_id = self._folder_id_for_path(rel)
+                seen_ids.add(rel)
+                folder_id = self._folder_id_for_path(rel) if rel else self.root_folder_id
                 if not folder_id:
                     print(f'   Drive path not found under root: {rel}')
                     continue
                 for item in self._list_folder_tree(folder_id, rel):
                     collected[item['path']] = item
             self._files = collected
+            videos = sum(1 for p in collected if Path(p).suffix.lower() in VIDEO_EXTENSIONS)
+            photos = sum(1 for p in collected if Path(p).suffix.lower() in IMAGE_EXTENSIONS)
+            print(f'   Drive index: {len(collected)} files ({videos} videos, {photos} photos)')
             self._save_index()
 
     def get_meta(self, virtual_path):
@@ -261,10 +286,7 @@ class DriveStorage:
     def scan_videos(self):
         self.refresh_index()
         videos = []
-        prefix = self.video_prefix + '/'
         for path, meta in self._files.items():
-            if not path.startswith(prefix) and path != self.video_prefix:
-                continue
             if Path(meta['name']).suffix.lower() not in VIDEO_EXTENSIONS:
                 continue
             videos.append({
@@ -281,8 +303,6 @@ class DriveStorage:
         photos = []
         for path, meta in self._files.items():
             if Path(meta['name']).suffix.lower() not in IMAGE_EXTENSIONS:
-                continue
-            if not any(path.startswith(p + '/') or path == p for p in self.photo_prefixes):
                 continue
             photos.append({
                 'name': meta['name'],
