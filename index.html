@@ -1,0 +1,2219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache">
+    <title>Code Check</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+
+        /* Header */
+        header {
+            background: #111;
+            padding: 10px 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            border-bottom: 1px solid #1e1e1e;
+            flex-wrap: wrap;
+        }
+
+        .logo {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #fff;
+            white-space: nowrap;
+        }
+
+        .controls {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex: 1;
+            justify-content: flex-end;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 8px 12px;
+            border: 1px solid #2a2a2a;
+            border-radius: 20px;
+            background: #1a1a1a;
+            color: #ccc;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+            white-space: nowrap;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+
+        .btn:hover {
+            background: #252525;
+            border-color: #444;
+        }
+
+        .btn--primary {
+            background: #2563eb;
+            border-color: #2563eb;
+            color: #fff;
+        }
+
+        .btn--primary:hover {
+            background: #1d4ed8;
+        }
+
+        .btn--panic {
+            background: #1a1a1a;
+            border-color: #dc2626;
+            color: #f87171;
+        }
+
+        .btn--panic:hover {
+            background: #dc2626;
+            color: #fff;
+        }
+
+        .btn--active {
+            background: #e60023;
+            border-color: #e60023;
+            color: #fff;
+        }
+
+        .btn--active:hover {
+            background: #cc001f;
+            border-color: #cc001f;
+        }
+
+        .panic-cover {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #1e1e1e;
+            z-index: 9999;
+            cursor: pointer;
+            flex-direction: column;
+            font-family: 'Courier New', monospace;
+            padding: 20px;
+            overflow: auto;
+        }
+
+        .panic-cover.active {
+            display: flex;
+        }
+
+        .panic-cover .terminal-header {
+            color: #569cd6;
+            font-size: 12px;
+            margin-bottom: 12px;
+            border-bottom: 1px solid #333;
+            padding-bottom: 8px;
+        }
+
+        .panic-cover .terminal-line {
+            color: #d4d4d4;
+            font-size: 11px;
+            line-height: 1.6;
+            white-space: pre;
+        }
+
+        .panic-cover .terminal-line .comment { color: #6a9955; }
+        .panic-cover .terminal-line .keyword { color: #569cd6; }
+        .panic-cover .terminal-line .string { color: #ce9178; }
+        .panic-cover .terminal-line .func { color: #dcdcaa; }
+        .panic-cover .terminal-line .number { color: #b5cea8; }
+        .panic-cover .terminal-line .prompt { color: #4ec9b0; }
+
+        #searchInput {
+            padding: 8px 14px;
+            border: 1px solid #2a2a2a;
+            border-radius: 20px;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            font-size: 16px;
+            width: 200px;
+            transition: border-color 0.2s;
+            -webkit-appearance: none;
+        }
+
+        #searchInput:focus {
+            outline: none;
+            border-color: #e60023;
+        }
+
+        #searchInput::placeholder { color: #555; }
+
+        #sortOrder {
+            padding: 7px 12px;
+            border: 1px solid #2a2a2a;
+            border-radius: 20px;
+            background: #1a1a1a;
+            color: #ccc;
+            font-size: 0.8rem;
+            cursor: pointer;
+        }
+
+        #sortOrder option { background: #1a1a1a; color: #ccc; }
+
+        .nav { display: flex; gap: 4px; }
+        .nav a {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            color: #888;
+            text-decoration: none;
+        }
+        .nav a:hover { background: #1a1a1a; color: #ccc; }
+        .nav a.active { background: #e60023; color: #fff; }
+
+        .stats {
+            color: #555;
+            font-size: 0.75rem;
+            padding: 8px 16px;
+            max-width: 1800px;
+            margin: 0 auto;
+        }
+
+        /* Pinterest masonry */
+        .video-grid {
+            padding: 8px 16px 48px;
+            max-width: 1800px;
+            margin: 0 auto;
+        }
+
+        .month-section { margin-bottom: 4px; }
+
+        .month-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 20px 4px 14px;
+            cursor: pointer;
+            user-select: none;
+            margin: 0;
+        }
+
+        .month-header:first-child { padding-top: 12px; }
+
+        .month-toggle {
+            font-size: 0.65rem;
+            color: #666;
+            width: 12px;
+        }
+
+        .month-label {
+            font-size: 1rem;
+            font-weight: 700;
+            color: #eee;
+            letter-spacing: -0.02em;
+        }
+
+        .month-count {
+            font-size: 0.7rem;
+            color: #888;
+            background: #1a1a1a;
+            padding: 3px 10px;
+            border-radius: 12px;
+        }
+
+        .month-random {
+            margin-left: auto;
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            color: #bbb;
+            font-size: 0.72rem;
+            font-family: inherit;
+            padding: 5px 12px;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .month-random:hover {
+            background: #262626;
+            color: #fff;
+            border-color: #3a3a3a;
+        }
+
+        .month-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 16px;
+        }
+
+        .video-card {
+            border-radius: 16px;
+            overflow: hidden;
+            position: relative;
+            background: #141414;
+            opacity: 0;
+            animation: pinFadeIn 0.45s ease forwards;
+            transition: transform 0.25s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.25s ease;
+            box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
+            will-change: transform;
+        }
+
+        .video-card:hover {
+            transform: scale(1.04);
+            box-shadow: 0 14px 32px rgba(0, 0, 0, 0.55);
+            z-index: 5;
+        }
+
+        .thumbnail-container {
+            position: relative;
+            width: 100%;
+            background: #0a0a0a;
+            overflow: hidden;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .thumbnail-container canvas,
+        .thumbnail-container img {
+            display: block;
+            width: 100%;
+            height: auto;
+            vertical-align: bottom;
+        }
+
+        .thumbnail-container img.thumb-lazy {
+            min-height: 80px;
+            background: linear-gradient(135deg, #141414 0%, #1c1c1c 100%);
+        }
+
+        .thumbnail-placeholder {
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            min-height: 80px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #141414 0%, #1c1c1c 100%);
+            color: #333;
+            font-size: 2rem;
+        }
+
+        /* Server thumb mode: img sets height, placeholder overlays it */
+        .thumbnail-container:has(.video-thumb) .thumbnail-placeholder {
+            position: absolute;
+            inset: 0;
+            aspect-ratio: unset;
+            min-height: 0;
+        }
+
+        .video-overlay {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(180deg, rgba(0,0,0,0.35) 0%, transparent 35%, transparent 50%, rgba(0,0,0,0.6) 100%);
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 10px;
+            pointer-events: none;
+        }
+
+        .video-card:hover .video-overlay { opacity: 1; }
+
+        .video-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+            pointer-events: auto;
+        }
+
+        .action-btn {
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.95);
+            color: #111;
+            font-size: 0.8rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.15s, background 0.15s;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+        }
+
+        .action-btn:hover { transform: scale(1.08); background: #fff; }
+        .action-btn--delete:hover { background: #e60023; color: #fff; }
+        .action-btn--play:hover { background: #e60023; color: #fff; }
+
+        .video-title-overlay {
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: #fff;
+            line-height: 1.3;
+            text-shadow: 0 1px 4px rgba(0,0,0,0.9);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            pointer-events: none;
+        }
+
+        .play-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            opacity: 0;
+            transition: opacity 0.2s;
+            pointer-events: none;
+        }
+
+        .video-card:hover .play-overlay { opacity: 1; }
+
+        .play-btn {
+            width: 52px;
+            height: 52px;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+        }
+
+        .play-btn::after {
+            content: '';
+            width: 0;
+            height: 0;
+            border-style: solid;
+            border-width: 10px 0 10px 16px;
+            border-color: transparent transparent transparent #111;
+            margin-left: 4px;
+        }
+
+        .duration-badge {
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            background: rgba(0, 0, 0, 0.75);
+            padding: 3px 8px;
+            border-radius: 8px;
+            font-size: 0.68rem;
+            font-weight: 600;
+            color: #fff;
+            z-index: 2;
+        }
+
+        .load-more-btn {
+            display: block;
+            width: 100%;
+            max-width: 320px;
+            margin: 8px auto 24px;
+            padding: 14px 20px;
+            border: none;
+            border-radius: 24px;
+            background: #1a1a1a;
+            color: #ccc;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s, transform 0.15s;
+        }
+
+        .load-more-btn:hover {
+            background: #252525;
+            color: #fff;
+            transform: scale(1.02);
+        }
+
+        .month-loading {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 28px;
+            color: #666;
+            font-size: 0.8rem;
+        }
+
+        .inline-video { display: none; }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.85);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            padding: 40px;
+        }
+
+        .modal-overlay.active { display: flex; }
+
+        .modal-close {
+            position: absolute;
+            top: 16px;
+            right: 20px;
+            font-size: 1.2rem;
+            color: #888;
+            cursor: pointer;
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            transition: background 0.2s;
+        }
+
+        .modal-close:hover { background: #333; color: #fff; }
+
+        .modal-close--delete {
+            right: 70px;
+            background: #dc2626;
+            border-color: #dc2626;
+        }
+        .modal-close--delete:hover { background: #b91c1c; color: #fff; }
+        .modal-close--info { right: 120px; }
+        .modal-close--pause { right: 170px; display: none; }
+
+        .modal-nav {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 1.5rem;
+            color: #888;
+            cursor: pointer;
+            width: 44px;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 50%;
+            transition: background 0.2s;
+        }
+
+        .modal-nav:hover { background: #333; color: #fff; }
+        .modal-nav.prev { left: 16px; }
+        .modal-nav.next { right: 16px; }
+
+        .modal-close--fs { left: 16px; right: auto; }
+        .modal-close--fit { left: 62px; right: auto; font-size: 1rem; }
+        .modal-close--active {
+            background: #e60023;
+            border-color: #e60023;
+            color: #fff;
+        }
+        .modal-close--active:hover { background: #cc001f; color: #fff; }
+
+        /* Fit to screen — video fills max area (object-fit: cover) */
+        .modal-overlay.fit-screen .modal-video-wrap {
+            width: 95vw;
+            max-width: 95vw;
+            height: 80vh;
+            max-height: 80vh;
+        }
+
+        .modal-overlay.fit-screen .modal-video-wrap #modalVideo {
+            width: 100%;
+            height: 100%;
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: cover;
+        }
+
+        .modal-overlay.fit-screen.is-fs .modal-video-wrap,
+        .modal-overlay.fit-screen:fullscreen .modal-video-wrap,
+        .modal-overlay.fit-screen:-webkit-full-screen .modal-video-wrap {
+            width: 100vw;
+            max-width: 100vw;
+            height: 100vh;
+            max-height: 100vh;
+        }
+
+        .modal-overlay.fit-screen.is-fs #modalVideo,
+        .modal-overlay.fit-screen:fullscreen #modalVideo,
+        .modal-overlay.fit-screen:-webkit-full-screen #modalVideo {
+            object-fit: cover;
+        }
+        .modal-overlay.is-fs,
+        .modal-overlay:fullscreen,
+        .modal-overlay:-webkit-full-screen {
+            padding: 0;
+            background: #000;
+        }
+
+        .modal-overlay.is-fs #modalVideoWrap,
+        .modal-overlay:fullscreen #modalVideoWrap,
+        .modal-overlay:-webkit-full-screen #modalVideoWrap {
+            flex: 1;
+            width: 100%;
+            max-width: 100vw;
+            max-height: 100vh;
+        }
+
+        .modal-overlay.is-fs #modalVideo,
+        .modal-overlay:fullscreen #modalVideo,
+        .modal-overlay:-webkit-full-screen #modalVideo {
+            max-width: 100vw;
+            max-height: 100vh;
+            width: 100%;
+            height: auto;
+            border-radius: 0;
+            box-shadow: none;
+            object-fit: contain;
+        }
+
+        .modal-overlay.is-fs .modal-nav,
+        .modal-overlay:fullscreen .modal-nav,
+        .modal-overlay:-webkit-full-screen .modal-nav {
+            z-index: 120;
+            width: 52px;
+            height: 52px;
+            font-size: 1.6rem;
+            background: rgba(0, 0, 0, 0.55);
+            border-color: rgba(255, 255, 255, 0.3);
+            color: #fff;
+        }
+
+        .modal-overlay.is-fs .modal-nav.prev,
+        .modal-overlay:fullscreen .modal-nav.prev,
+        .modal-overlay:-webkit-full-screen .modal-nav.prev { left: 12px; }
+
+        .modal-overlay.is-fs .modal-nav.next,
+        .modal-overlay:fullscreen .modal-nav.next,
+        .modal-overlay:-webkit-full-screen .modal-nav.next { right: 12px; }
+
+        .modal-overlay.is-fs .modal-close,
+        .modal-overlay:fullscreen .modal-close,
+        .modal-overlay:-webkit-full-screen .modal-close {
+            z-index: 120;
+            background: rgba(0, 0, 0, 0.55);
+            border-color: rgba(255, 255, 255, 0.3);
+            color: #fff;
+        }
+
+        .modal-overlay.is-fs .modal-title,
+        .modal-overlay:fullscreen .modal-title,
+        .modal-overlay:-webkit-full-screen .modal-title {
+            position: absolute;
+            bottom: env(safe-area-inset-bottom, 0);
+            left: 0;
+            right: 0;
+            margin: 0;
+            padding: 8px 16px 12px;
+            z-index: 125;
+            color: #ddd;
+            text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+        }
+
+        .modal-video-wrap {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            max-width: 70vw;
+            max-height: 70vh;
+            transform-origin: center center;
+            will-change: transform;
+            touch-action: manipulation;
+        }
+
+        .modal-video-wrap #modalVideo {
+            max-width: 70vw;
+            max-height: 70vh;
+            width: 100%;
+            border-radius: 12px;
+            outline: none;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+        }
+
+        .modal-video-loading {
+            position: absolute;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            z-index: 2;
+        }
+
+        .modal-video-wrap.is-loading .modal-video-loading {
+            display: flex;
+        }
+
+        .modal-title {
+            color: #888;
+            margin-top: 12px;
+            font-size: 0.85rem;
+            text-align: center;
+        }
+
+        .modal-overlay.slideshow-mode .modal-title { color: #ccc; }
+
+        #slideshowCounter {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-size: 0.75rem;
+            color: #aaa;
+            background: rgba(0,0,0,0.5);
+            padding: 6px 12px;
+            border-radius: 20px;
+            display: none;
+        }
+
+        .modal-overlay.slideshow-mode #slideshowCounter { display: block; }
+
+        .slideshow-progress {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 3px;
+            background: #e60023;
+            width: 0%;
+            transition: width 0.1s linear;
+            display: none;
+        }
+
+        .modal-overlay.slideshow-mode .slideshow-progress { display: block; }
+
+        /* States */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 80px 20px;
+            text-align: center;
+            width: 100%;
+        }
+
+        .empty-state .icon { font-size: 3rem; margin-bottom: 16px; opacity: 0.4; }
+        .empty-state h2 { color: #888; font-size: 1rem; margin-bottom: 8px; font-weight: 500; }
+        .empty-state p { color: #555; font-size: 0.85rem; max-width: 320px; line-height: 1.5; }
+
+        .loading-spinner {
+            width: 28px;
+            height: 28px;
+            border: 2px solid #222;
+            border-top: 2px solid #e60023;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+            margin: 60px auto;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes pinFadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+        @media (max-width: 1600px) { .month-grid { grid-template-columns: repeat(4, 1fr); } }
+        @media (max-width: 1200px) { .month-grid { grid-template-columns: repeat(3, 1fr); } }
+
+        @media (max-width: 768px) {
+            header {
+                padding: 8px 12px;
+                gap: 8px;
+            }
+            .controls {
+                width: 100%;
+                justify-content: stretch;
+            }
+            .controls .btn {
+                flex: 1;
+                text-align: center;
+                padding: 10px 6px;
+                font-size: 0.75rem;
+            }
+            #searchInput {
+                width: 100%;
+                order: -1;
+            }
+            #sortOrder {
+                flex: 1;
+            }
+            .video-grid {
+                padding: 6px 10px 40px;
+            }
+            .month-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 10px;
+            }
+            .month-header {
+                padding: 10px 12px;
+                font-size: 0.85rem;
+            }
+            .month-random {
+                font-size: 0.8rem;
+                padding: 7px 14px;
+            }
+            .video-card { border-radius: 10px; }
+            .video-card:hover { transform: none; box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35); }
+
+            /* Mobile card: tap to play, minimal chrome */
+            .thumbnail-placeholder {
+                font-size: 1rem;
+                color: #3a3a3a;
+            }
+            .play-overlay {
+                display: none;
+            }
+            .video-overlay {
+                opacity: 1;
+                padding: 5px;
+                background: linear-gradient(180deg, rgba(0,0,0,0.35) 0%, transparent 30%, transparent 62%, rgba(0,0,0,0.8) 100%);
+                pointer-events: none;
+            }
+            .video-overlay .video-actions,
+            .video-overlay .video-title-overlay {
+                pointer-events: none;
+            }
+            .video-actions {
+                pointer-events: auto;
+                gap: 4px;
+            }
+            .action-btn {
+                width: 24px;
+                height: 24px;
+                font-size: 0.6rem;
+                box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+            }
+            .action-btn--play {
+                display: none;
+            }
+            .video-title-overlay {
+                font-size: 0.6rem;
+                line-height: 1.25;
+                white-space: normal;
+                display: -webkit-box;
+                -webkit-line-clamp: 2;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
+            }
+            .duration-badge {
+                bottom: 4px;
+                right: 4px;
+                padding: 2px 5px;
+                font-size: 0.55rem;
+                border-radius: 4px;
+            }
+
+            #modalVideoWrap {
+                max-width: 95vw;
+                max-height: 70vh;
+            }
+            .modal-video-wrap #modalVideo {
+                max-width: 95vw;
+                max-height: 70vh;
+            }
+            .modal-nav {
+                width: 36px;
+                height: 36px;
+                font-size: 1.2rem;
+            }
+            .modal-nav.prev { left: 4px; }
+            .modal-nav.next { right: 4px; }
+            .modal-close {
+                top: 10px;
+                width: 30px;
+                height: 30px;
+                font-size: 0.9rem;
+            }
+            .modal-close--close { right: 10px; }
+            .modal-close--delete { right: 46px; }
+            .modal-close--info { right: 82px; }
+            .modal-close--pause { right: 118px; }
+            .modal-close--fs { left: 10px; right: auto; }
+            .modal-close--fit { left: 48px; right: auto; }
+            .modal-overlay.fit-screen .modal-video-wrap {
+                width: 100vw;
+                max-width: 100vw;
+                height: 72vh;
+                max-height: 72vh;
+            }
+            .modal-overlay.is-fs .modal-nav,
+            .modal-overlay:fullscreen .modal-nav,
+            .modal-overlay:-webkit-full-screen .modal-nav {
+                width: 44px;
+                height: 44px;
+                font-size: 1.4rem;
+            }
+            .modal-overlay {
+                padding: 12px 6px;
+            }
+            .modal-title {
+                font-size: 0.75rem;
+                padding: 0 8px;
+            }
+            #slideshowCounter {
+                top: 12px;
+                left: 12px;
+                font-size: 0.65rem;
+                padding: 4px 8px;
+            }
+            .stats {
+                padding: 6px 12px;
+                font-size: 0.7rem;
+            }
+            .load-more-btn {
+                padding: 10px 16px;
+                font-size: 0.8rem;
+                margin-bottom: 16px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .month-grid { gap: 8px; }
+            .video-card { border-radius: 8px; }
+            .controls .btn {
+                padding: 10px 4px;
+                font-size: 0.7rem;
+            }
+            .action-btn {
+                width: 22px;
+                height: 22px;
+                font-size: 0.55rem;
+            }
+            .thumbnail-placeholder {
+                font-size: 0.85rem;
+            }
+        }
+
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0a0a0a; }
+        ::-webkit-scrollbar-thumb { background: #222; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #444; }
+    </style>
+</head>
+<body>
+
+<header>
+    <nav class="nav">
+        <a href="index.html" class="active">Videos</a>
+        <a href="photos.html">Photos</a>
+    </nav>
+    <div class="logo"></div>
+    <div class="controls">
+        <input type="text" id="searchInput" placeholder="Search...">
+        <select id="sortOrder" onchange="sortAndRender()">
+            <option value="newest">Newest</option>
+            <option value="oldest">Oldest</option>
+            <option value="name-asc">A → Z</option>
+            <option value="name-desc">Z → A</option>
+            <option value="size-desc">Largest</option>
+            <option value="size-asc">Smallest</option>
+        </select>
+        <button class="btn" onclick="loadFromServer()">↻ Refresh</button>
+        <button class="btn" onclick="startSlideshow(false)" id="slideshowSeqBtn">▶ Slideshow</button>
+        <button class="btn" onclick="startSlideshow(true)" id="slideshowRandomBtn">🎲 Random</button>
+        <button class="btn btn--panic" onclick="togglePanic()">⚡ Boss</button>
+    </div>
+</header>
+
+<div class="stats" id="stats"></div>
+
+<div class="video-grid" id="videoGrid">
+    <div class="empty-state">
+        <div class="icon">📂</div>
+        <h2>No videos loaded</h2>
+        <p>Click <strong>Open Folder</strong> to browse your local video files.</p>
+    </div>
+</div>
+
+<div class="panic-cover" id="panicCover" onclick="togglePanic()">
+    <div class="terminal-header">user@dev-server:~/projects/api-gateway $ npm run build</div>
+    <div class="terminal-line"><span class="comment">// webpack.config.js - Production Build</span></div>
+    <div class="terminal-line"><span class="keyword">const</span> path = <span class="func">require</span>(<span class="string">'path'</span>);</div>
+    <div class="terminal-line"><span class="keyword">const</span> webpack = <span class="func">require</span>(<span class="string">'webpack'</span>);</div>
+    <div class="terminal-line"></div>
+    <div class="terminal-line">module.exports = {</div>
+    <div class="terminal-line">  mode: <span class="string">'production'</span>,</div>
+    <div class="terminal-line">  entry: <span class="string">'./src/index.ts'</span>,</div>
+    <div class="terminal-line">  output: {</div>
+    <div class="terminal-line">    path: path.<span class="func">resolve</span>(__dirname, <span class="string">'dist'</span>),</div>
+    <div class="terminal-line">    filename: <span class="string">'[name].[contenthash].js'</span>,</div>
+    <div class="terminal-line">  },</div>
+    <div class="terminal-line">  resolve: { extensions: [<span class="string">'.ts'</span>, <span class="string">'.js'</span>] },</div>
+    <div class="terminal-line">};</div>
+    <div class="terminal-line"></div>
+    <div class="terminal-line"><span class="prompt">✓</span> Compiled successfully in <span class="number">4.2</span>s</div>
+    <div class="terminal-line"><span class="prompt">✓</span> <span class="number">47</span> modules transformed</div>
+    <div class="terminal-line"><span class="prompt">✓</span> dist/main.a8f3c2.js   <span class="number">142.3 kB</span> │ gzip: <span class="number">45.1 kB</span></div>
+    <div class="terminal-line"><span class="prompt">✓</span> dist/vendor.d91e4b.js  <span class="number">891.7 kB</span> │ gzip: <span class="number">234.5 kB</span></div>
+    <div class="terminal-line"></div>
+    <div class="terminal-line"><span class="comment">// Running tests...</span></div>
+    <div class="terminal-line"><span class="prompt">PASS</span> src/controllers/__tests__/auth.test.ts</div>
+    <div class="terminal-line"><span class="prompt">PASS</span> src/controllers/__tests__/users.test.ts</div>
+    <div class="terminal-line"><span class="prompt">PASS</span> src/middleware/__tests__/rateLimit.test.ts</div>
+    <div class="terminal-line"><span class="prompt">PASS</span> src/services/__tests__/cache.test.ts</div>
+    <div class="terminal-line"></div>
+    <div class="terminal-line">Test Suites: <span class="number">12</span> passed, <span class="number">12</span> total</div>
+    <div class="terminal-line">Tests:       <span class="number">87</span> passed, <span class="number">87</span> total</div>
+    <div class="terminal-line">Time:        <span class="number">3.421</span>s</div>
+    <div class="terminal-line"></div>
+    <div class="terminal-line"><span class="keyword">$</span> docker build -t api-gateway:v2.4.1 .</div>
+    <div class="terminal-line">[+] Building <span class="number">23.4</span>s (<span class="number">12</span>/<span class="number">12</span>) FINISHED</div>
+    <div class="terminal-line"> => [internal] load build definition</div>
+    <div class="terminal-line"> => [1/8] FROM node:<span class="number">20</span>-alpine</div>
+    <div class="terminal-line"> => [2/8] WORKDIR /app</div>
+    <div class="terminal-line"> => [3/8] COPY package*.json ./</div>
+    <div class="terminal-line"> => [4/8] RUN npm ci --production</div>
+    <div class="terminal-line"> => [5/8] COPY dist/ ./dist/</div>
+    <div class="terminal-line"> => exporting to image</div>
+    <div class="terminal-line"></div>
+    <div class="terminal-line"><span class="prompt">✓</span> Image built successfully</div>
+    <div class="terminal-line"><span class="keyword">$</span> <span class="cursor">_</span></div>
+</div>
+
+<div class="modal-overlay" id="modalOverlay">
+    <div class="slideshow-progress" id="slideshowProgress"></div>
+    <span id="slideshowCounter"></span>
+    <button type="button" class="modal-close modal-close--fs" id="modalFsBtn" onclick="toggleModalFullscreen()" title="Fullscreen">⛶</button>
+    <button type="button" class="modal-close modal-close--fit" id="modalFitBtn" onclick="toggleFitScreen()" title="Fit to screen">⊞</button>
+    <button type="button" class="modal-close modal-close--close" onclick="closeModal()">✕</button>
+    <button type="button" class="modal-close modal-close--delete" onclick="deleteFromModal()">🗑</button>
+    <button type="button" class="modal-close modal-close--info" onclick="toggleVideoInfo()">ⓘ</button>
+    <button type="button" class="modal-close modal-close--pause" id="slideshowPauseBtn" style="display:none" onclick="toggleSlideshowPause()">⏸</button>
+    <button type="button" class="modal-nav prev" onclick="navigateVideo(-1)" title="Previous">‹</button>
+    <button type="button" class="modal-nav next" onclick="navigateVideo(1)" title="Next">›</button>
+    <div class="modal-video-wrap" id="modalVideoWrap">
+        <div class="modal-video-loading" id="modalVideoLoading"><div class="loading-spinner"></div></div>
+        <video id="modalVideo" controls controlsList="nofullscreen nodownload" playsinline webkit-playsinline muted preload="metadata" onended="onVideoEnded()" ontimeupdate="updateSlideshowProgress()"></video>
+    </div>
+    <div class="modal-title" id="modalTitle"></div>
+</div>
+
+<div id="videoInfoPanel" style="display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1a1a1a;border:1px solid #333;border-radius:16px;padding:14px 20px;font-size:0.75rem;color:#ccc;z-index:1100;max-width:90vw;line-height:1.8;box-shadow:0 12px 40px rgba(0,0,0,0.5)"></div>
+
+<script>
+let allVideos = [];
+let filteredVideos = [];
+let currentVideoIndex = -1;
+const VIDEO_EXTENSIONS = ['.mp4', '.webm', '.ogg', '.mov', '.mkv', '.avi', '.m4v', '.3gp', '.flv', '.wmv'];
+const THUMB_CONCURRENCY = 6;
+const THUMB_RETRY_MAX = 3;
+const VIDEOS_PER_MONTH = 40;
+const VIDEOS_PER_LOAD = 40;
+let thumbLoadPaused = false;
+let modalLoadToken = 0;
+let modalRetryCount = 0;
+let thumbQueue = [];
+let thumbActive = 0;
+let collapsedMonths = new Set();
+let initialCollapseApplied = false;
+let monthVisibleCounts = {};
+let monthSummaries = [], totalVideoCount = 0;
+let monthVideosCache = {};
+let searchMode = false;
+let searchResults = { items: [], total: 0, loading: false };
+let modalPlaylist = [];
+let slideshowActive = false;
+let slideshowPaused = false;
+let slideshowRandom = false;
+let thumbObserver = null;
+let thumbLoadQueue = [], thumbLoadActive = 0;
+let serverHasFfmpeg = false;
+let serverHasVthumb = false;
+const serverBaseUrl = window.location.origin;
+
+function applyVthumbFlag(data) {
+    if (data.vthumb === true || data.ffmpeg === true) serverHasVthumb = true;
+    else if (data.vthumb === false && data.ffmpeg === false) serverHasVthumb = false;
+    if (data.ffmpeg === true) serverHasFfmpeg = true;
+    else if (data.ffmpeg === false) serverHasFfmpeg = false;
+}
+
+function useServerVthumb() {
+    return serverHasVthumb;
+}
+
+function useClientVideoThumbs() {
+    // Never download full video files just for thumbnails — too slow on mobile/LAN
+    return false;
+}
+
+function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+document.getElementById('searchInput').addEventListener('input', debounce(filterVideos, 300));
+
+function isVideoFile(name) { return VIDEO_EXTENSIONS.some(ext => name.toLowerCase().endsWith(ext)); }
+function showLoading() { document.getElementById('videoGrid').innerHTML = '<div class="loading-spinner"></div>'; }
+function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function formatDate(d) { return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' }); }
+function formatSize(b) { if (!b) return '0B'; const k = 1024, s = ['B','KB','MB','GB'], i = Math.floor(Math.log(b)/Math.log(k)); return (b/Math.pow(k,i)).toFixed(1) + s[i]; }
+function formatDuration(s) { if (!s || !isFinite(s)) return '--:--'; const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=Math.floor(s%60); return h ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}` : `${m}:${String(sec).padStart(2,'0')}`; }
+
+function getVideoByPath(path) {
+    const decoded = decodeURIComponent(String(path));
+    return allVideos.find(v => v.path === decoded);
+}
+
+function getVideoByVid(vid) {
+    const name = decodeURIComponent(String(vid));
+    return allVideos.find(v => v.name === name);
+}
+function getVThumbSrc(video) {
+    return serverBaseUrl + '/vthumb/' + encodeURIComponent(video.path).replace(/%2F/g, '/');
+}
+
+function mapVideo(v) {
+    return {
+        name: v.name,
+        path: v.path,
+        size: v.size || 0,
+        duration: v.duration || null,
+        date: new Date(v.modified * 1000),
+        url: serverBaseUrl + '/' + encodeURIComponent(v.path).replace(/%2F/g, '/'),
+    };
+}
+
+function registerVideos(videos) {
+    videos.forEach(v => {
+        if (!allVideos.find(x => x.path === v.path)) allVideos.push(v);
+    });
+}
+
+function sortVideoList(list) {
+    const order = document.getElementById('sortOrder').value;
+    return [...list].sort((a, b) => {
+        switch (order) {
+            case 'newest': return b.date - a.date;
+            case 'oldest': return a.date - b.date;
+            case 'name-asc': return a.name.localeCompare(b.name);
+            case 'name-desc': return b.name.localeCompare(a.name);
+            case 'size-desc': return b.size - a.size;
+            case 'size-asc': return a.size - b.size;
+            default: return b.date - a.date;
+        }
+    });
+}
+
+function buildMonthSummaries(items) {
+    const counts = {};
+    items.forEach(item => {
+        const key = getMonthKey(item.date);
+        counts[key] = (counts[key] || 0) + 1;
+    });
+    return Object.keys(counts)
+        .sort((a, b) => b.localeCompare(a))
+        .map(month => ({ month, count: counts[month] }));
+}
+
+function setupDefaultExpandedMonths() {
+    initialCollapseApplied = true;
+    collapsedMonths = new Set();
+    if (monthSummaries.length > 1) {
+        monthSummaries.slice(1).forEach(s => collapsedMonths.add(s.month));
+    }
+}
+
+function applyVideosSummary(data) {
+    if (Array.isArray(data)) {
+        allVideos = data.map(mapVideo);
+        monthSummaries = buildMonthSummaries(allVideos);
+        totalVideoCount = allVideos.length;
+        serverHasFfmpeg = false;
+        serverHasVthumb = false;
+        return;
+    }
+    monthSummaries = data.months || [];
+    totalVideoCount = data.total || 0;
+    applyVthumbFlag(data);
+}
+
+function applyFfmpegFlag(data) {
+    applyVthumbFlag(data);
+}
+
+async function loadFromServer() {
+    if (slideshowActive) stopSlideshow(true);
+    showLoading();
+    allVideos = [];
+    filteredVideos = [];
+    monthSummaries = [];
+    monthVideosCache = {};
+    searchMode = false;
+    searchResults = { items: [], total: 0, loading: false };
+    monthVisibleCounts = {};
+    document.getElementById('stats').textContent = 'Scanning library...';
+    try {
+        const resp = await fetch(serverBaseUrl + '/api/videos?summary=1');
+        if (!resp.ok) {
+            throw new Error(`Server returned ${resp.status}. Is video_server.py running?`);
+        }
+        const data = await resp.json();
+        applyVideosSummary(data);
+        setupDefaultExpandedMonths();
+        if (monthSummaries.length > 0) {
+            await loadMonthVideos(monthSummaries[0].month);
+        } else {
+            renderGrid();
+        }
+    } catch (err) {
+        document.getElementById('videoGrid').innerHTML =
+            `<div class="empty-state"><div class="icon">⚠️</div><h2>Could not load videos</h2><p style="color:#666;margin-top:8px;font-size:0.85rem">${escapeHtml(err.message)}<br><br>Open via <strong>http://localhost:8080/index.html</strong> after starting the server.</p></div>`;
+        document.getElementById('stats').textContent = '';
+    }
+}
+
+async function loadMonthVideos(monthKey) {
+    const groupCount = monthSummaries.find(s => s.month === monthKey)?.count || 0;
+    const needed = getMonthVisibleLimit(monthKey, groupCount);
+    let cache = monthVideosCache[monthKey] || { items: [], total: 0, loading: false };
+    if (cache.loading) return;
+
+    const rendered = getMonthRenderedCount(monthKey);
+    const showCount = Math.min(needed, cache.items.length);
+
+    if (cache.items.length >= needed) {
+        if (!getMonthSection(monthKey)) {
+            renderGroupedGrid();
+            return;
+        }
+        if (rendered < showCount) {
+            appendVideosToMonth(monthKey, cache.items.slice(rendered, showCount));
+        }
+        updateLoadMoreButton(monthKey, groupCount - needed);
+        return;
+    }
+
+    const offset = cache.items.length;
+    const limit = Math.max(VIDEOS_PER_MONTH, needed - offset);
+    cache.loading = true;
+    monthVideosCache[monthKey] = cache;
+
+    if (getMonthSection(monthKey)) {
+        setMonthLoading(monthKey, rendered === 0);
+    } else {
+        renderGroupedGrid();
+    }
+
+    try {
+        const resp = await fetch(
+            `${serverBaseUrl}/api/videos?month=${encodeURIComponent(monthKey)}&offset=${offset}&limit=${limit}`
+        );
+        if (!resp.ok) throw new Error('Failed to load month');
+        const data = await resp.json();
+        applyFfmpegFlag(data);
+        const items = sortVideoList((data.videos || []).map(mapVideo));
+        registerVideos(items);
+        const newCache = monthVideosCache[monthKey] = {
+            items: sortVideoList(cache.items.concat(items)),
+            total: data.total || 0,
+            loading: false,
+        };
+        const newNeeded = getMonthVisibleLimit(monthKey, groupCount);
+        const newShow = Math.min(newNeeded, newCache.items.length);
+        const nowRendered = getMonthRenderedCount(monthKey);
+
+        if (!getMonthSection(monthKey)) {
+            renderGroupedGrid();
+        } else {
+            setMonthLoading(monthKey, false);
+            if (nowRendered < newShow) {
+                appendVideosToMonth(monthKey, newCache.items.slice(nowRendered, newShow));
+            }
+            updateLoadMoreButton(monthKey, groupCount - newNeeded);
+        }
+    } catch (err) {
+        monthVideosCache[monthKey] = { ...cache, loading: false };
+        setMonthLoading(monthKey, false);
+        alert('Failed to load videos: ' + err.message);
+    }
+}
+
+async function loadSearchVideos(append = false) {
+    const q = document.getElementById('searchInput').value.toLowerCase().trim();
+    if (!q) return;
+    const offset = append ? searchResults.items.length : 0;
+    searchResults.loading = true;
+    if (!append) searchResults.items = [];
+
+    if (!append || !getMonthSection('search')) {
+        renderGrid();
+    } else {
+        setMonthLoading('search', false);
+        document.getElementById('stats').textContent = `${searchResults.items.length} of ${searchResults.total} results`;
+    }
+
+    try {
+        const resp = await fetch(
+            `${serverBaseUrl}/api/videos?q=${encodeURIComponent(q)}&offset=${offset}&limit=${VIDEOS_PER_LOAD}`
+        );
+        if (!resp.ok) throw new Error('Search failed');
+        const data = await resp.json();
+        applyFfmpegFlag(data);
+        const items = sortVideoList((data.videos || []).map(mapVideo));
+        registerVideos(items);
+        const prevCount = append ? searchResults.items.length : 0;
+        searchResults = {
+            items: append ? sortVideoList(searchResults.items.concat(items)) : items,
+            total: data.total || 0,
+            loading: false,
+        };
+        filteredVideos = searchResults.items;
+        document.getElementById('stats').textContent = `${searchResults.items.length} of ${searchResults.total} results`;
+
+        if (!append || !getMonthSection('search')) {
+            renderGrid();
+        } else {
+            const newItems = searchResults.items.slice(prevCount);
+            appendVideosToMonth('search', newItems);
+            updateLoadMoreButton('search', searchResults.total - searchResults.items.length);
+        }
+    } catch (err) {
+        searchResults.loading = false;
+        alert('Search failed: ' + err.message);
+    }
+}
+
+// ========== SORT & FILTER ==========
+function sortVideos() {
+    Object.keys(monthVideosCache).forEach(key => {
+        monthVideosCache[key].items = sortVideoList(monthVideosCache[key].items);
+    });
+    if (searchResults.items.length) searchResults.items = sortVideoList(searchResults.items);
+    allVideos = sortVideoList(allVideos);
+}
+
+function sortAndRender() { sortVideos(); renderGrid(); }
+
+async function filterVideos() {
+    const q = document.getElementById('searchInput').value.toLowerCase().trim();
+    monthVisibleCounts = {};
+    if (slideshowActive) stopSlideshow(true);
+
+    if (q) {
+        searchMode = true;
+        await loadSearchVideos(false);
+        return;
+    }
+
+    searchMode = false;
+    searchResults = { items: [], total: 0, loading: false };
+    filteredVideos = [];
+    monthVideosCache = {};
+    setupDefaultExpandedMonths();
+    const first = monthSummaries[0]?.month;
+    if (first) await loadMonthVideos(first);
+    else renderGrid();
+}
+
+// ========== RENDER ==========
+function getMonthKey(date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`; }
+function getMonthLabel(key) { const [y, m] = key.split('-'); return new Date(parseInt(y), parseInt(m)-1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }); }
+
+async function toggleMonth(key) {
+    if (searchMode) return;
+    if (collapsedMonths.has(key)) {
+        collapsedMonths.delete(key);
+        await loadMonthVideos(key);
+    } else {
+        collapsedMonths.add(key);
+        renderGroupedGrid();
+    }
+}
+
+function getMonthVisibleLimit(key, total) {
+    if (!monthVisibleCounts[key]) monthVisibleCounts[key] = VIDEOS_PER_MONTH;
+    return Math.min(monthVisibleCounts[key], total);
+}
+
+async function showMoreInMonth(key, event) {
+    event.stopPropagation();
+    if (searchMode || key === 'search') {
+        await loadSearchVideos(true);
+        return;
+    }
+    monthVisibleCounts[key] = (monthVisibleCounts[key] || VIDEOS_PER_MONTH) + VIDEOS_PER_LOAD;
+    await loadMonthVideos(key);
+}
+
+function queueThumbLoad(img) {
+    thumbLoadQueue.push(img);
+    processThumbLoadQueue();
+}
+
+function processThumbLoadQueue() {
+    if (thumbLoadPaused) return;
+    while (thumbLoadActive < THUMB_CONCURRENCY && thumbLoadQueue.length) {
+        const img = thumbLoadQueue.shift();
+        const src = img.dataset.src;
+        if (!src) continue;
+        thumbLoadActive++;
+        const retries = parseInt(img.dataset.thumbRetries || '0', 10);
+        img.onload = () => {
+            thumbLoadActive--;
+            img.removeAttribute('data-src');
+            img.removeAttribute('data-thumb-retries');
+            onThumbLoaded(img);
+            processThumbLoadQueue();
+        };
+        img.onerror = () => {
+            thumbLoadActive--;
+            if (retries < THUMB_RETRY_MAX) {
+                img.dataset.thumbRetries = String(retries + 1);
+                setTimeout(() => queueThumbLoad(img), 1500 + retries * 1500);
+            } else {
+                img.removeAttribute('data-src');
+                fallbackThumbnail(img);
+            }
+            processThumbLoadQueue();
+        };
+        img.src = src;
+    }
+}
+
+function initThumbObserver() {
+    if (thumbObserver) return;
+    thumbObserver = new IntersectionObserver((entries) => {
+        entries.forEach(e => {
+            if (!e.isIntersecting) return;
+            const el = e.target;
+            if (el.dataset.needsThumb) {
+                queueThumbnail(el.dataset.vid);
+                thumbObserver.unobserve(el);
+                return;
+            }
+            if (el.dataset.src) queueThumbLoad(el);
+            thumbObserver.unobserve(el);
+        });
+    }, { rootMargin: '250px', threshold: 0.01 });
+}
+
+function observeThumbs(root) {
+    initThumbObserver();
+    const scope = root && root.querySelectorAll ? root : document;
+    if (useServerVthumb()) {
+        scope.querySelectorAll('img.thumb-lazy[data-src]:not([data-observed])').forEach(img => {
+            img.dataset.observed = '1';
+            thumbObserver.observe(img);
+        });
+    } else if (useClientVideoThumbs()) {
+        scope.querySelectorAll('.thumbnail-container[data-needs-thumb]:not([data-observed])').forEach(el => {
+            el.dataset.observed = '1';
+            thumbObserver.observe(el);
+        });
+    }
+}
+
+function onThumbLoaded(img) {
+    const ph = img.parentElement.querySelector('.thumbnail-placeholder');
+    if (ph) ph.style.display = 'none';
+}
+
+function fallbackThumbnail(img) {
+    img.onerror = null;
+    img.style.display = 'none';
+    const ph = img.parentElement?.querySelector('.thumbnail-placeholder');
+    if (ph) ph.style.display = 'flex';
+}
+
+function renderGrid() {
+    const grid = document.getElementById('videoGrid');
+    const stats = document.getElementById('stats');
+    if (searchMode) {
+        if (searchResults.loading && !searchResults.items.length) {
+            grid.innerHTML = '<div class="loading-spinner"></div>';
+            stats.textContent = 'Searching...';
+            return;
+        }
+        if (!searchResults.items.length) {
+            grid.innerHTML = '<div class="empty-state"><div class="icon">🔍</div><h2>No results</h2></div>';
+            stats.textContent = `${totalVideoCount} videos total`;
+            return;
+        }
+        stats.textContent = `${searchResults.items.length} of ${searchResults.total} results`;
+        renderGroupedGrid();
+        return;
+    }
+    if (!monthSummaries.length && !totalVideoCount) {
+        grid.innerHTML = '<div class="empty-state"><div class="icon">📂</div><h2>No videos found</h2><p style="color:#666;margin-top:8px;font-size:0.85rem">Check that ComfyUI/output/video exists.</p></div>';
+        stats.textContent = '';
+        return;
+    }
+    stats.textContent = `${totalVideoCount} videos — expand a month or browse the latest below` +
+        (serverHasVthumb ? '' : ' (tap ▶ to play — thumbnails loading)');
+    renderGroupedGrid();
+}
+
+function getMonthSection(monthKey) {
+    return document.querySelector(`.month-section[data-month="${monthKey}"]`);
+}
+
+function getMonthRenderedCount(monthKey) {
+    const section = getMonthSection(monthKey);
+    return section ? section.querySelectorAll('.video-card').length : 0;
+}
+
+function ensureMonthGrid(monthKey) {
+    const section = getMonthSection(monthKey);
+    if (!section) return null;
+    let grid = section.querySelector('.month-grid');
+    if (!grid) {
+        grid = document.createElement('div');
+        grid.className = 'month-grid';
+        const btn = section.querySelector('.load-more-btn');
+        if (btn) section.insertBefore(grid, btn);
+        else section.appendChild(grid);
+    }
+    section.querySelector('.month-loading')?.remove();
+    return grid;
+}
+
+function setMonthLoading(monthKey, show) {
+    const section = getMonthSection(monthKey);
+    if (!section) return;
+    section.querySelector('.month-loading')?.remove();
+    if (!show) return;
+    const rendered = getMonthRenderedCount(monthKey);
+    if (rendered > 0) return;
+    const el = document.createElement('div');
+    el.className = 'month-loading';
+    el.innerHTML = '<div class="loading-spinner"></div>';
+    const grid = section.querySelector('.month-grid');
+    if (grid) section.insertBefore(el, grid);
+    else section.appendChild(el);
+}
+
+function updateLoadMoreButton(monthKey, remaining) {
+    const section = getMonthSection(monthKey);
+    if (!section) return;
+    let btn = section.querySelector('.load-more-btn');
+    if (remaining > 0) {
+        const label = `Show ${remaining} more`;
+        if (btn) {
+            btn.textContent = label;
+            btn.style.display = '';
+        } else {
+            btn = document.createElement('button');
+            btn.className = 'load-more-btn';
+            btn.textContent = label;
+            btn.addEventListener('click', (e) => showMoreInMonth(monthKey, e));
+            section.appendChild(btn);
+        }
+    } else if (btn) {
+        btn.remove();
+    }
+}
+
+function buildVideoCardHtml(video) {
+    const vid = encodeURIComponent(video.name);
+    const pathEnc = encodeURIComponent(video.path);
+    const durationText = video.duration ? formatDuration(video.duration) : '--:--';
+    const thumbHtml = useServerVthumb()
+        ? `<img class="thumb-lazy video-thumb" data-src="${getVThumbSrc(video)}" alt="${escapeHtml(video.name)}" onload="onThumbLoaded(this)" onerror="fallbackThumbnail(this)">`
+        : '';
+    return `<div class="video-card" data-vid="${vid}" data-path="${pathEnc}">
+        <div class="thumbnail-container" data-path="${pathEnc}">
+            ${thumbHtml}
+            <div class="thumbnail-placeholder">▶</div>
+            <span class="duration-badge">${durationText}</span>
+            <div class="play-overlay"><div class="play-btn"></div></div>
+            <div class="video-overlay">
+                <div class="video-actions">
+                    <button type="button" class="action-btn" data-action="info" data-path="${pathEnc}" title="Info">ⓘ</button>
+                    <button type="button" class="action-btn action-btn--delete" data-action="delete" data-path="${pathEnc}" title="Delete">✕</button>
+                </div>
+                <div class="video-title-overlay">${escapeHtml(video.name)}</div>
+            </div>
+        </div>
+    </div>`;
+}
+
+function appendVideosToMonth(monthKey, videos) {
+    if (!videos.length) return;
+    const grid = ensureMonthGrid(monthKey);
+    if (!grid) return;
+    grid.insertAdjacentHTML('beforeend', videos.map(buildVideoCardHtml).join(''));
+    window._visibleVideos = (window._visibleVideos || []).concat(videos);
+    observeThumbs(grid);
+}
+
+function renderGroupedGrid() {
+    const grid = document.getElementById('videoGrid');
+
+    let visibleVideos = [];
+    let html = '';
+    const groups = searchMode
+        ? [{ key: 'search', label: 'Search results', count: searchResults.total, items: searchResults.items, loading: searchResults.loading }]
+        : monthSummaries.map(s => ({
+            key: s.month,
+            label: getMonthLabel(s.month),
+            count: s.count,
+            items: (monthVideosCache[s.month] || {}).items || [],
+            loading: (monthVideosCache[s.month] || {}).loading,
+        }));
+
+    groups.forEach(group => {
+        const collapsed = !searchMode && collapsedMonths.has(group.key);
+        html += `<div class="month-section" data-month="${group.key}">`;
+        html += `<div class="month-header" onclick="toggleMonth('${group.key}')"><span class="month-toggle">${collapsed ? '▶' : '▼'}</span><span class="month-label">${group.label}</span><span class="month-count">${group.count}</span><button type="button" class="month-random" title="Shuffle ${group.label}" onclick="startMonthRandom('${group.key}', event)">🎲 Random</button></div>`;
+        if (!collapsed) {
+            const limit = searchMode ? searchResults.items.length : getMonthVisibleLimit(group.key, group.count);
+            const shown = group.items.slice(0, limit);
+            const remaining = group.count - shown.length;
+            html += '<div class="month-grid">';
+            if (group.loading && !shown.length) {
+                html += '<div class="month-loading"><div class="loading-spinner"></div></div>';
+            }
+            shown.forEach(video => {
+                visibleVideos.push(video);
+                html += buildVideoCardHtml(video);
+            });
+            html += '</div>';
+            if (remaining > 0) {
+                const loadKey = searchMode ? 'search' : group.key;
+                html += `<button class="load-more-btn" onclick="showMoreInMonth('${loadKey}', event)">Show ${remaining} more</button>`;
+            }
+        }
+        html += `</div>`;
+    });
+
+    window._visibleVideos = visibleVideos;
+    grid.innerHTML = html;
+    observeThumbs();
+}
+
+// ========== THUMBNAILS (fallback when ffmpeg/server thumb unavailable) ==========
+function queueThumbnail(vid) { thumbQueue.push(vid); processThumbQueue(); }
+function processThumbQueue() { while (thumbActive < THUMB_CONCURRENCY && thumbQueue.length) { thumbActive++; generateThumbnail(thumbQueue.shift()); } }
+function onThumbComplete() { thumbActive--; processThumbQueue(); }
+
+function findByVid(selector, vid) {
+    let decoded;
+    try { decoded = decodeURIComponent(String(vid)); } catch (_) { decoded = String(vid); }
+    for (const el of document.querySelectorAll(selector + '[data-vid]')) {
+        try {
+            if (decodeURIComponent(el.getAttribute('data-vid') || '') === decoded) return el;
+        } catch (_) {}
+    }
+    return null;
+}
+
+function generateThumbnail(vid) {
+    const video = getVideoByVid(vid);
+    if (!video) { onThumbComplete(); return; }
+    const container = findByVid('.thumbnail-container', vid);
+    if (!container) { onThumbComplete(); return; }
+
+    const v = document.createElement('video');
+    v.preload = 'metadata'; v.muted = true; v.playsInline = true;
+    v.onloadedmetadata = () => {
+        const d = container.querySelector('.duration-badge');
+        if (d && d.textContent === '--:--') d.textContent = formatDuration(v.duration);
+        v.currentTime = Math.min(Math.max(v.duration * 0.25, 0.1), 5);
+    };
+    v.onseeked = () => {
+        try {
+            const canvas = document.createElement('canvas');
+            canvas.width = v.videoWidth || 640; canvas.height = v.videoHeight || 360;
+            canvas.getContext('2d').drawImage(v, 0, 0, canvas.width, canvas.height);
+            const ph = container.querySelector('.thumbnail-placeholder'); if (ph) ph.style.display = 'none';
+            const failedImg = container.querySelector('img.video-thumb');
+            if (failedImg) failedImg.remove();
+            container.insertBefore(canvas, container.firstChild);
+        } catch (err) { /* tainted canvas or decode error */ }
+        v.remove();
+        onThumbComplete();
+    };
+    v.onerror = () => { v.remove(); onThumbComplete(); };
+    v.src = video.url;
+}
+
+// ========== DELETE ==========
+async function deleteVideo(event, vid) {
+    event.stopPropagation();
+    const video = getVideoByVid(vid);
+    if (!video) return;
+    try {
+        const resp = await fetch(video.url, { method: 'DELETE' });
+        if (!resp.ok) { alert('Failed to delete'); return; }
+    } catch (err) { alert('Delete failed: ' + err.message); return; }
+    allVideos.splice(allVideos.indexOf(video), 1);
+    const fi = filteredVideos.indexOf(video); if (fi > -1) filteredVideos.splice(fi, 1);
+    const card = document.querySelector(`.video-card[data-vid="${vid}"]`); if (card) card.remove();
+    document.getElementById('stats').textContent = `${filteredVideos.length} of ${allVideos.length} videos`;
+}
+
+function playVideoFromBtn(event, vid) {
+    event.stopPropagation();
+    playVideo(vid);
+}
+
+function showVideoInfoFor(event, vid) {
+    event.stopPropagation();
+    const video = getVideoByVid(vid);
+    if (!video) return;
+    const panel = document.getElementById('videoInfoPanel');
+    panel.innerHTML = `<strong>Name:</strong> ${escapeHtml(video.name)} &nbsp;&nbsp; <strong>Size:</strong> ${formatSize(video.size)} &nbsp;&nbsp; <strong>Duration:</strong> ${video.duration ? formatDuration(video.duration) : '?'} &nbsp;&nbsp; <strong>Modified:</strong> ${video.date.toLocaleString()}`;
+    panel.style.display = 'block';
+    setTimeout(() => { panel.style.display = 'none'; }, 5000);
+}
+
+// ========== MODAL & SLIDESHOW ==========
+function shuffleVideos(arr) {
+    return [...arr].sort(() => Math.random() - 0.5);
+}
+
+async function fetchSlideshowVideos() {
+    const q = document.getElementById('searchInput').value.trim();
+    const url = q
+        ? `${serverBaseUrl}/api/videos?q=${encodeURIComponent(q)}&limit=5000`
+        : `${serverBaseUrl}/api/videos?limit=5000`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error('Failed to load playlist');
+    const data = await resp.json();
+    applyFfmpegFlag(data);
+    const items = sortVideoList((data.videos || []).map(mapVideo));
+    registerVideos(items);
+    return items;
+}
+
+function updateSlideshowUI() {
+    const counter = document.getElementById('slideshowCounter');
+    const pauseBtn = document.getElementById('slideshowPauseBtn');
+    const seqBtn = document.getElementById('slideshowSeqBtn');
+    const randomBtn = document.getElementById('slideshowRandomBtn');
+    const overlay = document.getElementById('modalOverlay');
+    if (slideshowActive) {
+        counter.textContent = `${slideshowRandom ? '🎲 ' : ''}${currentVideoIndex + 1} / ${modalPlaylist.length}`;
+        pauseBtn.style.display = 'flex';
+        pauseBtn.textContent = slideshowPaused ? '▶' : '⏸';
+        seqBtn.textContent = slideshowRandom ? '▶ Slideshow' : '⏹ Stop';
+        randomBtn.textContent = slideshowRandom ? '⏹ Stop' : '🎲 Random';
+        seqBtn.classList.toggle('btn--active', !slideshowRandom);
+        randomBtn.classList.toggle('btn--active', slideshowRandom);
+        overlay.classList.add('slideshow-mode');
+    } else {
+        counter.textContent = '';
+        pauseBtn.style.display = 'none';
+        seqBtn.textContent = '▶ Slideshow';
+        randomBtn.textContent = '🎲 Random';
+        seqBtn.classList.remove('btn--active');
+        randomBtn.classList.remove('btn--active');
+        overlay.classList.remove('slideshow-mode');
+        document.getElementById('slideshowProgress').style.width = '0%';
+    }
+}
+
+function updateSlideshowProgress() {
+    if (!slideshowActive) return;
+    const player = document.getElementById('modalVideo');
+    const bar = document.getElementById('slideshowProgress');
+    if (!player.duration || !isFinite(player.duration)) {
+        bar.style.width = '0%';
+        return;
+    }
+    bar.style.width = Math.min(100, (player.currentTime / player.duration) * 100) + '%';
+}
+
+function advanceSlideshow() {
+    if (!slideshowActive || slideshowPaused || !modalPlaylist.length) return;
+    let next;
+    if (slideshowRandom) {
+        if (modalPlaylist.length <= 1) {
+            next = 0;
+        } else {
+            do {
+                next = Math.floor(Math.random() * modalPlaylist.length);
+            } while (next === currentVideoIndex);
+        }
+    } else {
+        next = currentVideoIndex + 1;
+        if (next >= modalPlaylist.length) next = 0;
+    }
+    currentVideoIndex = next;
+    openModal(modalPlaylist[next], true);
+}
+
+function onVideoEnded() {
+    if (slideshowActive && !slideshowPaused) {
+        advanceSlideshow();
+        return;
+    }
+    if (modalPlaylist.length > 1) navigateVideo(1);
+}
+
+async function fetchMonthPlaylist(monthKey) {
+    if (monthKey === 'search') return searchResults.items.slice();
+    const cached = monthVideosCache[monthKey];
+    const summary = monthSummaries.find(s => s.month === monthKey);
+    if (cached && summary && cached.items.length >= summary.count) return cached.items.slice();
+
+    const resp = await fetch(
+        `${serverBaseUrl}/api/videos?month=${encodeURIComponent(monthKey)}&limit=5000`
+    );
+    if (!resp.ok) throw new Error('Failed to load month playlist');
+    const data = await resp.json();
+    applyFfmpegFlag(data);
+    const items = sortVideoList((data.videos || []).map(mapVideo));
+    registerVideos(items);
+    monthVideosCache[monthKey] = { items, total: data.total || items.length, loading: false };
+    return items;
+}
+
+async function startMonthRandom(monthKey, event) {
+    if (event) event.stopPropagation();
+    if (slideshowActive) stopSlideshow(false);
+    let items;
+    try {
+        items = await fetchMonthPlaylist(monthKey);
+    } catch (err) {
+        alert('Random failed: ' + err.message);
+        return;
+    }
+    if (!items.length) return;
+    modalPlaylist = shuffleVideos(items);
+    slideshowRandom = true;
+    slideshowActive = true;
+    slideshowPaused = false;
+    currentVideoIndex = 0;
+    openModal(modalPlaylist[0]);
+    updateSlideshowUI();
+}
+
+async function startSlideshow(random = false) {
+    if (slideshowActive) {
+        stopSlideshow(true);
+        return;
+    }
+    slideshowRandom = random;
+    try {
+        modalPlaylist = await fetchSlideshowVideos();
+    } catch (err) {
+        alert('Slideshow failed: ' + err.message);
+        return;
+    }
+    if (!modalPlaylist.length) return;
+    if (random) modalPlaylist = shuffleVideos(modalPlaylist);
+    slideshowActive = true;
+    slideshowPaused = false;
+    currentVideoIndex = 0;
+    openModal(modalPlaylist[0]);
+    updateSlideshowUI();
+}
+
+function stopSlideshow(closeBox) {
+    slideshowActive = false;
+    slideshowPaused = false;
+    slideshowRandom = false;
+    updateSlideshowUI();
+    if (closeBox) closeModal();
+}
+
+function toggleSlideshowPause() {
+    if (!slideshowActive) return;
+    slideshowPaused = !slideshowPaused;
+    const player = document.getElementById('modalVideo');
+    if (slideshowPaused) player.pause();
+    else player.play();
+    updateSlideshowUI();
+}
+
+function setModalLoading(on) {
+    document.getElementById('modalVideoWrap').classList.toggle('is-loading', !!on);
+}
+
+function playVideoByPath(pathEnc) {
+    if (slideshowActive) stopSlideshow(false);
+    const video = getVideoByPath(pathEnc);
+    if (!video) return;
+    modalPlaylist = window._visibleVideos && window._visibleVideos.length ? window._visibleVideos : allVideos;
+    currentVideoIndex = modalPlaylist.findIndex(v => v.path === video.path);
+    if (currentVideoIndex < 0) {
+        modalPlaylist = [video, ...modalPlaylist];
+        currentVideoIndex = 0;
+    }
+    openModal(video);
+}
+
+function playVideo(vid) {
+    const video = getVideoByVid(vid);
+    if (video) playVideoByPath(encodeURIComponent(video.path));
+}
+
+function navigateVideo(dir) {
+    if (!modalPlaylist.length) return;
+    let i = currentVideoIndex + dir;
+    if (i < 0) i = modalPlaylist.length - 1;
+    if (i >= modalPlaylist.length) i = 0;
+    currentVideoIndex = i;
+    openModal(modalPlaylist[i], true);
+}
+
+function openModal(video, keepZoom = false) {
+    if (!video) return;
+    const token = ++modalLoadToken;
+    modalRetryCount = 0;
+    thumbLoadPaused = true;
+    if (!keepZoom) {
+        resetVideoZoom();
+        setFitScreen(false);
+    }
+    const player = document.getElementById('modalVideo');
+    player.removeAttribute('poster');
+    player.preload = 'auto';
+    // Opening from the grid starts muted; next/previous keeps whatever the user chose.
+    if (!keepZoom) player.muted = true;
+    document.getElementById('modalTitle').textContent = video.name;
+    document.getElementById('modalOverlay').classList.add('active');
+    document.getElementById('slideshowProgress').style.width = '0%';
+    document.body.style.overflow = 'hidden';
+    setModalLoading(true);
+
+    const absUrl = (() => {
+        try { return new URL(video.url, location.href).href; } catch { return video.url; }
+    })();
+    const needsLoad = player.currentSrc !== absUrl && player.src !== absUrl;
+
+    const attemptPlay = () => {
+        if (token !== modalLoadToken) return;
+        setModalLoading(false);
+        const p = player.play();
+        if (p && p.catch) p.catch(() => {});
+    };
+
+    const scheduleRetry = () => {
+        if (token !== modalLoadToken || modalRetryCount >= 2) {
+            if (token === modalLoadToken) {
+                setModalLoading(false);
+                document.getElementById('modalTitle').textContent = video.name + ' — tap ▶ to retry';
+            }
+            return;
+        }
+        modalRetryCount++;
+        setModalLoading(true);
+        player.src = modalRetryCount > 1 ? video.url + '?r=' + Date.now() : video.url;
+        player.load();
+        player.addEventListener('canplay', attemptPlay, { once: true });
+        player.addEventListener('error', scheduleRetry, { once: true });
+    };
+
+    player.oncanplay = null;
+    player.onerror = null;
+
+    if (needsLoad || player.error) {
+        player.src = video.url;
+        player.load();
+    } else {
+        try { player.currentTime = 0; } catch (_) {}
+    }
+
+    if (player.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
+        attemptPlay();
+    } else {
+        player.addEventListener('canplay', attemptPlay, { once: true });
+        player.addEventListener('error', scheduleRetry, { once: true });
+        player.addEventListener('playing', () => setModalLoading(false), { once: true });
+        setTimeout(() => {
+            if (token === modalLoadToken && player.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+                attemptPlay();
+            }
+        }, 12000);
+    }
+
+    if (slideshowActive) updateSlideshowUI();
+    updateFullscreenBtn();
+    updateFitScreenBtn();
+}
+
+function closeModal() {
+    modalLoadToken++;
+    setModalLoading(false);
+    exitModalFullscreen();
+    resetVideoZoom();
+    setFitScreen(false);
+    thumbLoadPaused = false;
+    const wasSlideshow = slideshowActive;
+    if (slideshowActive) stopSlideshow(false);
+    const player = document.getElementById('modalVideo');
+    player.pause(); player.src = ''; player.removeAttribute('poster');
+    document.getElementById('modalOverlay').classList.remove('active');
+    document.body.style.overflow = '';
+    document.getElementById('videoInfoPanel').style.display = 'none';
+    if (wasSlideshow) updateSlideshowUI();
+    processThumbLoadQueue();
+}
+
+function toggleVideoInfo() {
+    const panel = document.getElementById('videoInfoPanel');
+    if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
+    const video = modalPlaylist[currentVideoIndex];
+    if (!video) return;
+    panel.innerHTML = `<strong>Name:</strong> ${escapeHtml(video.name)} &nbsp;&nbsp; <strong>Size:</strong> ${formatSize(video.size)} &nbsp;&nbsp; <strong>Modified:</strong> ${video.date.toLocaleString()}`;
+    panel.style.display = 'block';
+    setTimeout(() => { panel.style.display = 'none'; }, 5000);
+}
+
+async function deleteFromModal() {
+    if (!modalPlaylist.length || currentVideoIndex < 0) return;
+    const video = modalPlaylist[currentVideoIndex];
+    if (!video) return;
+    const vid = encodeURIComponent(video.name);
+    try {
+        const resp = await fetch(video.url, { method: 'DELETE' });
+        if (!resp.ok) { alert('Failed to delete'); return; }
+    } catch (err) { alert('Delete failed: ' + err.message); return; }
+    allVideos.splice(allVideos.indexOf(video), 1);
+    const fi = filteredVideos.indexOf(video); if (fi > -1) filteredVideos.splice(fi, 1);
+    modalPlaylist.splice(currentVideoIndex, 1);
+    const card = document.querySelector(`.video-card[data-vid="${vid}"]`); if (card) card.remove();
+    document.getElementById('stats').textContent = `${filteredVideos.length} of ${allVideos.length} videos`;
+    if (modalPlaylist.length === 0) { closeModal(); return; }
+    if (currentVideoIndex >= modalPlaylist.length) currentVideoIndex = 0;
+    openModal(modalPlaylist[currentVideoIndex], true);
+    if (slideshowActive) updateSlideshowUI();
+}
+
+// ========== PANIC ==========
+function togglePanic() {
+    const cover = document.getElementById('panicCover');
+    if (cover.classList.contains('active')) { cover.classList.remove('active'); }
+    else { closeModal(); cover.classList.add('active'); }
+}
+
+let videoFitScreen = false;
+
+function setFitScreen(on) {
+    videoFitScreen = !!on;
+    document.getElementById('modalOverlay').classList.toggle('fit-screen', videoFitScreen);
+    if (videoFitScreen) resetVideoZoom();
+    updateFitScreenBtn();
+}
+
+function toggleFitScreen() {
+    setFitScreen(!videoFitScreen);
+}
+
+function updateFitScreenBtn() {
+    const btn = document.getElementById('modalFitBtn');
+    if (!btn) return;
+    btn.classList.toggle('modal-close--active', videoFitScreen);
+    btn.title = videoFitScreen ? 'Original size' : 'Fit to screen';
+}
+
+function isModalFullscreen() {
+    const el = document.getElementById('modalOverlay');
+    return document.fullscreenElement === el
+        || document.webkitFullscreenElement === el
+        || el.classList.contains('is-fs');
+}
+
+function updateFullscreenBtn() {
+    const btn = document.getElementById('modalFsBtn');
+    if (!btn) return;
+    btn.textContent = isModalFullscreen() ? '⤡' : '⛶';
+    btn.title = isModalFullscreen() ? 'Exit fullscreen' : 'Fullscreen';
+}
+
+function enterModalFullscreen() {
+    const el = document.getElementById('modalOverlay');
+    const req = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (req) {
+        Promise.resolve(req.call(el)).catch(() => el.classList.add('is-fs'));
+    } else {
+        el.classList.add('is-fs');
+    }
+    updateFullscreenBtn();
+}
+
+function exitModalFullscreen() {
+    const el = document.getElementById('modalOverlay');
+    if (document.fullscreenElement === el || document.webkitFullscreenElement === el) {
+        const exit = document.exitFullscreen || document.webkitExitFullscreen;
+        if (exit) exit.call(document);
+    }
+    el.classList.remove('is-fs');
+    updateFullscreenBtn();
+}
+
+function toggleModalFullscreen() {
+    if (isModalFullscreen()) exitModalFullscreen();
+    else enterModalFullscreen();
+}
+
+document.getElementById('modalOverlay').addEventListener('fullscreenchange', updateFullscreenBtn);
+document.getElementById('modalOverlay').addEventListener('webkitfullscreenchange', updateFullscreenBtn);
+
+// Pinch-to-zoom on video (2 fingers) + pan when zoomed
+let videoZoom = { scale: 1, x: 0, y: 0 };
+let pinchState = null;
+
+function touchDistance(a, b) {
+    return Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+}
+
+function resetVideoZoom() {
+    videoZoom = { scale: 1, x: 0, y: 0 };
+    const wrap = document.getElementById('modalVideoWrap');
+    if (wrap) wrap.style.transform = '';
+}
+
+function applyVideoZoom() {
+    const wrap = document.getElementById('modalVideoWrap');
+    if (!wrap) return;
+    if (videoZoom.scale <= 1) {
+        wrap.style.transform = '';
+        videoZoom.x = 0;
+        videoZoom.y = 0;
+        return;
+    }
+    wrap.style.transform = `translate(${videoZoom.x}px, ${videoZoom.y}px) scale(${videoZoom.scale})`;
+}
+
+(function initVideoPinchZoom() {
+    const wrap = document.getElementById('modalVideoWrap');
+    if (!wrap) return;
+
+    wrap.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 2) {
+            pinchState = {
+                mode: 'pinch',
+                dist: touchDistance(e.touches[0], e.touches[1]),
+                scale: videoZoom.scale,
+            };
+        } else if (e.touches.length === 1 && videoZoom.scale > 1) {
+            pinchState = {
+                mode: 'pan',
+                x: videoZoom.x,
+                y: videoZoom.y,
+                px: e.touches[0].clientX,
+                py: e.touches[0].clientY,
+            };
+        }
+    }, { passive: true });
+
+    wrap.addEventListener('touchmove', (e) => {
+        if (e.touches.length === 2 && pinchState?.mode === 'pinch') {
+            e.preventDefault();
+            const dist = touchDistance(e.touches[0], e.touches[1]);
+            videoZoom.scale = Math.min(5, Math.max(1, pinchState.scale * (dist / pinchState.dist)));
+            applyVideoZoom();
+        } else if (e.touches.length === 1 && pinchState?.mode === 'pan' && videoZoom.scale > 1) {
+            e.preventDefault();
+            videoZoom.x = pinchState.x + (e.touches[0].clientX - pinchState.px);
+            videoZoom.y = pinchState.y + (e.touches[0].clientY - pinchState.py);
+            applyVideoZoom();
+        }
+    }, { passive: false });
+
+    wrap.addEventListener('touchend', (e) => {
+        if (e.touches.length === 0) pinchState = null;
+    });
+
+    let lastTap = 0;
+    wrap.addEventListener('touchend', (e) => {
+        if (e.touches.length > 0 || videoZoom.scale <= 1) return;
+        const now = Date.now();
+        if (now - lastTap < 300) resetVideoZoom();
+        lastTap = now;
+    });
+
+    wrap.addEventListener('wheel', (e) => {
+        if (!e.ctrlKey) return;
+        e.preventDefault();
+        videoZoom.scale = Math.min(5, Math.max(1, videoZoom.scale - e.deltaY * 0.01));
+        applyVideoZoom();
+    }, { passive: false });
+})();
+
+document.addEventListener('keydown', (e) => {
+    // Panic: space/backtick (not when typing)
+    if ((e.key === ' ' || e.key === '`') && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA' && !document.getElementById('modalOverlay').classList.contains('active')) {
+        e.preventDefault(); togglePanic(); return;
+    }
+    // Modal keys
+    if (document.getElementById('modalOverlay').classList.contains('active')) {
+        if (e.key === 'Escape') {
+            if (isModalFullscreen()) { exitModalFullscreen(); return; }
+            closeModal();
+        }
+        if (e.key === 'f' || e.key === 'F') { e.preventDefault(); toggleModalFullscreen(); }
+        if (e.key === 'ArrowLeft') navigateVideo(-1);
+        if (e.key === 'ArrowRight') navigateVideo(1);
+        if (slideshowActive && (e.key === ' ' || e.key === 'Spacebar')) {
+            e.preventDefault();
+            toggleSlideshowPause();
+            return;
+        }
+        if (e.key === ' ') { e.preventDefault(); const p = document.getElementById('modalVideo'); p.paused ? p.play() : p.pause(); }
+        return;
+    }
+    // Slideshow shortcuts (when modal closed)
+    if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+        if (e.key === 'r' || e.key === 'R') { e.preventDefault(); startSlideshow(true); }
+    }
+    // Panic escape
+    if (e.key === 'Escape' && document.getElementById('panicCover').classList.contains('active')) togglePanic();
+});
+
+document.getElementById('modalOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeModal(); });
+
+document.getElementById('videoGrid').addEventListener('click', (e) => {
+    const btn = e.target.closest('.action-btn[data-action]');
+    if (btn) {
+        e.stopPropagation();
+        const pathEnc = btn.dataset.path;
+        if (!pathEnc) return;
+        if (btn.dataset.action === 'info') {
+            const video = getVideoByPath(pathEnc);
+            if (!video) return;
+            const panel = document.getElementById('videoInfoPanel');
+            panel.innerHTML = `<strong>Name:</strong> ${escapeHtml(video.name)} &nbsp;&nbsp; <strong>Size:</strong> ${formatSize(video.size)} &nbsp;&nbsp; <strong>Duration:</strong> ${video.duration ? formatDuration(video.duration) : '?'} &nbsp;&nbsp; <strong>Modified:</strong> ${video.date.toLocaleString()}`;
+            panel.style.display = 'block';
+            setTimeout(() => { panel.style.display = 'none'; }, 5000);
+        } else if (btn.dataset.action === 'delete') {
+            deleteVideoByPath(e, pathEnc);
+        }
+        return;
+    }
+    const container = e.target.closest('.thumbnail-container[data-path]');
+    if (container) playVideoByPath(container.dataset.path);
+});
+
+async function deleteVideoByPath(event, pathEnc) {
+    event.stopPropagation();
+    const video = getVideoByPath(pathEnc);
+    if (!video) return;
+    try {
+        const resp = await fetch(video.url, { method: 'DELETE' });
+        if (!resp.ok) { alert('Failed to delete'); return; }
+    } catch (err) { alert('Delete failed: ' + err.message); return; }
+    allVideos.splice(allVideos.indexOf(video), 1);
+    const fi = filteredVideos.indexOf(video); if (fi > -1) filteredVideos.splice(fi, 1);
+    const card = document.querySelector(`.video-card[data-path="${pathEnc}"]`); if (card) card.remove();
+    document.getElementById('stats').textContent = `${filteredVideos.length} of ${allVideos.length} videos`;
+}
+
+// ========== AUTO LOAD ==========
+loadFromServer();
+
+document.addEventListener('visibilitychange', () => {
+    const modalOpen = document.getElementById('modalOverlay').classList.contains('active');
+    if (document.hidden) {
+        thumbLoadPaused = true;
+    } else if (!modalOpen) {
+        thumbLoadPaused = false;
+        processThumbLoadQueue();
+    }
+});
+</script>
+</body>
+</html>

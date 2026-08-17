@@ -1,0 +1,1066 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache">
+    <title>Photos</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif; background: #0a0a0a; color: #e0e0e0; min-height: 100vh; }
+
+        header { background: #111; padding: 10px 16px; display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 100; border-bottom: 1px solid #1e1e1e; flex-wrap: wrap; }
+        .nav { display: flex; gap: 4px; }
+        .nav a { padding: 6px 12px; border-radius: 5px; font-size: 0.8rem; color: #888; text-decoration: none; }
+        .nav a:hover { background: #1a1a1a; color: #ccc; }
+        .nav a.active { background: #e60023; color: #fff; }
+        .controls { display: flex; gap: 8px; align-items: center; flex: 1; justify-content: flex-end; flex-wrap: wrap; }
+        .btn { padding: 8px 12px; border: 1px solid #2a2a2a; border-radius: 20px; background: #1a1a1a; color: #ccc; font-size: 0.8rem; cursor: pointer; transition: background 0.2s; white-space: nowrap; }
+        .btn:hover { background: #252525; border-color: #444; }
+        .btn--active { background: #e60023; border-color: #e60023; color: #fff; }
+        .btn--active:hover { background: #cc001f; border-color: #cc001f; }
+
+        #searchInput { padding: 8px 14px; border: 1px solid #2a2a2a; border-radius: 20px; background: #1a1a1a; color: #e0e0e0; font-size: 16px; width: 200px; -webkit-appearance: none; }
+        #searchInput:focus { outline: none; border-color: #e60023; }
+        #searchInput::placeholder { color: #555; }
+        .stats { color: #555; font-size: 0.75rem; padding: 8px 16px; max-width: 1800px; margin: 0 auto; }
+
+        /* Pinterest masonry */
+        .photo-grid { padding: 8px 16px 48px; max-width: 1800px; margin: 0 auto; }
+
+        .month-section { margin-bottom: 4px; }
+
+        .month-header {
+            display: flex; align-items: center; gap: 10px;
+            padding: 20px 4px 14px; cursor: pointer; user-select: none;
+            margin: 0;
+        }
+        .month-header:first-child { padding-top: 12px; }
+        .month-toggle { font-size: 0.65rem; color: #666; width: 12px; }
+        .month-label { font-size: 1rem; font-weight: 700; color: #eee; letter-spacing: -0.02em; }
+        .month-count { font-size: 0.7rem; color: #888; background: #1a1a1a; padding: 3px 10px; border-radius: 12px; }
+
+        .month-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 16px;
+        }
+
+        .photo-card {
+            border-radius: 16px;
+            overflow: hidden;
+            position: relative;
+            background: #141414;
+            cursor: zoom-in;
+            opacity: 0;
+            animation: pinFadeIn 0.45s ease forwards;
+            transition: transform 0.25s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.25s ease;
+            box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
+            will-change: transform;
+        }
+
+        .photo-card:hover {
+            transform: scale(1.04);
+            box-shadow: 0 14px 32px rgba(0, 0, 0, 0.55);
+            z-index: 5;
+        }
+
+        .photo-card img {
+            display: block;
+            width: 100%;
+            height: auto;
+            vertical-align: bottom;
+        }
+
+        .photo-card img.thumb-lazy {
+            min-height: 80px;
+            background: linear-gradient(135deg, #141414 0%, #1c1c1c 100%);
+        }
+
+        .photo-overlay {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(180deg, rgba(0,0,0,0.35) 0%, transparent 35%, transparent 55%, rgba(0,0,0,0.55) 100%);
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 10px;
+            pointer-events: none;
+        }
+
+        .photo-card:hover .photo-overlay { opacity: 1; }
+
+        .photo-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: flex-end;
+            pointer-events: auto;
+        }
+
+        .action-btn {
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.95);
+            color: #111;
+            font-size: 0.8rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.15s, background 0.15s;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+        }
+
+        .action-btn:hover { transform: scale(1.08); background: #fff; }
+        .action-btn--delete:hover { background: #e60023; color: #fff; }
+
+        .photo-name {
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: #fff;
+            line-height: 1.3;
+            text-shadow: 0 1px 4px rgba(0,0,0,0.9);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            pointer-events: none;
+        }
+
+        .load-more-btn {
+            display: block;
+            width: 100%;
+            max-width: 320px;
+            margin: 8px auto 24px;
+            padding: 14px 20px;
+            border: none;
+            border-radius: 24px;
+            background: #1a1a1a;
+            color: #ccc;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s, transform 0.15s;
+        }
+
+        .load-more-btn:hover {
+            background: #252525;
+            color: #fff;
+            transform: scale(1.02);
+        }
+
+        .month-loading {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 28px;
+            color: #666;
+            font-size: 0.8rem;
+        }
+
+        .lightbox { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.92); z-index: 1000; justify-content: center; align-items: center; flex-direction: column; padding: 40px; }
+        .lightbox.active { display: flex; }
+        .lightbox img { max-width: 85vw; max-height: 80vh; border-radius: 12px; object-fit: contain; box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
+        .lb-btn { position: absolute; top: 16px; font-size: 1.2rem; color: #888; cursor: pointer; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: #1a1a1a; border: 1px solid #2a2a2a; }
+        .lb-btn:hover { background: #333; color: #fff; }
+        .lightbox-nav { position: absolute; top: 50%; transform: translateY(-50%); font-size: 1.5rem; color: #888; cursor: pointer; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 50%; }
+        .lightbox-nav:hover { background: #333; color: #fff; }
+        .lightbox-nav.prev { left: 16px; }
+        .lightbox-nav.next { right: 16px; }
+        .lightbox-title { color: #888; margin-top: 12px; font-size: 0.85rem; }
+        .lightbox.slideshow-mode .lightbox-title { color: #ccc; }
+
+        #slideshowCounter {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            font-size: 0.75rem;
+            color: #aaa;
+            background: rgba(0,0,0,0.5);
+            padding: 6px 12px;
+            border-radius: 20px;
+            display: none;
+        }
+
+        .lightbox.slideshow-mode #slideshowCounter { display: block; }
+
+        .slideshow-progress {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 3px;
+            background: #e60023;
+            width: 0%;
+            transition: width 0.1s linear;
+            display: none;
+        }
+
+        .lightbox.slideshow-mode .slideshow-progress { display: block; }
+
+        #infoPanel { display: none; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #1a1a1a; border: 1px solid #333; border-radius: 16px; padding: 16px 20px; font-size: 0.75rem; color: #ccc; z-index: 1100; max-width: 90vw; width: 500px; line-height: 1.8; box-shadow: 0 12px 40px rgba(0,0,0,0.5); }
+
+        .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 80px 20px; text-align: center; width: 100%; }
+        .empty-state .icon { font-size: 3rem; margin-bottom: 16px; opacity: 0.4; }
+        .empty-state h2 { color: #888; font-size: 1rem; font-weight: 500; }
+        .loading-spinner { width: 28px; height: 28px; border: 2px solid #222; border-top: 2px solid #e60023; border-radius: 50%; animation: spin 0.7s linear infinite; margin: 60px auto; }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes pinFadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+        @media (max-width: 1600px) { .month-grid { grid-template-columns: repeat(4, 1fr); } }
+        @media (max-width: 1200px) { .month-grid { grid-template-columns: repeat(3, 1fr); } }
+        @media (max-width: 768px) {
+            .photo-grid { padding: 6px 10px 40px; }
+            .month-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+            .photo-card { border-radius: 12px; }
+            .photo-card:hover { transform: none; }
+            .photo-overlay { opacity: 1; background: linear-gradient(180deg, transparent 60%, rgba(0,0,0,0.6) 100%); }
+            header { padding: 8px 12px; }
+            #searchInput { width: 100%; order: -1; }
+            .controls { width: 100%; }
+            .lightbox img { max-width: 95vw; }
+        }
+        @media (max-width: 480px) {
+            .month-grid { gap: 8px; }
+            .photo-card { border-radius: 10px; }
+        }
+
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0a0a0a; }
+        ::-webkit-scrollbar-thumb { background: #222; border-radius: 3px; }
+    </style>
+</head>
+<body>
+<header>
+    <nav class="nav"><a href="index.html">Videos</a><a href="photos.html" class="active">Photos</a></nav>
+    <div class="controls">
+        <input type="text" id="searchInput" placeholder="Search...">
+        <button class="btn" onclick="startSlideshow(false)" id="slideshowSeqBtn">▶ Slideshow</button>
+        <button class="btn" onclick="startSlideshow(true)" id="slideshowRandomBtn">🎲 Random</button>
+        <button class="btn" onclick="loadFromServer()">↻ Refresh</button>
+    </div>
+</header>
+<div class="stats" id="stats"></div>
+<div id="networkHint" style="display:none;background:#3b1c1c;border:1px solid #7f1d1d;color:#fca5a5;padding:10px 16px;margin:0 16px 12px;border-radius:12px;font-size:0.85rem;line-height:1.5"></div>
+<div class="photo-grid" id="photoGrid"><div class="loading-spinner"></div></div>
+
+<div class="lightbox" id="lightbox">
+    <div class="slideshow-progress" id="slideshowProgress"></div>
+    <span id="slideshowCounter"></span>
+    <button class="lb-btn" style="right:20px" onclick="closeLightbox()">✕</button>
+    <button class="lb-btn" id="slideshowPauseBtn" style="right:70px;display:none" onclick="toggleSlideshowPause()">⏸</button>
+    <button class="lb-btn" style="right:120px;background:#dc2626;border-color:#dc2626" onclick="deleteFromLightbox()">🗑</button>
+    <button class="lb-btn" style="right:170px" onclick="toggleInfo()">ⓘ</button>
+    <button class="lightbox-nav prev" onclick="navPhoto(-1)">‹</button>
+    <button class="lightbox-nav next" onclick="navPhoto(1)">›</button>
+    <img id="lightboxImg" src="" alt="">
+    <div class="lightbox-title" id="lightboxTitle"></div>
+</div>
+<div id="infoPanel"></div>
+
+<script>
+const serverBaseUrl = window.location.origin;
+const PHOTOS_PER_MONTH = 40;
+const PHOTOS_PER_LOAD = 40;
+const SLIDESHOW_INTERVAL = 4000;
+const THUMB_CONCURRENCY = 6;
+let allPhotos = [], filteredPhotos = [], currentPhotoIndex = -1;
+let monthSummaries = [], totalPhotoCount = 0;
+let monthPhotosCache = {};
+let searchMode = false;
+let searchResults = { items: [], total: 0, loading: false };
+let collapsedMonths = new Set(), initialCollapseApplied = false;
+let monthVisibleCounts = {};
+let thumbObserver = null;
+let thumbLoadQueue = [], thumbLoadActive = 0;
+let slideshowActive = false;
+let slideshowPaused = false;
+let slideshowTimer = null;
+let slideshowProgressTimer = null;
+let slideshowPlaylist = [];
+let slideshowStartedAt = 0;
+let slideshowRandom = false;
+
+function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+document.getElementById('searchInput').addEventListener('input', debounce(filterPhotos, 300));
+
+function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function formatDate(d) { return d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'2-digit' }); }
+function formatSize(b) { if (!b) return '0B'; const k=1024, s=['B','KB','MB','GB'], i=Math.floor(Math.log(b)/Math.log(k)); return (b/Math.pow(k,i)).toFixed(1)+s[i]; }
+function getPhotoByVid(vid) { return allPhotos.find(p => p.name === decodeURIComponent(vid)); }
+function showLoading() { document.getElementById('photoGrid').innerHTML = '<div class="loading-spinner"></div>'; }
+function getThumbSrc(photo) { return photo.url.replace(serverBaseUrl + '/', serverBaseUrl + '/thumb/'); }
+function getFullSrc(photo) { return photo.url; }
+
+function mapPhoto(p) {
+    return {
+        name: p.name,
+        path: p.path,
+        size: p.size || 0,
+        date: new Date(p.modified * 1000),
+        url: serverBaseUrl + '/' + encodeURIComponent(p.path).replace(/%2F/g, '/'),
+    };
+}
+
+function registerPhotos(photos) {
+    photos.forEach(p => {
+        if (!allPhotos.find(x => x.path === p.path)) allPhotos.push(p);
+    });
+}
+
+function buildMonthSummaries(items, dateKey = 'date') {
+    const counts = {};
+    items.forEach(item => {
+        const d = item[dateKey] instanceof Date ? item[dateKey] : new Date(item[dateKey]);
+        const key = getMonthKey(d);
+        counts[key] = (counts[key] || 0) + 1;
+    });
+    return Object.keys(counts)
+        .sort((a, b) => b.localeCompare(a))
+        .map(month => ({ month, count: counts[month] }));
+}
+
+function setupDefaultExpandedMonths() {
+    initialCollapseApplied = true;
+    collapsedMonths = new Set();
+    if (monthSummaries.length > 1) {
+        monthSummaries.slice(1).forEach(s => collapsedMonths.add(s.month));
+    }
+}
+
+function applyPhotosSummary(data) {
+    if (Array.isArray(data)) {
+        allPhotos = data.map(mapPhoto);
+        monthSummaries = buildMonthSummaries(allPhotos);
+        totalPhotoCount = allPhotos.length;
+        return;
+    }
+    monthSummaries = data.months || [];
+    totalPhotoCount = data.total || 0;
+}
+
+// ========== LOAD ==========
+async function loadFromServer() {
+    if (slideshowActive) stopSlideshow(true);
+    showLoading();
+    allPhotos = [];
+    monthSummaries = [];
+    monthPhotosCache = {};
+    searchMode = false;
+    searchResults = { items: [], total: 0, loading: false };
+    monthVisibleCounts = {};
+    document.getElementById('stats').textContent = 'Scanning library...';
+    try {
+        const resp = await fetch(serverBaseUrl + '/api/photos?summary=1');
+        if (!resp.ok) {
+            throw new Error(`Server returned ${resp.status}. Is video_server.py running?`);
+        }
+        const data = await resp.json();
+        applyPhotosSummary(data);
+        setupDefaultExpandedMonths();
+        if (monthSummaries.length > 0) {
+            await loadMonthPhotos(monthSummaries[0].month);
+        } else {
+            renderGrid();
+        }
+    } catch (err) {
+        document.getElementById('photoGrid').innerHTML =
+            `<div class="empty-state"><div class="icon">⚠️</div><h2>Could not load photos</h2><p style="color:#666;margin-top:8px;font-size:0.85rem">${escapeHtml(err.message)}<br><br>Open via <strong>http://localhost:8080/photos.html</strong> after starting the server.</p></div>`;
+        document.getElementById('stats').textContent = '';
+    }
+}
+
+async function loadMonthPhotos(monthKey) {
+    const groupCount = monthSummaries.find(s => s.month === monthKey)?.count || 0;
+    const needed = getMonthVisibleLimit(monthKey, groupCount);
+    let cache = monthPhotosCache[monthKey] || { items: [], total: 0, loading: false };
+    if (cache.loading) return;
+
+    const rendered = getMonthRenderedCount(monthKey);
+    const showCount = Math.min(needed, cache.items.length);
+
+    if (cache.items.length >= needed) {
+        if (!getMonthSection(monthKey)) {
+            renderGrouped();
+            return;
+        }
+        if (rendered < showCount) {
+            appendPhotosToMonth(monthKey, cache.items.slice(rendered, showCount));
+        }
+        updateLoadMoreButton(monthKey, groupCount - needed);
+        return;
+    }
+
+    const offset = cache.items.length;
+    const limit = Math.max(PHOTOS_PER_MONTH, needed - offset);
+    cache.loading = true;
+    monthPhotosCache[monthKey] = cache;
+
+    if (getMonthSection(monthKey)) {
+        setMonthLoading(monthKey, rendered === 0);
+    } else {
+        renderGrouped();
+    }
+
+    try {
+        const resp = await fetch(
+            `${serverBaseUrl}/api/photos?month=${encodeURIComponent(monthKey)}&offset=${offset}&limit=${limit}`
+        );
+        if (!resp.ok) throw new Error('Failed to load month');
+        const data = await resp.json();
+        const items = (data.photos || []).map(mapPhoto);
+        registerPhotos(items);
+        const newCache = monthPhotosCache[monthKey] = {
+            items: cache.items.concat(items),
+            total: data.total || 0,
+            loading: false,
+        };
+        const newNeeded = getMonthVisibleLimit(monthKey, groupCount);
+        const newShow = Math.min(newNeeded, newCache.items.length);
+        const nowRendered = getMonthRenderedCount(monthKey);
+
+        if (!getMonthSection(monthKey)) {
+            renderGrouped();
+        } else {
+            setMonthLoading(monthKey, false);
+            if (nowRendered < newShow) {
+                appendPhotosToMonth(monthKey, newCache.items.slice(nowRendered, newShow));
+            }
+            updateLoadMoreButton(monthKey, groupCount - newNeeded);
+        }
+    } catch (err) {
+        monthPhotosCache[monthKey] = { ...cache, loading: false };
+        setMonthLoading(monthKey, false);
+        alert('Failed to load photos: ' + err.message);
+    }
+}
+
+async function loadSearchPhotos(append = false) {
+    const q = document.getElementById('searchInput').value.toLowerCase().trim();
+    if (!q) return;
+    const offset = append ? searchResults.items.length : 0;
+    searchResults.loading = true;
+    if (!append) searchResults.items = [];
+
+    if (!append || !getMonthSection('search')) {
+        renderGrid();
+    } else {
+        document.getElementById('stats').textContent = `${searchResults.items.length} of ${searchResults.total} results`;
+    }
+
+    try {
+        const resp = await fetch(
+            `${serverBaseUrl}/api/photos?q=${encodeURIComponent(q)}&offset=${offset}&limit=${PHOTOS_PER_LOAD}`
+        );
+        if (!resp.ok) throw new Error('Search failed');
+        const data = await resp.json();
+        const items = (data.photos || []).map(mapPhoto);
+        registerPhotos(items);
+        const prevCount = append ? searchResults.items.length : 0;
+        searchResults = {
+            items: append ? searchResults.items.concat(items) : items,
+            total: data.total || 0,
+            loading: false,
+        };
+        filteredPhotos = searchResults.items;
+        document.getElementById('stats').textContent = `${searchResults.items.length} of ${searchResults.total} results`;
+
+        if (!append || !getMonthSection('search')) {
+            renderGrid();
+        } else {
+            appendPhotosToMonth('search', searchResults.items.slice(prevCount));
+            updateLoadMoreButton('search', searchResults.total - searchResults.items.length);
+        }
+    } catch (err) {
+        searchResults.loading = false;
+        alert('Search failed: ' + err.message);
+    }
+}
+
+async function filterPhotos() {
+    const q = document.getElementById('searchInput').value.toLowerCase().trim();
+    monthVisibleCounts = {};
+    if (slideshowActive) stopSlideshow(true);
+
+    if (q) {
+        searchMode = true;
+        await loadSearchPhotos(false);
+        return;
+    }
+
+    searchMode = false;
+    searchResults = { items: [], total: 0, loading: false };
+    filteredPhotos = [];
+    monthPhotosCache = {};
+    setupDefaultExpandedMonths();
+    const first = monthSummaries[0]?.month;
+    if (first) await loadMonthPhotos(first);
+    else renderGrid();
+}
+
+// ========== RENDER (month grouped) ==========
+function getMonthKey(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; }
+function getMonthLabel(k) { const [y,m]=k.split('-'); return new Date(parseInt(y),parseInt(m)-1).toLocaleDateString('en-US',{month:'long',year:'numeric'}); }
+
+async function toggleMonth(key) {
+    if (searchMode) return;
+    if (collapsedMonths.has(key)) {
+        collapsedMonths.delete(key);
+        await loadMonthPhotos(key);
+    } else {
+        collapsedMonths.add(key);
+        renderGrouped();
+    }
+}
+
+function getMonthVisibleLimit(key, total) {
+    if (!monthVisibleCounts[key]) monthVisibleCounts[key] = PHOTOS_PER_MONTH;
+    return Math.min(monthVisibleCounts[key], total);
+}
+
+async function showMoreInMonth(key, event) {
+    event.stopPropagation();
+    if (searchMode || key === 'search') {
+        await loadSearchPhotos(true);
+        return;
+    }
+    monthVisibleCounts[key] = (monthVisibleCounts[key] || PHOTOS_PER_MONTH) + PHOTOS_PER_LOAD;
+    await loadMonthPhotos(key);
+}
+
+function queueThumbLoad(img) {
+    thumbLoadQueue.push(img);
+    processThumbQueue();
+}
+
+function processThumbQueue() {
+    while (thumbLoadActive < THUMB_CONCURRENCY && thumbLoadQueue.length) {
+        const img = thumbLoadQueue.shift();
+        const src = img.dataset.src;
+        if (!src) continue;
+        thumbLoadActive++;
+        img.onload = img.onerror = () => { thumbLoadActive--; processThumbQueue(); };
+        img.src = src;
+        img.removeAttribute('data-src');
+    }
+}
+
+function initThumbObserver() {
+    if (thumbObserver) return;
+    thumbObserver = new IntersectionObserver((entries) => {
+        entries.forEach(e => {
+            if (!e.isIntersecting) return;
+            const img = e.target;
+            if (img.dataset.src) queueThumbLoad(img);
+            thumbObserver.unobserve(img);
+        });
+    }, { rootMargin: '80px', threshold: 0.01 });
+}
+
+function observeThumbs(root) {
+    initThumbObserver();
+    const scope = root && root.querySelectorAll ? root : document;
+    scope.querySelectorAll('img.thumb-lazy[data-src]:not([data-observed])').forEach(img => {
+        img.dataset.observed = '1';
+        thumbObserver.observe(img);
+    });
+}
+
+function renderGrid() {
+    const grid = document.getElementById('photoGrid'), stats = document.getElementById('stats');
+    if (searchMode) {
+        if (searchResults.loading && !searchResults.items.length) {
+            grid.innerHTML = '<div class="loading-spinner"></div>';
+            stats.textContent = 'Searching...';
+            return;
+        }
+        if (!searchResults.items.length) {
+            grid.innerHTML = '<div class="empty-state"><div class="icon">🔍</div><h2>No results</h2></div>';
+            stats.textContent = `${totalPhotoCount} photos total`;
+            return;
+        }
+        stats.textContent = `${searchResults.items.length} of ${searchResults.total} results`;
+        renderGrouped();
+        return;
+    }
+    if (!monthSummaries.length && !totalPhotoCount) {
+        grid.innerHTML = '<div class="empty-state"><div class="icon">🖼️</div><h2>No photos found</h2><p style="color:#666;margin-top:8px;font-size:0.85rem">Check that ComfyUI output folders exist.</p></div>';
+        stats.textContent = '';
+        return;
+    }
+    stats.textContent = `${totalPhotoCount} photos — expand a month or browse the latest below`;
+    renderGrouped();
+}
+
+function getMonthSection(monthKey) {
+    return document.querySelector(`.month-section[data-month="${monthKey}"]`);
+}
+
+function getMonthRenderedCount(monthKey) {
+    const section = getMonthSection(monthKey);
+    return section ? section.querySelectorAll('.photo-card').length : 0;
+}
+
+function ensureMonthGrid(monthKey) {
+    const section = getMonthSection(monthKey);
+    if (!section) return null;
+    let grid = section.querySelector('.month-grid');
+    if (!grid) {
+        grid = document.createElement('div');
+        grid.className = 'month-grid';
+        const btn = section.querySelector('.load-more-btn');
+        if (btn) section.insertBefore(grid, btn);
+        else section.appendChild(grid);
+    }
+    section.querySelector('.month-loading')?.remove();
+    return grid;
+}
+
+function setMonthLoading(monthKey, show) {
+    const section = getMonthSection(monthKey);
+    if (!section) return;
+    section.querySelector('.month-loading')?.remove();
+    if (!show) return;
+    if (getMonthRenderedCount(monthKey) > 0) return;
+    const el = document.createElement('div');
+    el.className = 'month-loading';
+    el.innerHTML = '<div class="loading-spinner"></div>';
+    const grid = section.querySelector('.month-grid');
+    if (grid) section.insertBefore(el, grid);
+    else section.appendChild(el);
+}
+
+function updateLoadMoreButton(monthKey, remaining) {
+    const section = getMonthSection(monthKey);
+    if (!section) return;
+    let btn = section.querySelector('.load-more-btn');
+    if (remaining > 0) {
+        const label = `Show ${remaining} more`;
+        if (btn) {
+            btn.textContent = label;
+            btn.style.display = '';
+        } else {
+            btn = document.createElement('button');
+            btn.className = 'load-more-btn';
+            btn.textContent = label;
+            btn.addEventListener('click', (e) => showMoreInMonth(monthKey, e));
+            section.appendChild(btn);
+        }
+    } else if (btn) {
+        btn.remove();
+    }
+}
+
+function buildPhotoCardHtml(photo) {
+    const vid = encodeURIComponent(photo.name);
+    return `<div class="photo-card" data-vid="${vid}" onclick="openLightbox('${vid}')">
+        <img class="thumb-lazy" data-src="${getThumbSrc(photo)}" alt="${escapeHtml(photo.name)}">
+        <div class="photo-overlay">
+            <div class="photo-actions">
+                <button class="action-btn" onclick="showInfoFor(event,'${vid}')" title="Info">ⓘ</button>
+                <button class="action-btn action-btn--delete" onclick="deletePhoto(event,'${vid}')" title="Delete">✕</button>
+            </div>
+            <div class="photo-name">${escapeHtml(photo.name)}</div>
+        </div>
+    </div>`;
+}
+
+function appendPhotosToMonth(monthKey, photos) {
+    if (!photos.length) return;
+    const grid = ensureMonthGrid(monthKey);
+    if (!grid) return;
+    grid.insertAdjacentHTML('beforeend', photos.map(buildPhotoCardHtml).join(''));
+    window._visiblePhotos = (window._visiblePhotos || []).concat(photos);
+    observeThumbs(grid);
+}
+
+function renderGrouped() {
+    const grid = document.getElementById('photoGrid');
+
+    let visible = [], html = '';
+    const groups = searchMode
+        ? [{ key: 'search', label: 'Search results', count: searchResults.total, items: searchResults.items, loading: searchResults.loading }]
+        : monthSummaries.map(s => ({
+            key: s.month,
+            label: getMonthLabel(s.month),
+            count: s.count,
+            items: (monthPhotosCache[s.month] || {}).items || [],
+            loading: (monthPhotosCache[s.month] || {}).loading,
+        }));
+
+    groups.forEach(group => {
+        const collapsed = !searchMode && collapsedMonths.has(group.key);
+        html += `<div class="month-section" data-month="${group.key}">`;
+        html += `<div class="month-header" onclick="toggleMonth('${group.key}')"><span class="month-toggle">${collapsed?'▶':'▼'}</span><span class="month-label">${group.label}</span><span class="month-count">${group.count}</span></div>`;
+        if (!collapsed) {
+            const limit = searchMode ? searchResults.items.length : getMonthVisibleLimit(group.key, group.count);
+            const shown = group.items.slice(0, limit);
+            const remaining = group.count - shown.length;
+            html += '<div class="month-grid">';
+            if (group.loading && !shown.length) {
+                html += '<div class="month-loading"><div class="loading-spinner"></div></div>';
+            }
+            shown.forEach(photo => {
+                visible.push(photo);
+                html += buildPhotoCardHtml(photo);
+            });
+            html += '</div>';
+            if (remaining > 0) {
+                const loadKey = searchMode ? 'search' : group.key;
+                html += `<button class="load-more-btn" onclick="showMoreInMonth('${loadKey}', event)">Show ${remaining} more</button>`;
+            }
+        }
+        html += `</div>`;
+    });
+
+    if (searchMode && !groups[0]?.items?.length && !searchResults.loading) {
+        html = '<div class="empty-state"><div class="icon">🔍</div><h2>No results</h2></div>';
+    }
+
+    window._visiblePhotos = visible;
+    grid.innerHTML = html;
+    observeThumbs();
+}
+
+// ========== LIGHTBOX ==========
+function getLightboxPhotos() {
+    return slideshowActive ? slideshowPlaylist : (window._visiblePhotos || filteredPhotos);
+}
+
+function openLightbox(vid) {
+    if (slideshowActive) stopSlideshow(false);
+    const photo = getPhotoByVid(vid); if (!photo) return;
+    currentPhotoIndex = (window._visiblePhotos||filteredPhotos).indexOf(photo);
+    document.getElementById('lightboxImg').src = getFullSrc(photo);
+    document.getElementById('lightboxTitle').textContent = photo.name;
+    document.getElementById('lightbox').classList.add('active');
+    document.body.style.overflow = 'hidden';
+    hideInfo();
+}
+
+function closeLightbox() {
+    if (slideshowActive) stopSlideshow(false);
+    document.getElementById('lightbox').classList.remove('active');
+    document.body.style.overflow = '';
+    hideInfo();
+}
+
+function navPhoto(dir) {
+    const photos = getLightboxPhotos(); if(!photos.length) return;
+    let i = currentPhotoIndex + dir;
+    if (i<0) i=photos.length-1; if (i>=photos.length) i=0;
+    currentPhotoIndex = i;
+    document.getElementById('lightboxImg').src = getFullSrc(photos[i]);
+    document.getElementById('lightboxTitle').textContent = photos[i].name;
+    hideInfo();
+    if (slideshowActive && !slideshowPaused) {
+        clearSlideshowTimers();
+        scheduleSlideshowAdvance();
+    }
+}
+
+// ========== SLIDESHOW ==========
+function shufflePhotos(arr) {
+    return [...arr].sort(() => Math.random() - 0.5);
+}
+
+async function fetchSlideshowPool() {
+    const q = document.getElementById('searchInput').value.trim();
+    const url = q
+        ? `${serverBaseUrl}/api/photos?q=${encodeURIComponent(q)}&limit=5000`
+        : `${serverBaseUrl}/api/photos?limit=5000`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error('Failed to load slideshow');
+    const data = await resp.json();
+    const items = (data.photos || []).map(mapPhoto);
+    registerPhotos(items);
+    return items.sort((a, b) => b.date - a.date);
+}
+
+function getSlideshowPool() {
+    return slideshowPlaylist.length ? slideshowPlaylist : searchResults.items;
+}
+
+function clearSlideshowTimers() {
+    if (slideshowTimer) { clearTimeout(slideshowTimer); slideshowTimer = null; }
+    if (slideshowProgressTimer) { clearInterval(slideshowProgressTimer); slideshowProgressTimer = null; }
+    document.getElementById('slideshowProgress').style.width = '0%';
+}
+
+function updateSlideshowUI() {
+    const counter = document.getElementById('slideshowCounter');
+    const pauseBtn = document.getElementById('slideshowPauseBtn');
+    const seqBtn = document.getElementById('slideshowSeqBtn');
+    const randomBtn = document.getElementById('slideshowRandomBtn');
+    if (slideshowActive) {
+        counter.textContent = `${slideshowRandom ? '🎲 ' : ''}${currentPhotoIndex + 1} / ${slideshowPlaylist.length}`;
+        pauseBtn.style.display = 'flex';
+        pauseBtn.textContent = slideshowPaused ? '▶' : '⏸';
+        seqBtn.textContent = slideshowRandom ? '▶ Slideshow' : '⏹ Stop';
+        randomBtn.textContent = slideshowRandom ? '⏹ Stop' : '🎲 Random';
+        seqBtn.classList.toggle('btn--active', !slideshowRandom);
+        randomBtn.classList.toggle('btn--active', slideshowRandom);
+        document.getElementById('lightbox').classList.add('slideshow-mode');
+    } else {
+        counter.textContent = '';
+        pauseBtn.style.display = 'none';
+        seqBtn.textContent = '▶ Slideshow';
+        randomBtn.textContent = '🎲 Random';
+        seqBtn.classList.remove('btn--active');
+        randomBtn.classList.remove('btn--active');
+        document.getElementById('lightbox').classList.remove('slideshow-mode');
+    }
+}
+
+function showSlideshowPhoto(index) {
+    const photo = slideshowPlaylist[index];
+    if (!photo) return;
+    currentPhotoIndex = index;
+    document.getElementById('lightboxImg').src = getFullSrc(photo);
+    document.getElementById('lightboxTitle').textContent = photo.name;
+    updateSlideshowUI();
+    hideInfo();
+}
+
+function startSlideshowProgress() {
+    const bar = document.getElementById('slideshowProgress');
+    slideshowStartedAt = Date.now();
+    bar.style.width = '0%';
+    if (slideshowProgressTimer) clearInterval(slideshowProgressTimer);
+    slideshowProgressTimer = setInterval(() => {
+        if (slideshowPaused) return;
+        const elapsed = Date.now() - slideshowStartedAt;
+        bar.style.width = Math.min(100, (elapsed / SLIDESHOW_INTERVAL) * 100) + '%';
+    }, 50);
+}
+
+function scheduleSlideshowAdvance() {
+    clearSlideshowTimers();
+    if (!slideshowActive || slideshowPaused) return;
+    startSlideshowProgress();
+    slideshowTimer = setTimeout(() => advanceSlideshow(), SLIDESHOW_INTERVAL);
+}
+
+function advanceSlideshow() {
+    if (!slideshowActive || slideshowPaused) return;
+    let next;
+    if (slideshowRandom) {
+        if (slideshowPlaylist.length <= 1) {
+            next = 0;
+        } else {
+            do {
+                next = Math.floor(Math.random() * slideshowPlaylist.length);
+            } while (next === currentPhotoIndex);
+        }
+    } else {
+        next = currentPhotoIndex + 1;
+        if (next >= slideshowPlaylist.length) next = 0;
+    }
+    showSlideshowPhoto(next);
+    scheduleSlideshowAdvance();
+}
+
+async function startSlideshow(random = false) {
+    if (slideshowActive) {
+        stopSlideshow(true);
+        return;
+    }
+    slideshowRandom = random;
+    try {
+        slideshowPlaylist = await fetchSlideshowPool();
+    } catch (err) {
+        alert('Slideshow failed: ' + err.message);
+        return;
+    }
+    if (!slideshowPlaylist.length) return;
+    if (random) slideshowPlaylist = shufflePhotos(slideshowPlaylist);
+    slideshowActive = true;
+    slideshowPaused = false;
+    showSlideshowPhoto(0);
+    document.getElementById('lightbox').classList.add('active');
+    document.body.style.overflow = 'hidden';
+    scheduleSlideshowAdvance();
+}
+
+function stopSlideshow(closeBox) {
+    slideshowActive = false;
+    slideshowPaused = false;
+    slideshowRandom = false;
+    clearSlideshowTimers();
+    updateSlideshowUI();
+    if (closeBox) {
+        document.getElementById('lightbox').classList.remove('active');
+        document.body.style.overflow = '';
+        hideInfo();
+    }
+}
+
+function toggleSlideshowPause() {
+    if (!slideshowActive) return;
+    slideshowPaused = !slideshowPaused;
+    updateSlideshowUI();
+    if (slideshowPaused) {
+        clearSlideshowTimers();
+    } else {
+        scheduleSlideshowAdvance();
+    }
+}
+
+// ========== DELETE ==========
+async function deletePhoto(event, vid) {
+    event.stopPropagation();
+    const photo = getPhotoByVid(vid); if(!photo) return;
+    try { const r=await fetch(photo.url,{method:'DELETE'}); if(!r.ok){alert('Failed');return;} } catch(e){alert(e.message);return;}
+    allPhotos.splice(allPhotos.indexOf(photo),1);
+    const fi=filteredPhotos.indexOf(photo); if(fi>-1) filteredPhotos.splice(fi,1);
+    const card=document.querySelector(`.photo-card[data-vid="${vid}"]`); if(card) card.remove();
+    document.getElementById('stats').textContent=`${filteredPhotos.length} of ${allPhotos.length} photos`;
+}
+
+async function deleteFromLightbox() {
+    const photos = getLightboxPhotos();
+    if(currentPhotoIndex<0||!photos.length) return;
+    const photo=photos[currentPhotoIndex]; if(!photo) return;
+    const vid=encodeURIComponent(photo.name);
+    try { const r=await fetch(photo.url,{method:'DELETE'}); if(!r.ok){alert('Failed');return;} } catch(e){alert(e.message);return;}
+    allPhotos.splice(allPhotos.indexOf(photo),1);
+    filteredPhotos.splice(filteredPhotos.indexOf(photo),1);
+    photos.splice(currentPhotoIndex,1);
+    if (slideshowActive) slideshowPlaylist = slideshowPlaylist.filter(p => p !== photo);
+    const card=document.querySelector(`.photo-card[data-vid="${vid}"]`); if(card) card.remove();
+    document.getElementById('stats').textContent=`${filteredPhotos.length} of ${allPhotos.length} photos`;
+    if(!photos.length){ stopSlideshow(true); return; }
+    if(currentPhotoIndex>=photos.length) currentPhotoIndex=0;
+    document.getElementById('lightboxImg').src=getFullSrc(photos[currentPhotoIndex]);
+    document.getElementById('lightboxTitle').textContent=photos[currentPhotoIndex].name;
+    if (slideshowActive) {
+        updateSlideshowUI();
+        if (!slideshowPaused) scheduleSlideshowAdvance();
+    }
+}
+
+// ========== INFO ==========
+function toggleInfo() {
+    const panel=document.getElementById('infoPanel');
+    if(panel.style.display==='block'){hideInfo();return;}
+    const photos=getLightboxPhotos();
+    const photo=photos[currentPhotoIndex]; if(!photo) return;
+    showInfo(photo);
+}
+
+function showInfoFor(event, vid) {
+    event.stopPropagation();
+    const photo=getPhotoByVid(vid); if(!photo) return;
+    showInfo(photo);
+}
+
+function showInfo(photo) {
+    const panel=document.getElementById('infoPanel');
+    panel.innerHTML='<em>Loading metadata...</em>';
+    panel.style.display='block';
+    // Fetch full metadata from server
+    const metaUrl = serverBaseUrl + '/api/metadata/' + encodeURIComponent(photo.path).replace(/%2F/g, '/');
+    fetch(metaUrl).then(r => r.json()).then(meta => {
+        let html = '<div style="max-height:60vh;overflow:auto">';
+        html += `<div><strong>Name:</strong> ${escapeHtml(photo.name)}</div>`;
+        html += `<div><strong>Size:</strong> ${formatSize(meta.size||photo.size)}</div>`;
+        html += `<div><strong>Dimensions:</strong> ${meta.dimensions||'?'}</div>`;
+        html += `<div><strong>Format:</strong> ${meta.format||'?'} (${meta.mode||'?'})</div>`;
+        html += `<div><strong>Modified:</strong> ${photo.date.toLocaleString()}</div>`;
+        // ComfyUI prompt
+        if (meta.prompt) {
+            const promptStr = typeof meta.prompt === 'string' ? meta.prompt : JSON.stringify(meta.prompt, null, 2);
+            // Extract key info: model, sampler, steps, cfg, seed
+            let summary = extractPromptSummary(meta.prompt);
+            if (summary) html += `<div style="margin-top:8px;padding:8px;background:#111;border-radius:4px"><strong>Generation:</strong><br>${summary}</div>`;
+            html += `<details style="margin-top:6px"><summary style="cursor:pointer;color:#888">Full Prompt JSON</summary><pre style="max-height:200px;overflow:auto;font-size:10px;margin-top:4px;color:#aaa">${escapeHtml(promptStr)}</pre></details>`;
+        }
+        // Workflow
+        if (meta.workflow) {
+            const wfStr = typeof meta.workflow === 'string' ? meta.workflow : JSON.stringify(meta.workflow, null, 2);
+            html += `<details style="margin-top:6px"><summary style="cursor:pointer;color:#888">Workflow JSON</summary><pre style="max-height:200px;overflow:auto;font-size:10px;margin-top:4px;color:#aaa">${escapeHtml(wfStr)}</pre></details>`;
+        }
+        // Any other keys
+        const skip = new Set(['file','size','modified','format','dimensions','mode','prompt','workflow']);
+        for (const [k,v] of Object.entries(meta)) {
+            if (skip.has(k)) continue;
+            const val = typeof v === 'object' ? JSON.stringify(v) : String(v);
+            html += `<div><strong>${escapeHtml(k)}:</strong> ${escapeHtml(val.slice(0,500))}</div>`;
+        }
+        html += '</div>';
+        panel.innerHTML = html;
+    }).catch(() => {
+        panel.innerHTML = `<strong>Name:</strong> ${escapeHtml(photo.name)} &nbsp; <strong>Size:</strong> ${formatSize(photo.size)} &nbsp; <strong>Modified:</strong> ${photo.date.toLocaleString()}`;
+    });
+}
+
+function extractPromptSummary(prompt) {
+    // ComfyUI prompt is a dict of node IDs -> node configs
+    if (typeof prompt !== 'object' || prompt === null) return '';
+    let parts = [];
+    try {
+        for (const [id, node] of Object.entries(prompt)) {
+            const ct = node.class_type || '';
+            const inputs = node.inputs || {};
+            if (ct.includes('KSampler') || ct === 'KSampler') {
+                if (inputs.seed !== undefined) parts.push('Seed: ' + inputs.seed);
+                if (inputs.steps) parts.push('Steps: ' + inputs.steps);
+                if (inputs.cfg) parts.push('CFG: ' + inputs.cfg);
+                if (inputs.sampler_name) parts.push('Sampler: ' + inputs.sampler_name);
+                if (inputs.scheduler) parts.push('Scheduler: ' + inputs.scheduler);
+            }
+            if (ct.includes('CheckpointLoader') || ct.includes('CheckpointSimple')) {
+                if (inputs.ckpt_name) parts.push('Model: ' + inputs.ckpt_name);
+            }
+            if (ct.includes('CLIPTextEncode') && inputs.text) {
+                const txt = String(inputs.text).slice(0, 150);
+                if (txt.length > 10) parts.push('Prompt: "' + txt + (inputs.text.length > 150 ? '...' : '') + '"');
+            }
+            if (ct.includes('LoraLoader') && inputs.lora_name) {
+                parts.push('LoRA: ' + inputs.lora_name);
+            }
+        }
+    } catch {}
+    return parts.join('<br>');
+}
+
+function hideInfo() { document.getElementById('infoPanel').style.display='none'; }
+
+// Close info panel on click
+document.getElementById('infoPanel').addEventListener('click', (e) => { if (e.target.tagName !== 'SUMMARY' && e.target.tagName !== 'PRE') hideInfo(); });
+
+// ========== KEYS ==========
+document.addEventListener('keydown', (e) => {
+    if(document.getElementById('lightbox').classList.contains('active')) {
+        if(e.key==='Escape') closeLightbox();
+        if(e.key==='ArrowLeft') navPhoto(-1);
+        if(e.key==='ArrowRight') navPhoto(1);
+        if(e.key==='i') toggleInfo();
+        if(e.key==='Delete'||e.key==='Backspace') deleteFromLightbox();
+        if(slideshowActive && (e.key===' ' || e.key==='Spacebar')) {
+            e.preventDefault();
+            toggleSlideshowPause();
+        }
+    } else if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+        if (e.key === ' ') { e.preventDefault(); startSlideshow(false); }
+        if (e.key === 'r' || e.key === 'R') { e.preventDefault(); startSlideshow(true); }
+    }
+});
+document.getElementById('lightbox').addEventListener('click',(e)=>{if(e.target===e.currentTarget)closeLightbox();});
+
+// ========== INIT ==========
+(function showNetworkHint() {
+    const h = location.hostname;
+    const hint = document.getElementById('networkHint');
+    if (!hint) return;
+    if (h === 'localhost' || h.startsWith('127.')) {
+        hint.style.display = 'block';
+        hint.innerHTML = 'On your phone, use your Mac\'s LAN address — not 127.x. Example: <strong>http://192.168.0.118:8080/photos.html</strong> (see the server terminal for the exact URL).';
+    }
+})();
+loadFromServer();
+</script>
+</body>
+</html>
