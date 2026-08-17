@@ -1544,10 +1544,16 @@ if __name__ == '__main__':
     else:
         print('   Video thumbnails: unavailable (install ffmpeg: brew install ffmpeg)')
     print(f'   Cache (local disk): {CACHE_ROOT}')
-    print('   Loading video index...')
-    t0 = time.time()
-    video_count = len(get_videos_cached())
-    print(f'   Ready: {video_count} videos ({(time.time() - t0) * 1000:.0f} ms)')
+    def _load_index_background():
+        print('   Loading video index...')
+        t0 = time.time()
+        try:
+            video_count = len(get_videos_cached())
+            print(f'   Ready: {video_count} videos ({(time.time() - t0) * 1000:.0f} ms)')
+        except Exception as exc:
+            print(f'   Drive index failed (site is up, gallery empty until this is fixed): {exc}')
+
+    threading.Thread(target=_load_index_background, daemon=True).start()
     if STORAGE_MODE != 'drive':
         threading.Thread(target=_faststart_worker, daemon=True).start()
         if PREWARM_ENABLED:

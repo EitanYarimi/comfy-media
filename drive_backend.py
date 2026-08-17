@@ -22,6 +22,11 @@ DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 MEDIA_URL = 'https://www.googleapis.com/drive/v3/files/{file_id}?alt=media&supportsAllDrives=true'
 
 
+def _clean_id(value):
+    """Render env values often include a trailing newline that breaks Drive queries."""
+    return (value or '').strip().strip('"').strip("'").replace('\r', '').replace('\n', '')
+
+
 def _parse_drive_time(value):
     if not value:
         return 0.0
@@ -41,7 +46,9 @@ class DriveStorage:
         self.index_path = cache_root / 'drive_index_v1.json'
         self.video_prefix = video_dir.replace('\\', '/').strip('/')
         self.photo_prefixes = [p.replace('\\', '/').strip('/') for p in photo_dirs]
-        self.root_folder_id = os.environ['DRIVE_ROOT_FOLDER_ID']
+        self.root_folder_id = _clean_id(os.environ.get('DRIVE_ROOT_FOLDER_ID', ''))
+        if not self.root_folder_id:
+            raise RuntimeError('DRIVE_ROOT_FOLDER_ID is required for STORAGE_MODE=drive')
         self.creds, self.service, self.session = self._build_clients()
         self._files = {}
         self._index_mtime = 0.0
@@ -49,7 +56,7 @@ class DriveStorage:
         self._load_index()
 
     def _build_clients(self):
-        raw = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON', '')
+        raw = (os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON') or '').strip()
         if not raw:
             raise RuntimeError('GOOGLE_SERVICE_ACCOUNT_JSON is required for STORAGE_MODE=drive')
         info = json.loads(raw)
@@ -77,18 +84,31 @@ class DriveStorage:
         except OSError:
             pass
 
+    def _drive_list(self, q, fields, page_size=1000, page_token=None):
+        kwargs = {
+            'q': q,
+            'fields': fields,
+            'pageSize': page_size,
+            'supportsAllDrives': True,
+            'includeItemsFromAllDrives': True,
+        }
+        if page_token:
+            kwargs['pageToken'] = page_token
+        try:
+            return self.service.files().list(corpora='allDrives', **kwargs).execute()
+        except Exception:
+            return self.service.files().list(**kwargs).execute()
+
     def _list_children(self, folder_id):
+        folder_id = _clean_id(folder_id)
         items = []
         page_token = None
         while True:
-            resp = self.service.files().list(
+            resp = self._drive_list(
                 q=f"'{folder_id}' in parents and trashed=false",
                 fields='nextPageToken, files(id, name, mimeType, size, modifiedTime, thumbnailLink, hasThumbnail)',
-                pageSize=1000,
-                pageToken=page_token,
-                supportsAllDrives=True,
-                includeItemsFromAllDrives=True,
-            ).execute()
+                page_token=page_token,
+            )
             items.extend(resp.get('files', []))
             page_token = resp.get('nextPageToken')
             if not page_token:
@@ -96,17 +116,16 @@ class DriveStorage:
         return items
 
     def _find_child_folder(self, parent_id, name):
+        parent_id = _clean_id(parent_id)
         safe = name.replace("'", "\\'")
-        resp = self.service.files().list(
+        resp = self._drive_list(
             q=(
                 f"'{parent_id}' in parents and trashed=false and "
                 f"name='{safe}' and mimeType='application/vnd.google-apps.folder'"
             ),
             fields='files(id, name)',
-            pageSize=10,
-            supportsAllDrives=True,
-            includeItemsFromAllDrives=True,
-        ).execute()
+            page_size=10,
+        )
         files = resp.get('files') or []
         return files[0]['id'] if files else None
 
@@ -150,6 +169,18 @@ class DriveStorage:
         with self._index_lock:
             if not force and self._files and (now - self._index_mtime) < ttl:
                 return
+            try:
+                self.service.files().get(
+                    fileId=self.root_folder_id,
+                    fields='id, name',
+                    supportsAllDrives=True,
+                ).execute()
+            except Exception as exc:
+                email = getattr(self.creds, 'service_account_email', 'the service account')
+                raise RuntimeError(
+                    f'Cannot open Drive folder {self.root_folder_id!r}. '
+                    f'Share that folder with {email} as Viewer. Original error: {exc}'
+                ) from exc
             collected = {}
             roots = []
             if self.video_prefix:
@@ -162,6 +193,7 @@ class DriveStorage:
                 seen.add(rel)
                 folder_id = self._folder_id_for_path(rel)
                 if not folder_id:
+                    print(f'   Drive path not found under root: {rel}')
                     continue
                 for item in self._list_folder_tree(folder_id, rel):
                     collected[item['path']] = item
