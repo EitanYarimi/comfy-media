@@ -342,16 +342,19 @@ function applyPhotosSummary(data) {
 }
 
 // ========== LOAD ==========
-async function loadFromServer() {
-    if (slideshowActive) stopSlideshow(true);
-    showLoading();
-    allPhotos = [];
-    monthSummaries = [];
-    monthPhotosCache = {};
-    searchMode = false;
-    searchResults = { items: [], total: 0, loading: false };
-    monthVisibleCounts = {};
-    document.getElementById('stats').textContent = 'Scanning library...';
+let indexPollTimer = null;
+async function loadFromServer(isPoll = false) {
+    if (slideshowActive && !isPoll) stopSlideshow(true);
+    if (!isPoll) {
+        showLoading();
+        allPhotos = [];
+        monthSummaries = [];
+        monthPhotosCache = {};
+        searchMode = false;
+        searchResults = { items: [], total: 0, loading: false };
+        monthVisibleCounts = {};
+        document.getElementById('stats').textContent = 'Scanning library...';
+    }
     try {
         const resp = await fetch(serverBaseUrl + '/api/photos?summary=1');
         if (!resp.ok) {
@@ -359,9 +362,19 @@ async function loadFromServer() {
         }
         const data = await resp.json();
         applyPhotosSummary(data);
-        setupDefaultExpandedMonths();
+        if (!isPoll) setupDefaultExpandedMonths();
+        if (data.indexing) {
+            document.getElementById('stats').textContent =
+                (totalPhotoCount ? `${totalPhotoCount} photos — ` : '') + 'still scanning Google Drive…';
+            if (!indexPollTimer) {
+                indexPollTimer = setTimeout(() => { indexPollTimer = null; loadFromServer(true); }, 2500);
+            }
+        }
         if (monthSummaries.length > 0) {
+            monthPhotosCache = {};
             await loadMonthPhotos(monthSummaries[0].month);
+        } else if (data.indexing) {
+            document.getElementById('photoGrid').innerHTML = '<div class="loading-spinner"></div>';
         } else {
             renderGrid();
         }

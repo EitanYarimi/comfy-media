@@ -1141,17 +1141,20 @@ function applyFfmpegFlag(data) {
     applyVthumbFlag(data);
 }
 
-async function loadFromServer() {
-    if (slideshowActive) stopSlideshow(true);
-    showLoading();
-    allVideos = [];
-    filteredVideos = [];
-    monthSummaries = [];
-    monthVideosCache = {};
-    searchMode = false;
-    searchResults = { items: [], total: 0, loading: false };
-    monthVisibleCounts = {};
-    document.getElementById('stats').textContent = 'Scanning library...';
+let indexPollTimer = null;
+async function loadFromServer(isPoll = false) {
+    if (slideshowActive && !isPoll) stopSlideshow(true);
+    if (!isPoll) {
+        showLoading();
+        allVideos = [];
+        filteredVideos = [];
+        monthSummaries = [];
+        monthVideosCache = {};
+        searchMode = false;
+        searchResults = { items: [], total: 0, loading: false };
+        monthVisibleCounts = {};
+        document.getElementById('stats').textContent = 'Scanning library...';
+    }
     try {
         const resp = await fetch(serverBaseUrl + '/api/videos?summary=1');
         if (!resp.ok) {
@@ -1159,9 +1162,23 @@ async function loadFromServer() {
         }
         const data = await resp.json();
         applyVideosSummary(data);
-        setupDefaultExpandedMonths();
+        if (!isPoll) setupDefaultExpandedMonths();
+        if (data.indexing) {
+            document.getElementById('stats').textContent =
+                (totalVideoCount ? `${totalVideoCount} videos — ` : '') + 'still scanning Google Drive…';
+            if (!indexPollTimer) {
+                indexPollTimer = setTimeout(() => { indexPollTimer = null; loadFromServer(true); }, 2500);
+            }
+        }
         if (monthSummaries.length > 0) {
-            await loadMonthVideos(monthSummaries[0].month);
+            if (isPoll) {
+                monthVideosCache = {};
+                await loadMonthVideos(monthSummaries[0].month);
+            } else {
+                await loadMonthVideos(monthSummaries[0].month);
+            }
+        } else if (data.indexing) {
+            document.getElementById('videoGrid').innerHTML = '<div class="loading-spinner"></div>';
         } else {
             renderGrid();
         }

@@ -291,6 +291,12 @@ def _refresh_photos_background():
 
 def get_photos_cached(force=False):
     """Return cached photo list; load disk index instantly, refresh in background."""
+    if STORAGE_MODE == 'drive':
+        photos = get_drive_storage().scan_photos()
+        _photo_cache['data'] = photos
+        _photo_cache['time'] = time.time()
+        _media_by_month['photos'] = _build_month_index(photos)
+        return photos
     now = time.time()
     if (
         not force
@@ -326,6 +332,12 @@ def invalidate_photo_cache():
 
 def get_videos_cached(force=False):
     """Return cached video list; load disk index instantly, refresh in background."""
+    if STORAGE_MODE == 'drive':
+        videos = get_drive_storage().scan_videos()
+        _video_cache['data'] = videos
+        _video_cache['time'] = time.time()
+        _media_by_month['videos'] = _build_month_index(videos)
+        return videos
     now = time.time()
     if (
         not force
@@ -1271,12 +1283,14 @@ class VideoHandler(SimpleHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             force, summary, month, q, offset, limit = parse_media_api_query(query)
             videos = get_videos_cached(force=force)
+            indexing = STORAGE_MODE == 'drive' and get_drive_storage().videos_indexing
             if summary:
                 respond_json(self, {
                     'total': len(videos),
                     'months': media_month_summary(videos),
                     'ffmpeg': bool(_ffmpeg_path),
                     'vthumb': vthumb_available(),
+                    'indexing': indexing,
                 })
                 return
             total, page = paginate_media(videos, month=month or None, q=q or None, offset=offset, limit=limit, kind='videos')
@@ -1287,6 +1301,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 'videos': page,
                 'ffmpeg': bool(_ffmpeg_path),
                 'vthumb': vthumb_available(),
+                'indexing': indexing,
             })
             return
 
@@ -1295,11 +1310,22 @@ class VideoHandler(SimpleHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             force, summary, month, q, offset, limit = parse_media_api_query(query)
             photos = get_photos_cached(force=force)
+            indexing = STORAGE_MODE == 'drive' and get_drive_storage().photos_indexing
             if summary:
-                respond_json(self, {'total': len(photos), 'months': media_month_summary(photos)})
+                respond_json(self, {
+                    'total': len(photos),
+                    'months': media_month_summary(photos),
+                    'indexing': indexing,
+                })
                 return
             total, page = paginate_media(photos, month=month or None, q=q or None, offset=offset, limit=limit, kind='photos')
-            respond_json(self, {'total': total, 'offset': offset, 'limit': limit, 'photos': page})
+            respond_json(self, {
+                'total': total,
+                'offset': offset,
+                'limit': limit,
+                'photos': page,
+                'indexing': indexing,
+            })
             return
 
         # API endpoint: returns metadata from PNG/WebP (ComfyUI prompt, workflow, etc.)

@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import mimetypes
 import os
 import re
 import threading
@@ -20,6 +19,7 @@ IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.
 
 DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 MEDIA_URL = 'https://www.googleapis.com/drive/v3/files/{file_id}?alt=media&supportsAllDrives=true'
+FOLDER_MIME = 'application/vnd.google-apps.folder'
 
 
 def _clean_id(value):
@@ -38,12 +38,11 @@ def _parse_drive_time(value):
 
 
 class DriveStorage:
-    """On-demand gateway over a shared Drive folder (virtual paths like ComfyUI/output/...)."""
+    """On-demand gateway over a shared Drive folder."""
 
     def __init__(self, cache_root: Path, video_dir: str, photo_dirs: list[str]):
         self.thumb_cache = cache_root / 'drive_thumbs'
         self.thumb_cache.mkdir(parents=True, exist_ok=True)
-        self.index_path = cache_root / 'drive_index_v1.json'
         self.video_prefix = video_dir.replace('\\', '/').strip('/')
         self.photo_prefixes = [p.replace('\\', '/').strip('/') for p in photo_dirs]
         self.root_folder_id = _clean_id(os.environ.get('DRIVE_ROOT_FOLDER_ID', ''))
@@ -51,10 +50,14 @@ class DriveStorage:
             raise RuntimeError('DRIVE_ROOT_FOLDER_ID is required for STORAGE_MODE=drive')
         self.creds, self.service, self.session = self._build_clients()
         self._files = {}
-        self._index_mtime = 0.0
-        self._index_lock = threading.Lock()
+        self._videos = []
+        self._photos = []
         self._root_name = ''
-        self._load_index()
+        self.videos_indexing = False
+        self.photos_indexing = False
+        self._videos_started = False
+        self._photos_started = False
+        self._list_lock = threading.Lock()
 
     def _build_clients(self):
         raw = (os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON') or '').strip()
@@ -66,24 +69,22 @@ class DriveStorage:
         session = AuthorizedSession(creds)
         return creds, service, session
 
-    def _load_index(self):
+    def _ensure_root(self):
+        if self._root_name:
+            return
         try:
-            data = json.loads(self.index_path.read_text())
-            files = data.get('files', {})
-            if isinstance(files, dict):
-                self._files = files
-                self._index_mtime = float(data.get('saved', 0))
-        except (OSError, json.JSONDecodeError, TypeError, ValueError):
-            self._files = {}
-            self._index_mtime = 0.0
-
-    def _save_index(self):
-        try:
-            self.index_path.parent.mkdir(parents=True, exist_ok=True)
-            self.index_path.write_text(json.dumps({'files': self._files, 'saved': time.time()}))
-            self._index_mtime = time.time()
-        except OSError:
-            pass
+            root = self.service.files().get(
+                fileId=self.root_folder_id,
+                fields='id, name',
+                supportsAllDrives=True,
+            ).execute()
+            self._root_name = root.get('name') or ''
+        except Exception as exc:
+            email = getattr(self.creds, 'service_account_email', 'the service account')
+            raise RuntimeError(
+                f'Cannot open Drive folder {self.root_folder_id!r}. '
+                f'Share that folder with {email} as Viewer. Original error: {exc}'
+            ) from exc
 
     def _drive_list(self, q, fields, page_size=1000, page_token=None):
         kwargs = {
@@ -100,29 +101,13 @@ class DriveStorage:
         except Exception:
             return self.service.files().list(**kwargs).execute()
 
-    def _list_children(self, folder_id):
-        folder_id = _clean_id(folder_id)
-        items = []
-        page_token = None
-        while True:
-            resp = self._drive_list(
-                q=f"'{folder_id}' in parents and trashed=false",
-                fields='nextPageToken, files(id, name, mimeType, size, modifiedTime, thumbnailLink, hasThumbnail, shortcutDetails)',
-                page_token=page_token,
-            )
-            items.extend(resp.get('files', []))
-            page_token = resp.get('nextPageToken')
-            if not page_token:
-                break
-        return items
-
     def _find_child_folder(self, parent_id, name):
         parent_id = _clean_id(parent_id)
         safe = name.replace("'", "\\'")
         resp = self._drive_list(
             q=(
                 f"'{parent_id}' in parents and trashed=false and "
-                f"name='{safe}' and mimeType='application/vnd.google-apps.folder'"
+                f"name='{safe}' and mimeType='{FOLDER_MIME}'"
             ),
             fields='files(id, name)',
             page_size=10,
@@ -145,97 +130,158 @@ class DriveStorage:
             current = found
         return current
 
-    def _list_folder_tree(self, folder_id, prefix=''):
-        items = []
-        try:
-            children = self._list_children(folder_id)
-        except Exception as exc:
-            print(f'   Drive list failed for {prefix or folder_id}: {exc}')
-            return items
-        for item in children:
-            name = item.get('name', '')
-            mime = item.get('mimeType') or ''
-            if mime == 'application/vnd.google-apps.shortcut':
-                target_id = (item.get('shortcutDetails') or {}).get('targetId')
-                target_mime = (item.get('shortcutDetails') or {}).get('targetMimeType') or ''
-                if target_id and target_mime == 'application/vnd.google-apps.folder':
-                    sub = f'{prefix}/{name}' if prefix else name
-                    items.extend(self._list_folder_tree(target_id, sub))
-                continue
-            if mime == 'application/vnd.google-apps.folder':
-                sub = f'{prefix}/{name}' if prefix else name
-                items.extend(self._list_folder_tree(item['id'], sub))
-                continue
-            rel = f'{prefix}/{name}' if prefix else name
-            size = int(item.get('size') or 0)
-            items.append({
-                'path': rel,
-                'name': name,
-                'id': item['id'],
-                'size': size,
-                'modified': _parse_drive_time(item.get('modifiedTime')),
-                'mime': mime,
-                'thumbnailLink': item.get('thumbnailLink') or '',
-                'hasThumbnail': bool(item.get('hasThumbnail')),
-            })
-        return items
+    def _iter_children_pages(self, folder_id):
+        folder_id = _clean_id(folder_id)
+        page_token = None
+        while True:
+            resp = self._drive_list(
+                q=f"'{folder_id}' in parents and trashed=false",
+                fields='nextPageToken, files(id, name, mimeType, size, modifiedTime, thumbnailLink, hasThumbnail)',
+                page_token=page_token,
+            )
+            yield resp.get('files', [])
+            page_token = resp.get('nextPageToken')
+            if not page_token:
+                break
 
-    def refresh_index(self, force=False):
-        ttl = int(os.environ.get('DRIVE_INDEX_TTL', '300'))
-        now = time.time()
-        if not force and self._files and (now - self._index_mtime) < ttl:
-            return
-        with self._index_lock:
-            if not force and self._files and (now - self._index_mtime) < ttl:
-                return
-            try:
-                root = self.service.files().get(
-                    fileId=self.root_folder_id,
-                    fields='id, name',
-                    supportsAllDrives=True,
-                ).execute()
-                self._root_name = root.get('name') or ''
-            except Exception as exc:
-                email = getattr(self.creds, 'service_account_email', 'the service account')
-                raise RuntimeError(
-                    f'Cannot open Drive folder {self.root_folder_id!r}. '
-                    f'Share that folder with {email} as Viewer. Original error: {exc}'
-                ) from exc
-            collected = {}
-            roots = []
-            if self.video_prefix:
-                roots.append(self.video_prefix)
-            roots.extend(self.photo_prefixes)
-            # Always crawl the shared root too, so videos inside output/ are not missed.
-            roots.append('')
-            seen_ids = set()
-            for rel in roots:
-                if rel in seen_ids:
+    def _file_entry(self, item, prefix):
+        name = item.get('name', '')
+        rel = f'{prefix}/{name}' if prefix else name
+        return {
+            'path': rel,
+            'name': name,
+            'id': item['id'],
+            'size': int(item.get('size') or 0),
+            'modified': _parse_drive_time(item.get('modifiedTime')),
+            'mime': item.get('mimeType') or '',
+            'thumbnailLink': item.get('thumbnailLink') or '',
+            'hasThumbnail': bool(item.get('hasThumbnail')),
+        }
+
+    def _index_folder_files(self, folder_id, prefix, extensions, skip_folders=None, on_batch=None):
+        skip_folders = {n.lower() for n in (skip_folders or [])}
+        found = []
+        for page in self._iter_children_pages(folder_id):
+            extra_folders = []
+            batch = []
+            for item in page:
+                name = item.get('name', '')
+                mime = item.get('mimeType') or ''
+                if mime == FOLDER_MIME:
+                    if name.lower() in skip_folders:
+                        continue
+                    extra_folders.append((item['id'], f'{prefix}/{name}' if prefix else name))
                     continue
-                seen_ids.add(rel)
+                if Path(name).suffix.lower() not in extensions:
+                    continue
+                entry = self._file_entry(item, prefix)
+                found.append(entry)
+                batch.append(entry)
+            if batch and on_batch:
+                on_batch(found)
+            for child_id, child_prefix in extra_folders:
+                found.extend(self._index_folder_files(
+                    child_id, child_prefix, extensions, skip_folders=skip_folders, on_batch=on_batch
+                ))
+        return found
+
+    def _index_videos(self):
+        self.videos_indexing = True
+        try:
+            self._ensure_root()
+            folder_id = None
+            prefix = self.video_prefix or 'output/video'
+            for rel in (self.video_prefix, 'output/video', 'video'):
+                if not rel:
+                    continue
+                folder_id = self._folder_id_for_path(rel)
+                if folder_id:
+                    prefix = rel
+                    break
+            if not folder_id:
+                print('   Drive video folder not found (tried output/video and video)')
+                return
+            print(f'   Indexing Drive videos from {prefix}...')
+
+            def publish(items):
+                with self._list_lock:
+                    self._videos = sorted(items, key=lambda v: v['modified'], reverse=True)
+                    for item in items:
+                        self._files[item['path']] = item
+                print(f'   Videos indexed so far: {len(items)}')
+
+            items = self._index_folder_files(folder_id, prefix, VIDEO_EXTENSIONS, on_batch=publish)
+            publish(items)
+            print(f'   Videos ready: {len(items)}')
+        except Exception as exc:
+            print(f'   Video index failed: {exc}')
+        finally:
+            self.videos_indexing = False
+
+    def _index_photos(self):
+        self.photos_indexing = True
+        try:
+            self._ensure_root()
+            collected = []
+
+            def publish(items):
+                with self._list_lock:
+                    self._photos = sorted(items, key=lambda v: v['modified'], reverse=True)
+                    for item in items:
+                        self._files[item['path']] = item
+                print(f'   Photos indexed so far: {len(items)}')
+
+            prefixes = self.photo_prefixes or ['output']
+            for rel in prefixes:
                 folder_id = self._folder_id_for_path(rel) if rel else self.root_folder_id
                 if not folder_id:
-                    print(f'   Drive path not found under root: {rel}')
+                    print(f'   Drive photo folder not found: {rel}')
                     continue
-                for item in self._list_folder_tree(folder_id, rel):
-                    collected[item['path']] = item
-            self._files = collected
-            videos = sum(1 for p in collected if Path(p).suffix.lower() in VIDEO_EXTENSIONS)
-            photos = sum(1 for p in collected if Path(p).suffix.lower() in IMAGE_EXTENSIONS)
-            print(f'   Drive index: {len(collected)} files ({videos} videos, {photos} photos)')
-            self._save_index()
+                print(f'   Indexing Drive photos from {rel or "/"}...')
+                folder_items = self._index_folder_files(
+                    folder_id,
+                    rel,
+                    IMAGE_EXTENSIONS,
+                    skip_folders=['video'],
+                    on_batch=lambda found, prev=collected: publish(prev + found),
+                )
+                collected.extend(folder_items)
+            publish(collected)
+            print(f'   Photos ready: {len(collected)}')
+        except Exception as exc:
+            print(f'   Photo index failed: {exc}')
+        finally:
+            self.photos_indexing = False
+
+    def scan_videos(self):
+        if not self._videos_started:
+            self._videos_started = True
+            threading.Thread(target=self._index_videos, daemon=True).start()
+        with self._list_lock:
+            return list(self._videos)
+
+    def scan_photos(self):
+        if not self._photos_started:
+            self._photos_started = True
+            threading.Thread(target=self._index_photos, daemon=True).start()
+        with self._list_lock:
+            return list(self._photos)
 
     def get_meta(self, virtual_path):
         virtual_path = virtual_path.replace('\\', '/').lstrip('/')
-        if virtual_path not in self._files:
-            self.refresh_index()
-        return self._files.get(virtual_path)
+        with self._list_lock:
+            found = self._files.get(virtual_path)
+        if found:
+            return found
+        self.scan_videos()
+        self.scan_photos()
+        with self._list_lock:
+            return self._files.get(virtual_path)
 
     def exists(self, virtual_path):
         return self.get_meta(virtual_path) is not None
 
     def open_media(self, file_id, range_header=None, timeout=120):
-        """Open a Drive media stream. Pass Range so only requested bytes are fetched."""
         headers = {}
         if range_header:
             headers['Range'] = range_header
@@ -243,7 +289,6 @@ class DriveStorage:
         return self.session.get(url, headers=headers, stream=True, timeout=timeout)
 
     def fetch_thumbnail(self, virtual_path, size=400):
-        """Fetch Drive's own thumbnail on demand — never downloads the source video."""
         meta = self.get_meta(virtual_path)
         if not meta:
             return None
@@ -282,33 +327,3 @@ class DriveStorage:
                     pass
                 return resp.content, ctype
         return None
-
-    def scan_videos(self):
-        self.refresh_index()
-        videos = []
-        for path, meta in self._files.items():
-            if Path(meta['name']).suffix.lower() not in VIDEO_EXTENSIONS:
-                continue
-            videos.append({
-                'name': meta['name'],
-                'path': path,
-                'size': meta.get('size', 0),
-                'modified': meta.get('modified', 0),
-            })
-        videos.sort(key=lambda v: v['modified'], reverse=True)
-        return videos
-
-    def scan_photos(self):
-        self.refresh_index()
-        photos = []
-        for path, meta in self._files.items():
-            if Path(meta['name']).suffix.lower() not in IMAGE_EXTENSIONS:
-                continue
-            photos.append({
-                'name': meta['name'],
-                'path': path,
-                'size': meta.get('size', 0),
-                'modified': meta.get('modified', 0),
-            })
-        photos.sort(key=lambda v: v['modified'], reverse=True)
-        return photos
