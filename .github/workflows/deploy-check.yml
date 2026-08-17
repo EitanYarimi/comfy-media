@@ -1,0 +1,14 @@
+name: Build check
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t comfy-media .

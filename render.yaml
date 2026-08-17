@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: comfy-media
+    runtime: docker
+    plan: free
+    healthCheckPath: /index.html
+    envVars:
+      - key: STORAGE_MODE
+        value: drive
+      - key: MEDIA_PREWARM
+        value: "0"
+      - key: MEDIA_CACHE_DIR
+        value: /tmp/comfy-media-cache
+      - key: DRIVE_ROOT_FOLDER_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: VIDEO_DIR
+        value: ComfyUI/output/video
+      - key: PHOTO_DIRS
+        value: ComfyUI/output,stable-diffusion-webui/outputs

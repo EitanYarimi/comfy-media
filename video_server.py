@@ -40,7 +40,8 @@ from socketserver import ThreadingMixIn
 from pathlib import Path
 from urllib.parse import unquote, parse_qs, urlparse
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
+STORAGE_MODE = os.environ.get('STORAGE_MODE', 'local').lower()
+PORT = int(os.environ.get('PORT', sys.argv[1] if len(sys.argv) > 1 else 8080))
 
 # Media paths are relative to MEDIA_ROOT (see __main__)
 VIDEO_DIR = os.environ.get('VIDEO_DIR', 'ComfyUI/output/video')
@@ -128,6 +129,33 @@ def _detect_ffmpeg_webp():
 
 
 _ffmpeg_has_webp = _detect_ffmpeg_webp()
+
+_drive_storage = None
+
+
+def get_drive_storage():
+    global _drive_storage
+    if _drive_storage is None:
+        from drive_backend import DriveStorage
+        _drive_storage = DriveStorage(CACHE_ROOT, VIDEO_DIR, PHOTO_DIRS)
+    return _drive_storage
+
+
+def resolve_media_path(rel_path):
+    """Return a local Path for serving; downloads from Drive when needed."""
+    rel_path = str(rel_path).replace('\\', '/').lstrip('/')
+    if STORAGE_MODE == 'drive':
+        return get_drive_storage().ensure_local(rel_path)
+    filepath = Path(rel_path)
+    return filepath if filepath.is_file() else None
+
+
+def media_exists(rel_path):
+    rel_path = str(rel_path).replace('\\', '/').lstrip('/')
+    if STORAGE_MODE == 'drive':
+        return get_drive_storage().exists(rel_path)
+    filepath = Path(rel_path)
+    return filepath.is_file()
 
 
 def vthumb_available():
@@ -617,9 +645,9 @@ def _prewarm_worker(worker_id=0, worker_count=1):
                     break
                 time.sleep(3)
 
-            filepath = Path(item['path'])
+            filepath = resolve_media_path(item['path'])
             try:
-                if not filepath.is_file():
+                if not filepath or not filepath.is_file():
                     continue
                 if get_cached_video_thumbnail(filepath):
                     continue
@@ -715,6 +743,8 @@ IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.
 
 def scan_videos(root_dir):
     """Scan VIDEO_DIR for video files, return paths relative to CWD for serving."""
+    if STORAGE_MODE == 'drive':
+        return get_drive_storage().scan_videos()
     videos = []
     scan_path = Path(VIDEO_DIR)
     if not scan_path.exists():
@@ -736,6 +766,8 @@ def scan_videos(root_dir):
 
 def scan_photos(root_dir):
     """Scan PHOTO_DIRS for image files, return paths for serving."""
+    if STORAGE_MODE == 'drive':
+        return get_drive_storage().scan_photos()
     photos = []
     for photo_dir in PHOTO_DIRS:
         scan_path = Path(photo_dir)
@@ -956,6 +988,12 @@ class VideoHandler(SimpleHTTPRequestHandler):
         self.end_headers()
 
     def do_DELETE(self):
+        if STORAGE_MODE == 'drive':
+            self.send_response(403)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'error': 'Delete disabled in cloud/Drive mode'}).encode())
+            return
         path = unquote(self.path).lstrip('/')
         if not path or '..' in path:
             self.send_response(400)
@@ -1036,10 +1074,9 @@ class VideoHandler(SimpleHTTPRequestHandler):
 
         # API endpoint: returns metadata from PNG/WebP (ComfyUI prompt, workflow, etc.)
         if path.startswith('/api/metadata/'):
-            filepath = Path(unquote(path[14:]))
-            if not filepath.exists():
-                filepath = Path(path[14:])
-            if filepath.exists() and filepath.is_file():
+            rel = unquote(path[14:])
+            filepath = resolve_media_path(rel)
+            if filepath and filepath.is_file():
                 meta = extract_image_metadata(filepath)
                 data = json.dumps(meta).encode()
                 self.send_response(200)
@@ -1054,8 +1091,9 @@ class VideoHandler(SimpleHTTPRequestHandler):
 
         # Serve files by absolute path (for photos outside CWD)
         if path.startswith('/file/'):
-            filepath = Path(unquote(path[6:]))
-            if filepath.exists() and filepath.is_file():
+            rel = unquote(path[6:])
+            filepath = resolve_media_path(rel)
+            if filepath and filepath.is_file():
                 serve_ranged_file(self, filepath)
                 return
             else:
@@ -1065,10 +1103,9 @@ class VideoHandler(SimpleHTTPRequestHandler):
 
         # Thumbnail endpoint: /thumb/path/to/image.jpg
         if path.startswith('/thumb/'):
-            filepath = Path(unquote(path[7:]))
-            if not filepath.exists():
-                filepath = Path(path[7:])
-            if filepath.exists() and filepath.is_file():
+            rel = unquote(path[7:])
+            filepath = resolve_media_path(rel)
+            if filepath and filepath.is_file():
                 try:
                     from PIL import Image
 
@@ -1133,10 +1170,9 @@ class VideoHandler(SimpleHTTPRequestHandler):
 
         # Video thumbnail endpoint: /vthumb/path/to/video.mp4
         if path.startswith('/vthumb/'):
-            filepath = Path(unquote(path[8:]))
-            if not filepath.exists():
-                filepath = Path(path[8:])
-            if filepath.exists() and filepath.is_file():
+            rel = unquote(path[8:])
+            filepath = resolve_media_path(rel)
+            if filepath and filepath.is_file():
                 cached = get_cached_video_thumbnail(filepath)
                 if cached:
                     data, mime = cached
@@ -1180,10 +1216,12 @@ class VideoHandler(SimpleHTTPRequestHandler):
         # Stream video/audio with byte-range support (required for mobile playback)
         rel_path = bare_path.lstrip('/')
         if rel_path and '..' not in rel_path:
-            media_path = Path(rel_path)
-            if media_path.is_file() and media_path.suffix.lower() in VIDEO_EXTENSIONS:
-                serve_ranged_file(self, media_path)
-                return
+            suffix = Path(rel_path).suffix.lower()
+            if suffix in VIDEO_EXTENSIONS and media_exists(rel_path):
+                filepath = resolve_media_path(rel_path)
+                if filepath and filepath.is_file():
+                    serve_ranged_file(self, filepath)
+                    return
 
         # Serve other static files (HTML, images) normally
         try:
@@ -1194,12 +1232,22 @@ class VideoHandler(SimpleHTTPRequestHandler):
 
 if __name__ == '__main__':
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    media_root = resolve_media_root()
-    if not media_root.is_dir():
-        print(f'❌ MEDIA_ROOT does not exist: {media_root}')
-        print('   Set MEDIA_ROOT to your Google Drive "My Drive" folder in config.env or start.sh')
-        sys.exit(1)
-    os.chdir(media_root)
+    if STORAGE_MODE == 'drive':
+        os.chdir(script_dir)
+        media_root = script_dir
+        if not os.environ.get('DRIVE_ROOT_FOLDER_ID'):
+            print('❌ DRIVE_ROOT_FOLDER_ID is required when STORAGE_MODE=drive')
+            sys.exit(1)
+        if not os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON'):
+            print('❌ GOOGLE_SERVICE_ACCOUNT_JSON is required when STORAGE_MODE=drive')
+            sys.exit(1)
+    else:
+        media_root = resolve_media_root()
+        if not media_root.is_dir():
+            print(f'❌ MEDIA_ROOT does not exist: {media_root}')
+            print('   Set MEDIA_ROOT to your Google Drive "My Drive" folder in config.env or start.sh')
+            sys.exit(1)
+        os.chdir(media_root)
     import socket
     lan_ip = 'localhost'
     try:
@@ -1222,8 +1270,12 @@ if __name__ == '__main__':
 
     print(f'🎬 Video server running at http://localhost:{PORT}')
     print(f'   Phone/tablet: http://{lan_ip}:{PORT}/index.html')
+    print(f'   Storage: {STORAGE_MODE}')
     print(f'   App files: {script_dir}')
-    print(f'   MEDIA_ROOT: {os.getcwd()}')
+    if STORAGE_MODE == 'drive':
+        print(f'   Drive folder: {os.environ.get("DRIVE_ROOT_FOLDER_ID")}')
+    else:
+        print(f'   MEDIA_ROOT: {os.getcwd()}')
     print(f'   Videos: {os.path.abspath(VIDEO_DIR)}')
     print(f'   Photos: {[os.path.abspath(d) if not Path(d).is_absolute() else d for d in PHOTO_DIRS]}')
     if _ffmpeg_path:

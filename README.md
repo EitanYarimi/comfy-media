@@ -1,71 +1,109 @@
 # Comfy Media Gallery
 
-Fast local media browser for **ComfyUI videos and Stable Diffusion photos** stored in **Google Drive**.
+Browse **ComfyUI videos** and **Stable Diffusion photos** from **Google Drive**, with a Python server for ffmpeg thumbnails, byte-range streaming, and caching.
 
-The Python server handles thumbnail generation (ffmpeg), byte-range video streaming, faststart MP4 optimization, and paginated APIs — the HTML clients are thin viewers.
+## Two ways to run
 
-## Architecture
+| Mode | Where | Best for |
+|------|--------|----------|
+| **Cloud (recommended)** | [Render](https://render.com) deploys from GitHub | Access from anywhere, no Mac running |
+| **Local** | Your Mac + Google Drive desktop sync | Fastest, private LAN |
 
-```text
-Google Drive (My Drive)          Mac (this repo)
-├── ComfyUI/output/       ←──   video_server.py  ←──  index.html / photos.html
-├── ComfyUI/output/video/
-└── stable-diffusion-webui/outputs/
+> **GitHub Pages cannot run this server** — it has no Python, ffmpeg, or video streaming. The repo lives on GitHub; the server runs on **Render** (free tier) and reads your Drive folder via API.
 
-Local cache (not synced): ~/Library/Caches/comfy-media-server/
-```
+---
 
-**GitHub hosts the code.** The server runs on your Mac and reads media from your synced Google Drive folder. Thumbnails and stream caches stay on local disk for speed.
+## Cloud setup (GitHub → Render)
 
-## Quick start
+### 1. Google Cloud service account
+
+1. Open [Google Cloud Console](https://console.cloud.google.com/) → create a project.
+2. **APIs & Services → Enable APIs** → enable **Google Drive API**.
+3. **Credentials → Create credentials → Service account** → create key (JSON). Download the file.
+4. Copy the service account email (looks like `something@project.iam.gserviceaccount.com`).
+
+### 2. Share your Drive folder
+
+1. In [Google Drive](https://drive.google.com), open the folder that contains `ComfyUI/` (usually **My Drive**).
+2. **Share** → add the service account email → **Viewer**.
+3. Copy the folder ID from the URL:  
+   `https://drive.google.com/drive/folders/`**`THIS_PART`**
+
+### 3. Deploy on Render (connected to GitHub)
+
+1. Push this repo to GitHub (already at [EitanYarimi/comfy-media](https://github.com/EitanYarimi/comfy-media)).
+2. [Render Dashboard](https://dashboard.render.com/) → **New → Blueprint** (or Web Service).
+3. Connect the `comfy-media` repo — Render reads `render.yaml`.
+4. Set secrets in Render **Environment**:
+   - `DRIVE_ROOT_FOLDER_ID` — folder ID from step 2
+   - `GOOGLE_SERVICE_ACCOUNT_JSON` — paste the **entire JSON key file** as one line
+5. Deploy. Your gallery URL will be like `https://comfy-media-xxxx.onrender.com`.
+
+Open `/index.html` (videos) or `/photos.html`.
+
+**Note:** Free Render services sleep after ~15 min idle; first load may take ~30s to wake up.
+
+---
+
+## Local setup (optional)
+
+For maximum speed when you're on the same Wi‑Fi as your Mac:
 
 ```bash
 git clone https://github.com/EitanYarimi/comfy-media.git
 cd comfy-media
-
-cp config.env.example config.env   # edit MEDIA_ROOT if needed
+cp config.env.example config.env
 chmod +x start.sh
 ./start.sh
 ```
 
-Open **http://localhost:8080/index.html** (videos) or **/photos.html**.
+Requires Google Drive **desktop app** syncing `ComfyUI/` locally, plus `brew install ffmpeg`.
 
-On your phone (same Wi‑Fi): use the LAN URL printed in the terminal, e.g. `http://192.168.x.x:8080/index.html`.
-
-## Requirements
-
-- Python 3.9+
-- [Pillow](https://pypi.org/project/pillow/) — `pip install -r requirements.txt`
-- **ffmpeg** (recommended) — `brew install ffmpeg` for video thumbnails and faststart streaming
-- Google Drive desktop app syncing your `ComfyUI/` and `stable-diffusion-webui/` folders
+---
 
 ## Configuration
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `MEDIA_ROOT` | script directory | Google Drive **My Drive** folder |
-| `VIDEO_DIR` | `ComfyUI/output/video` | Video scan path (under `MEDIA_ROOT`) |
-| `PHOTO_DIRS` | `ComfyUI/output`, `stable-diffusion-webui/outputs` | Photo scan paths |
-| `MEDIA_CACHE_DIR` | `~/Library/Caches/comfy-media-server` | Thumbnails + stream cache |
-| `MEDIA_PREWARM` | `1` | Background thumbnail generation |
-| `MEDIA_STREAM_CACHE_GB` | `20` | Max faststart cache size |
+| Variable | Cloud | Local |
+|----------|-------|-------|
+| `STORAGE_MODE` | `drive` | `local` |
+| `DRIVE_ROOT_FOLDER_ID` | Required | — |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | Required | — |
+| `MEDIA_ROOT` | — | Google Drive "My Drive" path |
+| `VIDEO_DIR` | `ComfyUI/output/video` | same |
+| `PHOTO_DIRS` | `ComfyUI/output,...` | same |
+| `MEDIA_CACHE_DIR` | `/tmp/...` (ephemeral) | `~/Library/Caches/...` |
+| `MEDIA_PREWARM` | `0` (default in Docker) | `1` |
+
+---
+
+## Architecture (cloud)
+
+```text
+GitHub repo  ──auto-deploy──▶  Render (Docker)
+                                  │
+                                  ├─ video_server.py + ffmpeg
+                                  ├─ index.html / photos.html
+                                  └─ Google Drive API ──▶ your shared folder
+                                       └─ local cache for thumbs/streams
+```
+
+---
 
 ## API
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /api/videos?summary=1` | Video count + month breakdown |
-| `GET /api/videos?month=2026-08&offset=0&limit=40` | Paginated videos |
+| `GET /api/videos?summary=1` | Video count + months |
+| `GET /api/videos?month=2026-08&limit=40` | Paginated videos |
 | `GET /api/photos?summary=1` | Photo count + months |
 | `GET /thumb/{path}` | Photo thumbnail |
 | `GET /vthumb/{path}` | Video thumbnail |
-| `GET /{path}` | Stream media (Range requests supported) |
-| `DELETE /{path}` | Delete file (use with care) |
+| `GET /{path}` | Stream media (Range requests) |
 
-## Why not GitHub Pages alone?
+Delete is disabled in cloud/Drive mode.
 
-GitHub Pages is static hosting — it cannot run `video_server.py`, ffmpeg, or serve large video files with range requests. This project keeps the **performance-critical server on your Mac** (reading Google Drive) and uses GitHub to **version and share the app code**.
+---
 
 ## License
 
-Private personal gallery tool — use and modify as you like.
+Personal gallery tool — use and modify freely.
