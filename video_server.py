@@ -42,6 +42,8 @@ from urllib.parse import unquote, parse_qs, urlparse
 
 STORAGE_MODE = os.environ.get('STORAGE_MODE', 'local').lower()
 PORT = int(os.environ.get('PORT', sys.argv[1] if len(sys.argv) > 1 else 8080))
+SITE_PASSWORD = os.environ.get('SITE_PASSWORD', '')
+AUTH_COOKIE = 'comfy_auth'
 
 # Media paths are relative to MEDIA_ROOT (see __main__)
 VIDEO_DIR = os.environ.get('VIDEO_DIR', 'ComfyUI/output/video')
@@ -155,6 +157,62 @@ def media_exists(rel_path):
         return get_drive_storage().exists(rel_path)
     filepath = Path(rel_path)
     return filepath.is_file()
+
+
+def auth_cookie_value():
+    return hashlib.sha256(f'comfy-media|{SITE_PASSWORD}'.encode()).hexdigest()
+
+
+def is_authed(handler):
+    if not SITE_PASSWORD:
+        return True
+    cookie = handler.headers.get('Cookie') or ''
+    return f'{AUTH_COOKIE}={auth_cookie_value()}' in cookie
+
+
+LOGIN_PAGE = b"""<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Comfy Media</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0a0a0a;color:#e0e0e0;
+min-height:100vh;display:flex;align-items:center;justify-content:center;margin:0}
+form{background:#111;border:1px solid #222;border-radius:16px;padding:28px;width:min(360px,90vw)}
+h1{font-size:1.1rem;margin:0 0 16px}
+input,button{width:100%;padding:12px 14px;border-radius:10px;border:1px solid #2a2a2a;font-size:1rem;box-sizing:border-box}
+input{background:#1a1a1a;color:#eee;margin-bottom:12px}
+button{background:#e60023;border-color:#e60023;color:#fff;font-weight:600;cursor:pointer}
+p{color:#888;font-size:.8rem;margin:0 0 16px}
+</style></head><body>
+<form method="post" action="/login">
+<h1>Comfy Media</h1>
+<p>Enter the site password to open the gallery.</p>
+<input type="password" name="password" placeholder="Password" autofocus>
+<button type="submit">Enter</button>
+</form></body></html>
+"""
+
+
+def send_login_page(handler, status=200):
+    handler.send_response(status)
+    handler.send_header('Content-Type', 'text/html; charset=utf-8')
+    handler.send_header('Content-Length', str(len(LOGIN_PAGE)))
+    handler.send_header('Cache-Control', 'no-store')
+    handler.end_headers()
+    safe_write(handler.wfile, LOGIN_PAGE)
+
+
+def require_site_auth(handler):
+    if is_authed(handler):
+        return True
+    if handler.command == 'GET':
+        send_login_page(handler)
+    else:
+        handler.send_response(401)
+        handler.send_header('Content-Type', 'application/json')
+        handler.end_headers()
+        safe_write(handler.wfile, b'{"error":"unauthorized"}')
+    return False
 
 
 def vthumb_available():
@@ -1079,6 +1137,17 @@ class VideoHandler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_HEAD(self):
+        bare = unquote(self.path).split('?', 1)[0]
+        if bare == '/healthz':
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain')
+            self.send_header('Content-Length', '2')
+            self.end_headers()
+            return
+        if SITE_PASSWORD and not is_authed(self) and bare not in ('/login',):
+            self.send_response(401)
+            self.end_headers()
+            return
         path = unquote(self.path).split('?', 1)[0]
         rel = path.lstrip('/')
         if STORAGE_MODE == 'drive' and rel and '..' not in rel:
@@ -1104,7 +1173,29 @@ class VideoHandler(SimpleHTTPRequestHandler):
         self.send_response(204)
         self.end_headers()
 
+    def do_POST(self):
+        bare = unquote(self.path).split('?', 1)[0]
+        if bare != '/login':
+            self.send_response(404)
+            self.end_headers()
+            return
+        length = int(self.headers.get('Content-Length') or 0)
+        body = self.rfile.read(length) if length else b''
+        params = parse_qs(body.decode('utf-8', errors='replace'))
+        password = (params.get('password') or [''])[0]
+        if SITE_PASSWORD and password == SITE_PASSWORD:
+            self.send_response(303)
+            self.send_header('Set-Cookie', f'{AUTH_COOKIE}={auth_cookie_value()}; Path=/; HttpOnly; SameSite=Lax')
+            self.send_header('Location', '/index.html')
+            self.end_headers()
+            return
+        send_login_page(self, status=401)
+
     def do_DELETE(self):
+        if SITE_PASSWORD and not is_authed(self):
+            self.send_response(401)
+            self.end_headers()
+            return
         if STORAGE_MODE == 'drive':
             self.send_response(403)
             self.send_header('Content-Type', 'application/json')
@@ -1131,6 +1222,28 @@ class VideoHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         path = unquote(self.path)
         bare_path = path.split('?', 1)[0]
+
+        if bare_path == '/healthz':
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain')
+            self.send_header('Content-Length', '3')
+            self.end_headers()
+            safe_write(self.wfile, b'ok\n')
+            return
+
+        if bare_path == '/login':
+            send_login_page(self)
+            return
+
+        if SITE_PASSWORD and not is_authed(self):
+            if bare_path in ('/', '/index.html', '/photos.html'):
+                send_login_page(self)
+            else:
+                self.send_response(401)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                safe_write(self.wfile, b'{"error":"unauthorized"}')
+            return
 
         # HTML apps — always no-cache so phones pick up updates
         if bare_path in ('/', '/index.html', '/photos.html'):

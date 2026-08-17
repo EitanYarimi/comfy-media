@@ -24,24 +24,26 @@ In cloud mode the Python server is a **gateway**: it lists your Drive folder, th
 3. **Credentials → Create credentials → Service account** → create key (JSON). Download the file.
 4. Copy the service account email (looks like `something@project.iam.gserviceaccount.com`).
 
-### 2. Share your Drive folder
+### 2. Share your **ComfyUI** Drive folder
 
-1. In [Google Drive](https://drive.google.com), open the folder that contains `ComfyUI/` (usually **My Drive**).
+1. In [Google Drive](https://drive.google.com), open the **ComfyUI** folder (the one that contains `output/`).
 2. **Share** → add the service account email → **Viewer**.
-3. Copy the folder ID from the URL:  
+3. Folder ID is the last part of the URL:  
    `https://drive.google.com/drive/folders/`**`THIS_PART`**
 
 ### 3. Deploy on Render (connected to GitHub)
 
-1. Push this repo to GitHub (already at [EitanYarimi/comfy-media](https://github.com/EitanYarimi/comfy-media)).
-2. [Render Dashboard](https://dashboard.render.com/) → **New → Blueprint** (or Web Service).
-3. Connect the `comfy-media` repo — Render reads `render.yaml`.
-4. Set secrets in Render **Environment**:
-   - `DRIVE_ROOT_FOLDER_ID` — folder ID from step 2
+1. Open [Render](https://dashboard.render.com/) and sign in with GitHub.
+2. **New → Blueprint** → select `EitanYarimi/comfy-media`.
+3. Set these environment values:
+   - `DRIVE_ROOT_FOLDER_ID` — ComfyUI folder ID from step 2
    - `GOOGLE_SERVICE_ACCOUNT_JSON` — paste the **entire JSON key file** as one line
-5. Deploy. Your gallery URL will be like `https://comfy-media-xxxx.onrender.com`.
+   - `SITE_PASSWORD` — a password for the public site
+4. Deploy. URL will look like `https://comfy-media.onrender.com`.
 
-Open `/index.html` (videos) or `/photos.html`.
+Open the URL, enter the password, then `/index.html` (videos) or `/photos.html`.
+
+`VIDEO_DIR` defaults to `output/video` and `PHOTO_DIRS` to `output` (paths inside the shared ComfyUI folder).
 
 **Note:** Free Render services sleep after ~15 min idle; first load may take ~30s to wake up.
 
