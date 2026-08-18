@@ -53,6 +53,9 @@ class DriveStorage:
         self._videos = []
         self._photos = []
         self._root_name = ''
+        self.last_error = None
+        self.videos_error = None
+        self.photos_error = None
         self.videos_indexing = False
         self.photos_indexing = False
         self._videos_started = False
@@ -65,7 +68,15 @@ class DriveStorage:
             raise RuntimeError('GOOGLE_SERVICE_ACCOUNT_JSON is required for STORAGE_MODE=drive')
         info = json.loads(raw)
         creds = service_account.Credentials.from_service_account_info(info, scopes=DRIVE_SCOPES)
-        service = build('drive', 'v3', credentials=creds, cache_discovery=False)
+        try:
+            import httplib2
+            from google_auth_httplib2 import AuthorizedHttp
+            http = httplib2.Http(timeout=30)
+            service = build(
+                'drive', 'v3', http=AuthorizedHttp(creds, http=http), cache_discovery=False
+            )
+        except ImportError:
+            service = build('drive', 'v3', credentials=creds, cache_discovery=False)
         session = AuthorizedSession(creds)
         return creds, service, session
 
@@ -81,10 +92,11 @@ class DriveStorage:
             self._root_name = root.get('name') or ''
         except Exception as exc:
             email = getattr(self.creds, 'service_account_email', 'the service account')
-            raise RuntimeError(
+            self.last_error = (
                 f'Cannot open Drive folder {self.root_folder_id!r}. '
                 f'Share that folder with {email} as Viewer. Original error: {exc}'
-            ) from exc
+            )
+            raise RuntimeError(self.last_error) from exc
 
     def _drive_list(self, q, fields, page_size=1000, page_token=None):
         kwargs = {
@@ -130,19 +142,21 @@ class DriveStorage:
             current = found
         return current
 
-    def _iter_children_pages(self, folder_id):
-        folder_id = _clean_id(folder_id)
+    def _iter_query_pages(self, q, fields, page_size=1000):
         page_token = None
         while True:
-            resp = self._drive_list(
-                q=f"'{folder_id}' in parents and trashed=false",
-                fields='nextPageToken, files(id, name, mimeType, size, modifiedTime, thumbnailLink, hasThumbnail)',
-                page_token=page_token,
-            )
+            resp = self._drive_list(q=q, fields=fields, page_size=page_size, page_token=page_token)
             yield resp.get('files', [])
             page_token = resp.get('nextPageToken')
             if not page_token:
                 break
+
+    def _iter_children_pages(self, folder_id):
+        folder_id = _clean_id(folder_id)
+        yield from self._iter_query_pages(
+            q=f"'{folder_id}' in parents and trashed=false",
+            fields='nextPageToken, files(id, name, mimeType, size, modifiedTime, thumbnailLink, hasThumbnail)',
+        )
 
     def _file_entry(self, item, prefix):
         name = item.get('name', '')
@@ -188,32 +202,64 @@ class DriveStorage:
     def _index_videos(self):
         self.videos_indexing = True
         try:
+            self.last_error = None
+            self.videos_error = None
             self._ensure_root()
+            found_by_id = {}
+
+            def publish():
+                items = sorted(found_by_id.values(), key=lambda v: v['modified'], reverse=True)
+                with self._list_lock:
+                    self._videos = items
+                    for item in items:
+                        self._files[item['path']] = item
+                print(f'   Videos indexed so far: {len(items)}')
+
+            try:
+                for page in self._iter_query_pages(
+                    q="trashed=false and mimeType contains 'video/'",
+                    fields=(
+                        'nextPageToken, files(id, name, mimeType, size, modifiedTime, '
+                        'thumbnailLink, hasThumbnail)'
+                    ),
+                ):
+                    for item in page:
+                        name = item.get('name', '')
+                        if Path(name).suffix.lower() not in VIDEO_EXTENSIONS:
+                            continue
+                        entry = self._file_entry(item, prefix='')
+                        found_by_id[entry['id']] = entry
+                    if found_by_id:
+                        publish()
+            except Exception as exc:
+                print(f'   Drive video mime query failed: {exc}')
+
             folder_id = None
             prefix = self.video_prefix or 'output/video'
-            for rel in (self.video_prefix, 'output/video', 'video'):
+            for rel in (self.video_prefix, 'output/video', 'output', 'video'):
                 if not rel:
                     continue
                 folder_id = self._folder_id_for_path(rel)
                 if folder_id:
                     prefix = rel
                     break
-            if not folder_id:
-                print('   Drive video folder not found (tried output/video and video)')
-                return
-            print(f'   Indexing Drive videos from {prefix}...')
+            if folder_id:
+                print(f'   Indexing Drive videos from {prefix}...')
 
-            def publish(items):
-                with self._list_lock:
-                    self._videos = sorted(items, key=lambda v: v['modified'], reverse=True)
+                def publish_walk(items):
                     for item in items:
-                        self._files[item['path']] = item
-                print(f'   Videos indexed so far: {len(items)}')
+                        found_by_id[item['id']] = item
+                    publish()
 
-            items = self._index_folder_files(folder_id, prefix, VIDEO_EXTENSIONS, on_batch=publish)
-            publish(items)
-            print(f'   Videos ready: {len(items)}')
+                self._index_folder_files(folder_id, prefix, VIDEO_EXTENSIONS, on_batch=publish_walk)
+            elif not found_by_id:
+                self.videos_error = 'Drive video folder not found (tried output/video, output, and video)'
+                print(f'   {self.videos_error}')
+                return
+            publish()
+            print(f'   Videos ready: {len(found_by_id)}')
         except Exception as exc:
+            self.videos_error = str(exc)
             print(f'   Video index failed: {exc}')
         finally:
             self.videos_indexing = False
@@ -221,6 +267,7 @@ class DriveStorage:
     def _index_photos(self):
         self.photos_indexing = True
         try:
+            self.photos_error = None
             self._ensure_root()
             collected = []
 
@@ -249,6 +296,7 @@ class DriveStorage:
             publish(collected)
             print(f'   Photos ready: {len(collected)}')
         except Exception as exc:
+            self.photos_error = str(exc)
             print(f'   Photo index failed: {exc}')
         finally:
             self.photos_indexing = False

@@ -41,9 +41,18 @@ from pathlib import Path
 from urllib.parse import unquote, parse_qs, urlparse
 
 STORAGE_MODE = os.environ.get('STORAGE_MODE', 'local').lower()
-PORT = int(os.environ.get('PORT', sys.argv[1] if len(sys.argv) > 1 else 8080))
 SITE_PASSWORD = os.environ.get('SITE_PASSWORD', '')
 AUTH_COOKIE = 'comfy_auth'
+
+
+def _default_port():
+    env = os.environ.get('PORT')
+    if env:
+        return int(env)
+    return 8080
+
+
+PORT = _default_port()
 
 # Media paths are relative to MEDIA_ROOT (local) or the shared Drive folder (cloud).
 _VIDEO_DIR_DEFAULT = 'output/video' if STORAGE_MODE == 'drive' else 'ComfyUI/output/video'
@@ -193,13 +202,47 @@ p{color:#888;font-size:.8rem;margin:0 0 16px}
 """
 
 
-def send_login_page(handler, status=200):
+UNAUTHORIZED_JSON = b'{"error":"unauthorized"}'
+HEALTHZ_BODY = b'ok\n'
+
+
+def send_http_bytes(handler, status, data=b'', content_type=None, extra_headers=None):
+    """Always set Content-Length. HTTP/1.1 keep-alive clients hang without it."""
+    if data is None:
+        data = b''
+    elif isinstance(data, str):
+        data = data.encode()
     handler.send_response(status)
-    handler.send_header('Content-Type', 'text/html; charset=utf-8')
-    handler.send_header('Content-Length', str(len(LOGIN_PAGE)))
-    handler.send_header('Cache-Control', 'no-store')
+    if content_type:
+        handler.send_header('Content-Type', content_type)
+    handler.send_header('Content-Length', str(len(data)))
+    if extra_headers:
+        for key, value in extra_headers.items():
+            if value is not None:
+                handler.send_header(key, value)
     handler.end_headers()
-    safe_write(handler.wfile, LOGIN_PAGE)
+    if handler.command != 'HEAD' and data:
+        safe_write(handler.wfile, data)
+
+
+def send_http_empty(handler, status, extra_headers=None):
+    send_http_bytes(handler, status, b'', extra_headers=extra_headers)
+
+
+def send_http_json(handler, status, obj, extra_headers=None):
+    send_http_bytes(
+        handler, status, json.dumps(obj).encode(), 'application/json', extra_headers
+    )
+
+
+def send_login_page(handler, status=200):
+    send_http_bytes(
+        handler,
+        status,
+        LOGIN_PAGE,
+        'text/html; charset=utf-8',
+        extra_headers={'Cache-Control': 'no-store'},
+    )
 
 
 def require_site_auth(handler):
@@ -208,10 +251,7 @@ def require_site_auth(handler):
     if handler.command == 'GET':
         send_login_page(handler)
     else:
-        handler.send_response(401)
-        handler.send_header('Content-Type', 'application/json')
-        handler.end_headers()
-        safe_write(handler.wfile, b'{"error":"unauthorized"}')
+        send_http_bytes(handler, 401, UNAUTHORIZED_JSON, 'application/json')
     return False
 
 
@@ -959,9 +999,7 @@ def _serve_ranged_file_body(handler, filepath):
     parsed = parse_range_header(handler.headers.get('Range'), file_size)
 
     if parsed == 'unsatisfiable':
-        handler.send_response(416)
-        handler.send_header('Content-Range', f'bytes */{file_size}')
-        handler.end_headers()
+        send_http_empty(handler, 416, extra_headers={'Content-Range': f'bytes */{file_size}'})
         return
 
     try:
@@ -1018,9 +1056,7 @@ def serve_drive_media(handler, rel_path):
     range_header = handler.headers.get('Range')
     parsed = parse_range_header(range_header, file_size) if file_size else None
     if parsed == 'unsatisfiable':
-        handler.send_response(416)
-        handler.send_header('Content-Range', f'bytes */{file_size}')
-        handler.end_headers()
+        send_http_empty(handler, 416, extra_headers={'Content-Range': f'bytes */{file_size}'})
         return
 
     outgoing_range = None
@@ -1096,12 +1132,7 @@ def serve_media(handler, rel_path):
 
 
 def respond_json(handler, obj):
-    data = json.dumps(obj).encode()
-    handler.send_response(200)
-    handler.send_header('Content-Type', 'application/json')
-    handler.send_header('Content-Length', str(len(data)))
-    handler.end_headers()
-    safe_write(handler.wfile, data)
+    send_http_json(handler, 200, obj)
 
 
 def safe_write(wfile, data):
@@ -1151,14 +1182,10 @@ class VideoHandler(SimpleHTTPRequestHandler):
     def do_HEAD(self):
         bare = unquote(self.path).split('?', 1)[0]
         if bare == '/healthz':
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/plain')
-            self.send_header('Content-Length', '2')
-            self.end_headers()
+            send_http_bytes(self, 200, HEALTHZ_BODY, 'text/plain')
             return
         if SITE_PASSWORD and not is_authed(self) and bare not in ('/login',):
-            self.send_response(401)
-            self.end_headers()
+            send_http_bytes(self, 401, UNAUTHORIZED_JSON, 'application/json')
             return
         path = unquote(self.path).split('?', 1)[0]
         rel = path.lstrip('/')
@@ -1174,73 +1201,57 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     )
                     self.send_response(200)
                     self.send_header('Content-Type', ctype)
-                    if meta.get('size'):
-                        self.send_header('Content-Length', str(meta['size']))
+                    self.send_header('Content-Length', str(int(meta.get('size') or 0)))
                     self.send_header('Accept-Ranges', 'bytes')
                     self.end_headers()
                     return
         super().do_HEAD()
 
     def do_OPTIONS(self):
-        self.send_response(204)
-        self.end_headers()
+        send_http_empty(self, 204)
 
     def do_POST(self):
         bare = unquote(self.path).split('?', 1)[0]
         if bare != '/login':
-            self.send_response(404)
-            self.end_headers()
+            send_http_empty(self, 404)
             return
         length = int(self.headers.get('Content-Length') or 0)
         body = self.rfile.read(length) if length else b''
         params = parse_qs(body.decode('utf-8', errors='replace'))
         password = (params.get('password') or [''])[0]
         if SITE_PASSWORD and password == SITE_PASSWORD:
-            self.send_response(303)
-            self.send_header('Set-Cookie', f'{AUTH_COOKIE}={auth_cookie_value()}; Path=/; HttpOnly; SameSite=Lax')
-            self.send_header('Location', '/index.html')
-            self.end_headers()
+            send_http_empty(self, 303, extra_headers={
+                'Set-Cookie': f'{AUTH_COOKIE}={auth_cookie_value()}; Path=/; HttpOnly; SameSite=Lax',
+                'Location': '/index.html',
+            })
             return
         send_login_page(self, status=401)
 
     def do_DELETE(self):
         if SITE_PASSWORD and not is_authed(self):
-            self.send_response(401)
-            self.end_headers()
+            send_http_bytes(self, 401, UNAUTHORIZED_JSON, 'application/json')
             return
         if STORAGE_MODE == 'drive':
-            self.send_response(403)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({'error': 'Delete disabled in cloud/Drive mode'}).encode())
+            send_http_json(self, 403, {'error': 'Delete disabled in cloud/Drive mode'})
             return
         path = unquote(self.path).lstrip('/')
         if not path or '..' in path:
-            self.send_response(400)
-            self.end_headers()
+            send_http_empty(self, 400)
             return
         filepath = Path(path)
         if filepath.exists() and filepath.is_file():
             filepath.unlink()
             invalidate_media_cache()
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({'deleted': path}).encode())
+            send_http_json(self, 200, {'deleted': path})
         else:
-            self.send_response(404)
-            self.end_headers()
+            send_http_empty(self, 404)
 
     def do_GET(self):
         path = unquote(self.path)
         bare_path = path.split('?', 1)[0]
 
         if bare_path == '/healthz':
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/plain')
-            self.send_header('Content-Length', '3')
-            self.end_headers()
-            safe_write(self.wfile, b'ok\n')
+            send_http_bytes(self, 200, HEALTHZ_BODY, 'text/plain')
             return
 
         if bare_path == '/login':
@@ -1251,10 +1262,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
             if bare_path in ('/', '/index.html', '/photos.html'):
                 send_login_page(self)
             else:
-                self.send_response(401)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                safe_write(self.wfile, b'{"error":"unauthorized"}')
+                send_http_bytes(self, 401, UNAUTHORIZED_JSON, 'application/json')
             return
 
         # HTML apps — always no-cache so phones pick up updates
@@ -1283,7 +1291,9 @@ class VideoHandler(SimpleHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             force, summary, month, q, offset, limit = parse_media_api_query(query)
             videos = get_videos_cached(force=force)
-            indexing = STORAGE_MODE == 'drive' and get_drive_storage().videos_indexing
+            drive = get_drive_storage() if STORAGE_MODE == 'drive' else None
+            indexing = bool(drive and drive.videos_indexing)
+            error = (drive.videos_error or drive.last_error) if drive else None
             if summary:
                 respond_json(self, {
                     'total': len(videos),
@@ -1291,6 +1301,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     'ffmpeg': bool(_ffmpeg_path),
                     'vthumb': vthumb_available(),
                     'indexing': indexing,
+                    'error': error,
                 })
                 return
             total, page = paginate_media(videos, month=month or None, q=q or None, offset=offset, limit=limit, kind='videos')
@@ -1302,6 +1313,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 'ffmpeg': bool(_ffmpeg_path),
                 'vthumb': vthumb_available(),
                 'indexing': indexing,
+                'error': error,
             })
             return
 
@@ -1310,12 +1322,15 @@ class VideoHandler(SimpleHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             force, summary, month, q, offset, limit = parse_media_api_query(query)
             photos = get_photos_cached(force=force)
-            indexing = STORAGE_MODE == 'drive' and get_drive_storage().photos_indexing
+            drive = get_drive_storage() if STORAGE_MODE == 'drive' else None
+            indexing = bool(drive and drive.photos_indexing)
+            error = (drive.photos_error or drive.last_error) if drive else None
             if summary:
                 respond_json(self, {
                     'total': len(photos),
                     'months': media_month_summary(photos),
                     'indexing': indexing,
+                    'error': error,
                 })
                 return
             total, page = paginate_media(photos, month=month or None, q=q or None, offset=offset, limit=limit, kind='photos')
@@ -1325,6 +1340,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 'limit': limit,
                 'photos': page,
                 'indexing': indexing,
+                'error': error,
             })
             return
 
@@ -1334,8 +1350,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
             if STORAGE_MODE == 'drive':
                 meta = get_drive_storage().get_meta(rel)
                 if not meta:
-                    self.send_response(404)
-                    self.end_headers()
+                    send_http_empty(self, 404)
                     return
                 respond_json(self, {
                     'file': rel,
@@ -1355,8 +1370,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data)
             else:
-                self.send_response(404)
-                self.end_headers()
+                send_http_empty(self, 404)
             return
 
         # Serve files by absolute path (for photos outside CWD)
@@ -1365,8 +1379,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
             if media_exists(rel):
                 serve_media(self, rel)
                 return
-            self.send_response(404)
-            self.end_headers()
+            send_http_empty(self, 404)
             return
 
         # Thumbnail endpoint: /thumb/path/to/image.jpg
@@ -1376,8 +1389,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 if media_exists(rel):
                     serve_drive_thumb(self, rel)
                     return
-                self.send_response(404)
-                self.end_headers()
+                send_http_empty(self, 404)
                 return
             filepath = resolve_media_path(rel)
             if filepath and filepath.is_file():
@@ -1435,12 +1447,10 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                     pass
                 except Exception:
-                    self.send_response(500)
-                    self.end_headers()
+                    send_http_empty(self, 500)
                 return
             else:
-                self.send_response(404)
-                self.end_headers()
+                send_http_empty(self, 404)
                 return
 
         # Video thumbnail endpoint: /vthumb/path/to/video.mp4
@@ -1450,8 +1460,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 if media_exists(rel):
                     serve_drive_thumb(self, rel)
                     return
-                self.send_response(404)
-                self.end_headers()
+                send_http_empty(self, 404)
                 return
             filepath = resolve_media_path(rel)
             if filepath and filepath.is_file():
@@ -1462,25 +1471,23 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     with _active_streams_lock:
                         streams_busy = _active_streams > 0
                     if streams_busy:
-                        self.send_response(503)
-                        self.send_header('Content-Type', 'application/json')
-                        self.send_header('Retry-After', '5')
-                        self.end_headers()
-                        safe_write(self.wfile, json.dumps({
-                            'error': 'Thumbnail deferred — video streaming in progress',
-                            'retry': True,
-                        }).encode())
+                        send_http_json(
+                            self,
+                            503,
+                            {
+                                'error': 'Thumbnail deferred — video streaming in progress',
+                                'retry': True,
+                            },
+                            extra_headers={'Retry-After': '5'},
+                        )
                         return
                     thumb = generate_video_thumbnail(filepath)
                     if not thumb:
-                        self.send_response(503)
-                        self.send_header('Content-Type', 'application/json')
-                        self.end_headers()
-                        safe_write(self.wfile, json.dumps({
+                        send_http_json(self, 503, {
                             'error': 'Could not generate video thumbnail',
                             'ffmpeg': bool(_ffmpeg_path),
                             'vthumb': vthumb_available(),
-                        }).encode())
+                        })
                         return
                     data, mime = thumb
                 self.send_response(200)
@@ -1491,8 +1498,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 safe_write(self.wfile, data)
                 return
             else:
-                self.send_response(404)
-                self.end_headers()
+                send_http_empty(self, 404)
                 return
 
         # Stream video/images with byte-range support (required for mobile playback)
@@ -1512,6 +1518,8 @@ class VideoHandler(SimpleHTTPRequestHandler):
 
 
 if __name__ == '__main__':
+    if len(sys.argv) > 1:
+        PORT = int(sys.argv[1])
     script_dir = os.path.dirname(os.path.abspath(__file__))
     if STORAGE_MODE == 'drive':
         os.chdir(script_dir)

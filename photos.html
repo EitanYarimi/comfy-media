@@ -361,6 +361,9 @@ async function loadFromServer(isPoll = false) {
             throw new Error(`Server returned ${resp.status}. Is video_server.py running?`);
         }
         const data = await resp.json();
+        if (data.error && !data.total) {
+            throw new Error(data.error);
+        }
         applyPhotosSummary(data);
         if (!isPoll) setupDefaultExpandedMonths();
         if (data.indexing) {
