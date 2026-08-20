@@ -21,6 +21,7 @@ def _blank_drive():
     storage._videos_token = None
     storage._videos_complete = False
     storage._month_state = {}
+    storage._month_keys = None
     storage._list_lock = threading.Lock()
     storage._root_name = 'ComfyUI'
     storage.root_folder_id = 'root'
@@ -62,7 +63,9 @@ class LazyDriveListTests(unittest.TestCase):
                 return {'files': extra, 'nextPageToken': None}
             return {'files': first, 'nextPageToken': 'page-2'}
 
-        with patch.object(storage, '_query_videos', side_effect=fake_query):
+        with patch.object(storage, '_ensure_root'), \
+             patch.object(storage, '_query_videos', side_effect=fake_query), \
+             patch.object(storage, '_discover_month_keys', return_value=['2026-08']):
             result = storage.list_videos(summary=True, limit=40)
 
         self.assertEqual(calls['n'], 1)
@@ -81,12 +84,40 @@ class LazyDriveListTests(unittest.TestCase):
                 return {'files': second, 'nextPageToken': None}
             return {'files': first, 'nextPageToken': 'page-2'}
 
-        with patch.object(storage, '_query_videos', side_effect=fake_query):
+        with patch.object(storage, '_ensure_root'), \
+             patch.object(storage, '_query_videos', side_effect=fake_query), \
+             patch.object(storage, '_discover_month_keys', return_value=['2026-08', '2026-07']):
             storage.list_videos(summary=True, limit=40)
             later = storage.list_videos(offset=40, limit=40, summary=False)
 
         self.assertEqual(len(later['videos']), 10)
         self.assertFalse(later['hasMore'])
+
+    def test_months_between_keys(self):
+        keys = drive_backend.months_between_keys('2026-06', '2026-08')
+        self.assertEqual(keys, ['2026-08', '2026-07', '2026-06'])
+
+    def test_summary_months_from_oldest_newest(self):
+        storage = _blank_drive()
+        first = [_file(f'id{i}', f'clip{i}.mp4', '2026-08-18T12:00:00Z') for i in range(5)]
+        calls = {'n': 0}
+
+        def fake_query(extra_q='', page_size=40, page_token=None):
+            calls['n'] += 1
+            return {'files': first[:page_size], 'nextPageToken': None}
+
+        def fake_list(q, fields, page_size=1000, page_token=None, order_by=None):
+            # oldest video call
+            return {'files': [_file('old', 'old.mp4', '2026-06-02T12:00:00Z')]}
+
+        with patch.object(storage, '_ensure_root'), \
+             patch.object(storage, '_query_videos', side_effect=fake_query), \
+             patch.object(storage, '_drive_list', side_effect=fake_list):
+            result = storage.list_videos(summary=True, limit=40)
+
+        months = [m['month'] for m in result['months']]
+        self.assertEqual(months, ['2026-08', '2026-07', '2026-06'])
+        self.assertEqual(result['months'][0]['count'], 5)
 
 
 if __name__ == '__main__':

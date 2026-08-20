@@ -1250,6 +1250,7 @@ async function loadFromServer(isPoll = false) {
         }
         applyVideosSummary(data);
         if (!isPoll) setupDefaultExpandedMonths();
+        updateMonthPicker();
         if (monthSummaries.length > 0) {
             await loadMonthVideos(monthSummaries[0].month);
         } else {
@@ -1416,7 +1417,7 @@ function updateMonthPicker(activeKey) {
     const focus = activeKey || (monthSummaries.find(s => !collapsedMonths.has(s.month)) || monthSummaries[0]).month;
     picker.innerHTML = monthSummaries.map(s => {
         const active = s.month === focus && !collapsedMonths.has(s.month);
-        return `<button type="button" class="month-chip${active ? ' active' : ''}" data-month="${s.month}" onclick="selectMonth('${s.month}')">${getMonthLabel(s.month)}<span class="chip-count">${s.count}</span></button>`;
+        return `<button type="button" class="month-chip${active ? ' active' : ''}" data-month="${s.month}" onclick="selectMonth('${s.month}')">${getMonthLabel(s.month)}${s.count ? `<span class="chip-count">${s.count}</span>` : ''}</button>`;
     }).join('');
     picker.classList.add('visible');
     syncHeaderOffset();
