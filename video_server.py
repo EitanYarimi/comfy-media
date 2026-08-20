@@ -332,7 +332,7 @@ def _refresh_photos_background():
 def get_photos_cached(force=False):
     """Return cached photo list; load disk index instantly, refresh in background."""
     if STORAGE_MODE == 'drive':
-        photos = get_drive_storage().scan_photos()
+        photos = get_drive_storage().scan_photos(refresh=force)
         _photo_cache['data'] = photos
         _photo_cache['time'] = time.time()
         _media_by_month['photos'] = _build_month_index(photos)
@@ -1298,6 +1298,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     offset=offset,
                     limit=limit,
                     summary=summary,
+                    refresh=force,
                 )
                 error = result.get('error') or drive.last_error
                 if summary:

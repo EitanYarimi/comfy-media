@@ -289,6 +289,30 @@ class DriveStorage:
                 used_paths.add(item['path'])
             self._videos.sort(key=lambda video: video['modified'], reverse=True)
 
+    def reset_video_cache(self):
+        """Drop cached video pages so the next list hits Drive again."""
+        with self._list_lock:
+            # Keep _files for open streams; remove video entries that came from lists.
+            video_paths = {v['path'] for v in self._videos}
+            for path in video_paths:
+                self._files.pop(path, None)
+            self._videos = []
+            self._videos_token = None
+            self._videos_complete = False
+            self._month_state = {}
+            self._month_keys = None
+            self.videos_error = None
+
+    def reset_photo_cache(self):
+        """Drop photo index and rescan on next request."""
+        with self._list_lock:
+            photo_paths = {p['path'] for p in self._photos}
+            for path in photo_paths:
+                self._files.pop(path, None)
+            self._photos = []
+            self._photos_started = False
+            self.photos_error = None
+
     def _discover_month_keys(self):
         """Build the full month list from oldest+newest video only (2 Drive calls)."""
         if self._month_keys is not None:
@@ -379,11 +403,16 @@ class DriveStorage:
         state = {'items': [], 'token': None, 'complete': False}
         return self._paged_video_query(extra, offset, limit, state)
 
-    def list_videos(self, month=None, q=None, offset=0, limit=VIDEO_PAGE_SIZE, summary=False):
+    def list_videos(self, month=None, q=None, offset=0, limit=VIDEO_PAGE_SIZE, summary=False, refresh=False):
         """Fetch only the requested page of videos. Does not crawl the whole library."""
         self.videos_error = None
         try:
             self._ensure_root()
+            # Summary/refresh must re-query Drive so newly uploaded files appear.
+            if refresh or summary:
+                self.reset_video_cache()
+            if month and offset == 0:
+                self._month_state.pop(month, None)
             if q:
                 page, total, has_more = self._search_videos(q, offset, limit)
                 return {
@@ -479,7 +508,9 @@ class DriveStorage:
         result = self.list_videos(summary=True)
         return list(result.get('loaded') or [])
 
-    def scan_photos(self):
+    def scan_photos(self, refresh=False):
+        if refresh:
+            self.reset_photo_cache()
         if not self._photos_started:
             self._photos_started = True
             threading.Thread(target=self._index_photos, daemon=True).start()

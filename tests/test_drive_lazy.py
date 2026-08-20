@@ -119,6 +119,29 @@ class LazyDriveListTests(unittest.TestCase):
         self.assertEqual(months, ['2026-08', '2026-07', '2026-06'])
         self.assertEqual(result['months'][0]['count'], 5)
 
+    def test_summary_refresh_picks_up_new_files(self):
+        storage = _blank_drive()
+        pages = {
+            1: [_file('a', 'a.mp4', '2026-08-18T12:00:00Z')],
+            2: [
+                _file('b', 'new.mp4', '2026-08-19T12:00:00Z'),
+                _file('a', 'a.mp4', '2026-08-18T12:00:00Z'),
+            ],
+        }
+        round_id = {'n': 1}
+
+        def fake_query(extra_q='', page_size=40, page_token=None):
+            return {'files': pages[round_id['n']], 'nextPageToken': None}
+
+        with patch.object(storage, '_ensure_root'), \
+             patch.object(storage, '_query_videos', side_effect=fake_query), \
+             patch.object(storage, '_discover_month_keys', return_value=['2026-08']):
+            first = storage.list_videos(summary=True)
+            self.assertEqual([v['name'] for v in first['videos']], ['a.mp4'])
+            round_id['n'] = 2
+            second = storage.list_videos(summary=True, refresh=True)
+            self.assertEqual([v['name'] for v in second['videos']], ['new.mp4', 'a.mp4'])
+
 
 if __name__ == '__main__':
     unittest.main()
