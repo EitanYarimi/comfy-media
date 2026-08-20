@@ -251,21 +251,10 @@
 
         .month-grid {
             display: grid;
-            grid-template-columns: repeat(5, 1fr);
-            gap: 16px;
-        }
-
-        .virt-space { position: relative; width: 100%; }
-        .virt-block {
-            position: absolute;
-            left: 0;
-            right: 0;
-        }
-        .virt-row.month-grid {
-            margin: 0;
+            grid-template-columns: repeat(8, 1fr);
+            gap: 10px;
             align-items: start;
         }
-        .virt-header.month-header { padding-top: 12px; padding-bottom: 12px; box-sizing: border-box; }
 
         .month-picker {
             position: sticky;
@@ -776,8 +765,8 @@
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes pinFadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
-        @media (max-width: 1600px) { .month-grid { grid-template-columns: repeat(4, 1fr); } }
-        @media (max-width: 1200px) { .month-grid { grid-template-columns: repeat(3, 1fr); } }
+        @media (max-width: 1600px) { .month-grid { grid-template-columns: repeat(7, 1fr); } }
+        @media (max-width: 1200px) { .month-grid { grid-template-columns: repeat(6, 1fr); gap: 8px; } }
 
         @media (max-width: 768px) {
             header {
@@ -805,8 +794,8 @@
                 padding: 6px 10px 40px;
             }
             .month-grid {
-                grid-template-columns: repeat(2, 1fr);
-                gap: 10px;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 8px;
             }
             .month-header {
                 padding: 10px 12px;
@@ -932,7 +921,7 @@
         }
 
         @media (max-width: 480px) {
-            .month-grid { gap: 8px; }
+            .month-grid { grid-template-columns: repeat(3, 1fr); gap: 6px; }
             .video-card { border-radius: 8px; }
             .controls .btn {
                 padding: 10px 4px;
@@ -1064,13 +1053,8 @@ const THUMB_CONCURRENCY = 6;
 const THUMB_RETRY_MAX = 3;
 const VIDEOS_PER_MONTH = 40;
 const VIDEOS_PER_LOAD = 40;
-const VIRT_OVERSCAN_ROWS = 3;
-const VIRT_HEADER_HEIGHT = 56;
-let virtRangeKey = '';
-let virtRaf = 0;
-let virtLoading = false;
-let virtLayout = null;
-let aspectByPath = {}; // path -> width/height
+let pageLoading = false;
+let scrollTicking = false;
 let thumbLoadPaused = false;
 let modalLoadToken = 0;
 let modalRetryCount = 0;
@@ -1214,6 +1198,7 @@ async function loadOlderVideos() {
     libraryHasMore = !!data.hasMore;
     const items = sortVideoList((data.videos || []).map(mapVideo));
     registerVideos(items);
+    const byMonth = {};
     items.forEach(video => {
         const key = getMonthKey(video.date);
         let summary = monthSummaries.find(s => s.month === key);
@@ -1223,17 +1208,21 @@ async function loadOlderVideos() {
             monthSummaries.sort((a, b) => b.month.localeCompare(a.month));
         }
         summary.count += 1;
-        collapsedMonths.delete(key);
-        const cache = monthVideosCache[key] || { items: [], total: 0, loading: false, hasMore: false };
-        if (!cache.items.some(item => item.path === video.path)) {
-            cache.items = sortVideoList(cache.items.concat([video]));
-        }
-        cache.total = Math.max(cache.total, cache.items.length);
-        monthVideosCache[key] = cache;
+        if (!byMonth[key]) byMonth[key] = [];
+        byMonth[key].push(video);
     });
     if (!items.length) libraryHasMore = false;
-    totalVideoCount = allVideos.length;
-    renderGrid();
+    totalVideoCount = Math.max(totalVideoCount, allVideos.length);
+    // Attach to existing caches only; do not auto-expand every month
+    Object.keys(byMonth).forEach(key => {
+        const cache = monthVideosCache[key] || { items: [], total: 0, loading: false, hasMore: true };
+        const add = byMonth[key].filter(v => !cache.items.some(x => x.path === v.path));
+        cache.items = sortVideoList(cache.items.concat(add));
+        cache.total = Math.max(cache.total, cache.items.length);
+        monthVideosCache[key] = cache;
+        if (!collapsedMonths.has(key) && add.length) appendVideosToMonth(key, add);
+    });
+    updateMonthPicker();
 }
 
 async function loadFromServer(isPoll = false) {
@@ -1274,22 +1263,19 @@ async function loadFromServer(isPoll = false) {
 }
 
 async function loadMonthVideos(monthKey, append = false) {
-    let cache = monthVideosCache[monthKey] || { items: [], total: 0, loading: false, hasMore: false };
+    let cache = monthVideosCache[monthKey] || { items: [], total: 0, loading: false, hasMore: true };
     if (cache.loading) return;
     if (!append && cache.items.length) {
-        renderVirtualGrid(true);
-        if (!virtLoading) maybeLoadMore();
+        renderGrid();
         return;
     }
-    if (append && cache.items.length && cache.hasMore === false) {
-        renderVirtualGrid(true);
-        return;
-    }
+    if (append && cache.hasMore === false) return;
 
     const offset = cache.items.length;
     cache.loading = true;
     monthVideosCache[monthKey] = cache;
-    renderVirtualGrid(true);
+    if (!append) renderGrid();
+    else showScrollLoader(true);
 
     try {
         const resp = await fetch(
@@ -1301,6 +1287,7 @@ async function loadMonthVideos(monthKey, append = false) {
         if (data.hasMore) libraryHasMore = true;
         const items = sortVideoList((data.videos || []).map(mapVideo));
         registerVideos(items);
+        const prevLen = cache.items.length;
         const merged = sortVideoList(cache.items.concat(items.filter(item => !cache.items.some(v => v.path === item.path))));
         const hasMore = !!data.hasMore && items.length > 0;
         monthVideosCache[monthKey] = {
@@ -1315,11 +1302,17 @@ async function loadMonthVideos(monthKey, append = false) {
                 summary.count = monthVideosCache[monthKey].total;
             }
         }
-        renderVirtualGrid(true);
-        if (!virtLoading) maybeLoadMore();
+        if (!append || !document.querySelector(`.month-section[data-month="${monthKey}"]`)) {
+            renderGrid();
+        } else {
+            appendVideosToMonth(monthKey, merged.slice(prevLen));
+            showScrollLoader(false);
+            updateMonthPicker(monthKey);
+        }
     } catch (err) {
         monthVideosCache[monthKey] = { ...cache, loading: false };
-        renderVirtualGrid(true);
+        showScrollLoader(false);
+        renderGrid();
         alert('Failed to load videos: ' + err.message);
     }
 }
@@ -1329,10 +1322,10 @@ async function loadSearchVideos(append = false) {
     if (!q) return;
     if (searchResults.loading) return;
     const offset = append ? searchResults.items.length : 0;
-    if (append && searchResults.items.length >= searchResults.total && searchResults.total > 0) return;
     searchResults.loading = true;
     if (!append) searchResults.items = [];
-    renderGrid();
+    if (!append) renderGrid();
+    else showScrollLoader(true);
 
     try {
         const resp = await fetch(
@@ -1343,42 +1336,44 @@ async function loadSearchVideos(append = false) {
         applyFfmpegFlag(data);
         const items = sortVideoList((data.videos || []).map(mapVideo));
         registerVideos(items);
+        const prevLen = append ? searchResults.items.length : 0;
         searchResults = {
-            items: append ? sortVideoList(searchResults.items.concat(items)) : items,
+            items: append ? searchResults.items.concat(items) : items,
             total: data.total || 0,
             loading: false,
+            hasMore: (append ? prevLen + items.length : items.length) < (data.total || 0),
         };
-        filteredVideos = searchResults.items;
-        renderGrid();
+        if (!append) renderGrid();
+        else {
+            appendVideosToMonth('search', searchResults.items.slice(prevLen));
+            showScrollLoader(false);
+        }
     } catch (err) {
         searchResults.loading = false;
+        showScrollLoader(false);
         renderGrid();
         alert('Search failed: ' + err.message);
     }
 }
 
-// ========== SORT & FILTER ==========
-function sortVideos() {
+function sortAndRender() {
     Object.keys(monthVideosCache).forEach(key => {
-        monthVideosCache[key].items = sortVideoList(monthVideosCache[key].items);
+        const cache = monthVideosCache[key];
+        if (cache?.items?.length) cache.items = sortVideoList(cache.items);
     });
-    if (searchResults.items.length) searchResults.items = sortVideoList(searchResults.items);
-    allVideos = sortVideoList(allVideos);
+    if (searchResults.items?.length) searchResults.items = sortVideoList(searchResults.items);
+    renderGrid();
 }
-
-function sortAndRender() { sortVideos(); renderGrid(); }
 
 async function filterVideos() {
     const q = document.getElementById('searchInput').value.toLowerCase().trim();
     monthVisibleCounts = {};
     if (slideshowActive) stopSlideshow(true);
-
     if (q) {
         searchMode = true;
         await loadSearchVideos(false);
         return;
     }
-
     searchMode = false;
     searchResults = { items: [], total: 0, loading: false };
     filteredVideos = [];
@@ -1389,9 +1384,14 @@ async function filterVideos() {
     else renderGrid();
 }
 
-// ========== RENDER ==========
 function getMonthKey(date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`; }
 function getMonthLabel(key) { const [y, m] = key.split('-'); return new Date(parseInt(y), parseInt(m)-1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }); }
+
+function syncHeaderOffset() {
+    const header = document.querySelector('header');
+    if (!header) return;
+    document.documentElement.style.setProperty('--header-h', `${header.offsetHeight}px`);
+}
 
 async function toggleMonth(key) {
     if (searchMode) return;
@@ -1400,15 +1400,9 @@ async function toggleMonth(key) {
         await loadMonthVideos(key);
     } else {
         collapsedMonths.add(key);
-        renderVirtualGrid(true);
+        renderGrid();
     }
     updateMonthPicker(key);
-}
-
-function syncHeaderOffset() {
-    const header = document.querySelector('header');
-    if (!header) return;
-    document.documentElement.style.setProperty('--header-h', `${header.offsetHeight}px`);
 }
 
 function updateMonthPicker(activeKey) {
@@ -1430,45 +1424,21 @@ function updateMonthPicker(activeKey) {
 
 async function selectMonth(key) {
     if (searchMode || !key) return;
-    // Focus one month at a time so choosing months stays clear while virtual scrolling
     monthSummaries.forEach(s => {
         if (s.month === key) collapsedMonths.delete(s.month);
         else collapsedMonths.add(s.month);
     });
+    // Reset month cache so we always start from first page for that month
+    monthVideosCache[key] = monthVideosCache[key] || { items: [], total: 0, loading: false, hasMore: true };
     updateMonthPicker(key);
-    await loadMonthVideos(key);
-    renderVirtualGrid(true);
-    requestAnimationFrame(() => {
-        const block = virtLayout?.blocks?.find(b => b.type === 'header' && b.key === key);
-        const grid = document.getElementById('videoGrid');
-        if (!block || !grid) return;
-        const headerH = document.querySelector('header')?.offsetHeight || 56;
-        const pickerH = document.getElementById('monthPicker')?.offsetHeight || 0;
-        const top = window.scrollY + grid.getBoundingClientRect().top + block.y - headerH - pickerH - 8;
-        window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
-    });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (!monthVideosCache[key].items.length) await loadMonthVideos(key);
+    else renderGrid();
 }
 
 function getMonthVisibleLimit(key, total) {
     if (!monthVisibleCounts[key]) monthVisibleCounts[key] = VIDEOS_PER_MONTH;
     return Math.min(monthVisibleCounts[key], total);
-}
-
-async function showMoreInMonth(key, event) {
-    event.stopPropagation();
-    if (searchMode || key === 'search') {
-        await loadSearchVideos(true);
-        return;
-    }
-    const summary = monthSummaries.find(s => s.month === key);
-    const cache = monthVideosCache[key] || { items: [] };
-    const isOldest = key === monthSummaries[monthSummaries.length - 1]?.month;
-    if (isOldest && libraryHasMore && cache.items.length >= (summary?.count || 0)) {
-        await loadOlderVideos();
-        return;
-    }
-    monthVisibleCounts[key] = (monthVisibleCounts[key] || VIDEOS_PER_MONTH) + VIDEOS_PER_LOAD;
-    await loadMonthVideos(key, true);
 }
 
 function queueThumbLoad(img) {
@@ -1542,17 +1512,6 @@ function observeThumbs(root) {
 function onThumbLoaded(img) {
     const ph = img.parentElement.querySelector('.thumbnail-placeholder');
     if (ph) ph.style.display = 'none';
-    const pathEnc = img.closest('[data-path]')?.dataset?.path;
-    if (pathEnc && img.naturalWidth > 0 && img.naturalHeight > 0) {
-        let path;
-        try { path = decodeURIComponent(pathEnc); } catch (_) { path = pathEnc; }
-        const next = img.naturalWidth / img.naturalHeight;
-        if (Math.abs((aspectByPath[path] || 0) - next) > 0.01) {
-            aspectByPath[path] = next;
-            virtRangeKey = '';
-            scheduleVirtualRender();
-        }
-    }
 }
 
 function fallbackThumbnail(img) {
@@ -1560,6 +1519,21 @@ function fallbackThumbnail(img) {
     img.style.display = 'none';
     const ph = img.parentElement?.querySelector('.thumbnail-placeholder');
     if (ph) ph.style.display = 'flex';
+}
+
+function showScrollLoader(show) {
+    let el = document.getElementById('scrollLoader');
+    if (!show) {
+        if (el) el.remove();
+        return;
+    }
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'scrollLoader';
+        el.className = 'month-loading';
+        el.innerHTML = '<div class="loading-spinner" style="margin:20px auto"></div>';
+        document.getElementById('videoGrid')?.appendChild(el);
+    }
 }
 
 function renderGrid() {
@@ -1578,7 +1552,7 @@ function renderGrid() {
             return;
         }
         stats.textContent = `${searchResults.items.length} of ${searchResults.total} results`;
-        renderVirtualGrid(true);
+        renderGroupedGrid();
         return;
     }
     if (!monthSummaries.length && !totalVideoCount) {
@@ -1587,54 +1561,39 @@ function renderGrid() {
         stats.textContent = '';
         return;
     }
-    stats.textContent = libraryHasMore
-        ? `Latest ${totalVideoCount} videos — scroll for older clips`
-        : `${totalVideoCount} videos — pick a month above or browse below` +
+    const active = monthSummaries.find(s => !collapsedMonths.has(s.month));
+    const cache = active ? (monthVideosCache[active.month] || {}) : {};
+    stats.textContent = cache.hasMore || libraryHasMore
+        ? `${cache.items?.length || 0} loaded — scroll for more`
+        : `${totalVideoCount || cache.items?.length || 0} videos` +
         (serverHasVthumb ? '' : ' (tap ▶ to play — thumbnails loading)');
     updateMonthPicker();
-    renderVirtualGrid(true);
+    renderGroupedGrid();
 }
 
-function getMonthSection(monthKey) {
-    return document.querySelector(`.month-header[data-month="${monthKey}"]`);
+function appendVideosToMonth(monthKey, videos) {
+    if (!videos.length) return;
+    const section = document.querySelector(`.month-section[data-month="${monthKey}"]`);
+    if (!section) {
+        renderGroupedGrid();
+        return;
+    }
+    let grid = section.querySelector('.month-grid');
+    if (!grid) {
+        grid = document.createElement('div');
+        grid.className = 'month-grid';
+        section.appendChild(grid);
+    }
+    section.querySelector('.month-loading')?.remove();
+    grid.insertAdjacentHTML('beforeend', videos.map(buildVideoCardHtml).join(''));
+    window._visibleVideos = (window._visibleVideos || []).concat(videos);
+    observeThumbs(grid);
 }
 
-function getGridMetrics() {
+function renderGroupedGrid() {
     const grid = document.getElementById('videoGrid');
-    const width = Math.max(grid.clientWidth, 320);
-    const w = window.innerWidth;
-    // More columns = smaller thumbnails
-    const cols = w <= 480 ? 3 : w <= 768 ? 4 : w <= 1200 ? 6 : w <= 1600 ? 7 : 8;
-    const gap = w <= 480 ? 6 : w <= 768 ? 8 : 10;
-    const colWidth = (width - gap * (cols - 1)) / cols;
-    return { cols, gap, colWidth, width };
-}
-
-function itemAspect(item, fallback = 16 / 9) {
-    return aspectByPath[item.path] || fallback;
-}
-
-function rowCardHeight(items, colWidth, fallbackAspect) {
-    let maxH = colWidth / fallbackAspect;
-    items.forEach(item => {
-        const h = colWidth / itemAspect(item, fallbackAspect);
-        if (h > maxH) maxH = h;
-    });
-    return maxH;
-}
-
-function loadedFeedVideos() {
-    if (searchMode) return searchResults.items.slice();
-    const out = [];
-    monthSummaries.forEach(summary => {
-        if (collapsedMonths.has(summary.month)) return;
-        out.push(...((monthVideosCache[summary.month] || {}).items || []));
-    });
-    return out;
-}
-
-function buildVirtualLayout() {
-    const { cols, gap, colWidth } = getGridMetrics();
+    let visibleVideos = [];
+    let html = '';
     const groups = searchMode
         ? [{ key: 'search', label: 'Search results', count: searchResults.total, items: searchResults.items, loading: searchResults.loading }]
         : monthSummaries.map(s => ({
@@ -1644,125 +1603,75 @@ function buildVirtualLayout() {
             items: (monthVideosCache[s.month] || {}).items || [],
             loading: (monthVideosCache[s.month] || {}).loading,
         }));
-    const blocks = [];
-    let y = 0;
+
     groups.forEach(group => {
         const collapsed = !searchMode && collapsedMonths.has(group.key);
-        blocks.push({ id: `h:${group.key}`, type: 'header', key: group.key, y, height: VIRT_HEADER_HEIGHT, group, collapsed });
-        y += VIRT_HEADER_HEIGHT;
-        if (collapsed) return;
-        const rows = Math.ceil(group.items.length / cols) || (group.loading ? 1 : 0);
-        for (let row = 0; row < rows; row += 1) {
-            const videos = group.items.slice(row * cols, row * cols + cols);
-            const cardHeight = rowCardHeight(videos, colWidth, 16 / 9);
-            const rowHeight = cardHeight + gap;
-            blocks.push({
-                id: `r:${group.key}:${row}`,
-                type: 'row',
-                key: group.key,
-                y,
-                height: rowHeight,
-                cardHeight,
-                videos,
-                loading: group.loading && !group.items.length && row === 0,
-            });
-            y += rowHeight;
+        html += `<div class="month-section" data-month="${group.key}">`;
+        html += `<div class="month-header" onclick="toggleMonth('${group.key}')"><span class="month-toggle">${collapsed ? '▶' : '▼'}</span><span class="month-label">${group.label}</span><span class="month-count">${group.count}</span><button type="button" class="month-random" title="Shuffle ${group.label}" onclick="startMonthRandom('${group.key}', event)">🎲 Random</button></div>`;
+        if (!collapsed) {
+            html += '<div class="month-grid">';
+            if (group.loading && !group.items.length) {
+                html += '<div class="month-loading" style="grid-column:1/-1"><div class="loading-spinner"></div></div>';
+            } else {
+                group.items.forEach(video => {
+                    visibleVideos.push(video);
+                    html += buildVideoCardHtml(video);
+                });
+            }
+            html += '</div>';
         }
-        if (group.loading && group.items.length) {
-            blocks.push({ id: `l:${group.key}`, type: 'loading', y, height: 48 });
-            y += 48;
-        }
+        html += `</div>`;
     });
-    const estRow = colWidth * 9 / 16 + gap;
-    return { blocks, totalHeight: Math.max(y, 1), cols, gap, cardHeight: colWidth * 9 / 16, rowHeight: estRow };
-}
 
-function renderVirtualGrid(force = false) {
-    const grid = document.getElementById('videoGrid');
-    if (!grid) return;
-    if (grid.querySelector('.empty-state, .loading-spinner') && !monthSummaries.length && !searchMode) return;
-    const layout = buildVirtualLayout();
-    virtLayout = layout;
-    const gridRect = grid.getBoundingClientRect();
-    const viewTop = -gridRect.top;
-    const viewBottom = viewTop + window.innerHeight;
-    const pad = layout.rowHeight * VIRT_OVERSCAN_ROWS;
-    const visible = layout.blocks.filter(block =>
-        block.y + block.height >= viewTop - pad && block.y <= viewBottom + pad
-    );
-    const rangeKey = `${visible[0]?.id || ''}|${visible[visible.length - 1]?.id || ''}|${layout.cols}|${layout.totalHeight}|${layout.blocks.length}`;
-    if (!force && rangeKey === virtRangeKey) return;
-    virtRangeKey = rangeKey;
-
-    const visibleVideos = loadedFeedVideos();
     window._visibleVideos = visibleVideos;
-
-    let html = `<div class="virt-space" style="height:${layout.totalHeight}px">`;
-    visible.forEach(block => {
-        if (block.type === 'header') {
-            const toggle = block.collapsed ? '▶' : '▼';
-            html += `<div class="month-header virt-block virt-header" data-month="${block.key}" style="top:${block.y}px;height:${block.height}px" onclick="toggleMonth('${block.key}')"><span class="month-toggle">${toggle}</span><span class="month-label">${block.group.label}</span><span class="month-count">${block.group.count}</span><button type="button" class="month-random" title="Shuffle ${block.group.label}" onclick="startMonthRandom('${block.key}', event)">🎲 Random</button></div>`;
-            return;
-        }
-        if (block.type === 'loading') {
-            html += `<div class="virt-block" style="top:${block.y}px;height:${block.height}px"><div class="loading-spinner" style="margin:10px auto"></div></div>`;
-            return;
-        }
-        html += `<div class="month-grid virt-block virt-row" data-month="${block.key}" style="top:${block.y}px;height:${block.cardHeight}px;gap:${layout.gap}px;grid-template-columns:repeat(${layout.cols},1fr)">`;
-        if (block.loading) html += '<div class="month-loading" style="grid-column:1/-1"><div class="loading-spinner"></div></div>';
-        else block.videos.forEach(video => { html += buildVideoCardHtml(video); });
-        html += '</div>';
-    });
-    html += '</div>';
     grid.innerHTML = html;
     observeThumbs(grid);
-    if (force && !searchMode) updateMonthPicker();
 }
 
 async function maybeLoadMore() {
-    if (virtLoading) return;
-    const grid = document.getElementById('videoGrid');
-    if (!grid || !virtLayout) return;
-    if (grid.getBoundingClientRect().bottom > window.innerHeight + 1200) return;
-    virtLoading = true;
-    let loaded = false;
+    if (pageLoading) return;
+    const remain = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
+    if (remain > 500) return;
+
+    pageLoading = true;
     try {
         if (searchMode) {
             if (searchResults.items.length < searchResults.total) {
                 await loadSearchVideos(true);
-                loaded = true;
             }
-        } else {
-            const expanded = monthSummaries.filter(summary => !collapsedMonths.has(summary.month));
-            const last = expanded[expanded.length - 1];
-            if (last) {
-                const cache = monthVideosCache[last.month] || { items: [], hasMore: false };
-                if (cache.hasMore || cache.items.length < (cache.total || last.count)) {
-                    await loadMonthVideos(last.month, true);
-                    loaded = true;
-                }
-            }
-            if (!loaded && libraryHasMore) {
+            return;
+        }
+        const active = monthSummaries.find(s => !collapsedMonths.has(s.month));
+        if (!active) return;
+        const cache = monthVideosCache[active.month] || { items: [], hasMore: false };
+        if (cache.hasMore !== false && (cache.hasMore || cache.items.length < (cache.total || active.count))) {
+            await loadMonthVideos(active.month, true);
+            return;
+        }
+        // Next collapsed month only when current month is exhausted
+        if (cache.hasMore === false) {
+            const idx = monthSummaries.findIndex(s => s.month === active.month);
+            const next = monthSummaries[idx + 1];
+            if (next) {
+                collapsedMonths.add(active.month);
+                collapsedMonths.delete(next.month);
+                updateMonthPicker(next.month);
+                await loadMonthVideos(next.month);
+            } else if (libraryHasMore) {
                 await loadOlderVideos();
-                loaded = true;
             }
         }
     } finally {
-        virtLoading = false;
-    }
-    if (loaded) {
-        requestAnimationFrame(() => {
-            const el = document.getElementById('videoGrid');
-            if (el && el.getBoundingClientRect().bottom <= window.innerHeight + 1200) maybeLoadMore();
-        });
+        pageLoading = false;
+        showScrollLoader(false);
     }
 }
 
-function scheduleVirtualRender() {
-    if (virtRaf) return;
-    virtRaf = requestAnimationFrame(() => {
-        virtRaf = 0;
-        renderVirtualGrid(false);
+function onScrollPage() {
+    if (scrollTicking) return;
+    scrollTicking = true;
+    requestAnimationFrame(() => {
+        scrollTicking = false;
         maybeLoadMore();
     });
 }
@@ -2402,16 +2311,12 @@ async function deleteVideoByPath(event, pathEnc) {
         const cache = monthVideosCache[key];
         cache.items = (cache.items || []).filter(item => item.path !== video.path);
     });
-    renderVirtualGrid(true);
+    renderGrid();
 }
 
 // ========== AUTO LOAD ==========
-window.addEventListener('scroll', scheduleVirtualRender, { passive: true });
-window.addEventListener('resize', () => {
-    virtRangeKey = '';
-    syncHeaderOffset();
-    scheduleVirtualRender();
-});
+window.addEventListener('scroll', onScrollPage, { passive: true });
+window.addEventListener('resize', syncHeaderOffset);
 syncHeaderOffset();
 loadFromServer();
 
