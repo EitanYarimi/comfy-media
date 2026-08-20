@@ -392,7 +392,7 @@ async function loadFromServer(isPoll = false) {
         document.getElementById('stats').textContent = 'Scanning library...';
     }
     try {
-        const resp = await fetch(serverBaseUrl + '/api/photos?summary=1');
+        const resp = await fetch(serverBaseUrl + '/api/photos?summary=1&refresh=1');
         if (!resp.ok) {
             throw new Error(`Server returned ${resp.status}. Is video_server.py running?`);
         }
@@ -579,10 +579,10 @@ async function selectMonth(key) {
         if (s.month === key) collapsedMonths.delete(s.month);
         else collapsedMonths.add(s.month);
     });
+    monthPhotosCache[key] = { items: [], total: 0, loading: false, hasMore: true };
     updateMonthPicker(key);
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    if (!(monthPhotosCache[key]?.items?.length)) await loadMonthPhotos(key);
-    else renderGrid();
+    await loadMonthPhotos(key);
 }
 
 function getMonthVisibleLimit(key, total) {
