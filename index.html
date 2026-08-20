@@ -255,16 +255,23 @@
             gap: 16px;
         }
 
+        .virt-space { position: relative; width: 100%; }
+        .virt-block {
+            position: absolute;
+            left: 0;
+            right: 0;
+        }
+        .virt-row.month-grid { margin: 0; }
+        .virt-header.month-header { padding-top: 12px; padding-bottom: 12px; box-sizing: border-box; }
+
         .video-card {
             border-radius: 16px;
             overflow: hidden;
             position: relative;
             background: #141414;
-            opacity: 0;
-            animation: pinFadeIn 0.45s ease forwards;
+            opacity: 1;
             transition: transform 0.25s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.25s ease;
             box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
-            will-change: transform;
         }
 
         .video-card:hover {
@@ -276,6 +283,7 @@
         .thumbnail-container {
             position: relative;
             width: 100%;
+            aspect-ratio: 16 / 9;
             background: #0a0a0a;
             overflow: hidden;
             cursor: pointer;
@@ -286,8 +294,10 @@
         .thumbnail-container img {
             display: block;
             width: 100%;
-            height: auto;
-            vertical-align: bottom;
+            height: 100%;
+            object-fit: cover;
+            position: absolute;
+            inset: 0;
         }
 
         .thumbnail-container img.thumb-lazy {
@@ -296,23 +306,16 @@
         }
 
         .thumbnail-placeholder {
+            position: absolute;
+            inset: 0;
             width: 100%;
-            aspect-ratio: 16 / 9;
-            min-height: 80px;
+            min-height: 0;
             display: flex;
             align-items: center;
             justify-content: center;
             background: linear-gradient(135deg, #141414 0%, #1c1c1c 100%);
             color: #333;
             font-size: 2rem;
-        }
-
-        /* Server thumb mode: img sets height, placeholder overlays it */
-        .thumbnail-container:has(.video-thumb) .thumbnail-placeholder {
-            position: absolute;
-            inset: 0;
-            aspect-ratio: unset;
-            min-height: 0;
         }
 
         .video-overlay {
@@ -1011,6 +1014,12 @@ const THUMB_CONCURRENCY = 6;
 const THUMB_RETRY_MAX = 3;
 const VIDEOS_PER_MONTH = 40;
 const VIDEOS_PER_LOAD = 40;
+const VIRT_OVERSCAN_ROWS = 3;
+const VIRT_HEADER_HEIGHT = 56;
+let virtRangeKey = '';
+let virtRaf = 0;
+let virtLoading = false;
+let virtLayout = null;
 let thumbLoadPaused = false;
 let modalLoadToken = 0;
 let modalRetryCount = 0;
@@ -1163,13 +1172,15 @@ async function loadOlderVideos() {
             monthSummaries.sort((a, b) => b.month.localeCompare(a.month));
         }
         summary.count += 1;
-        const cache = monthVideosCache[key] || { items: [], total: 0, loading: false };
+        collapsedMonths.delete(key);
+        const cache = monthVideosCache[key] || { items: [], total: 0, loading: false, hasMore: false };
         if (!cache.items.some(item => item.path === video.path)) {
             cache.items = sortVideoList(cache.items.concat([video]));
         }
         cache.total = Math.max(cache.total, cache.items.length);
         monthVideosCache[key] = cache;
     });
+    if (!items.length) libraryHasMore = false;
     totalVideoCount = allVideos.length;
     renderGrid();
 }
@@ -1211,41 +1222,27 @@ async function loadFromServer(isPoll = false) {
     }
 }
 
-async function loadMonthVideos(monthKey) {
-    const groupCount = monthSummaries.find(s => s.month === monthKey)?.count || 0;
-    const needed = getMonthVisibleLimit(monthKey, groupCount);
-    let cache = monthVideosCache[monthKey] || { items: [], total: 0, loading: false };
+async function loadMonthVideos(monthKey, append = false) {
+    let cache = monthVideosCache[monthKey] || { items: [], total: 0, loading: false, hasMore: false };
     if (cache.loading) return;
-
-    const rendered = getMonthRenderedCount(monthKey);
-    const showCount = Math.min(needed, cache.items.length);
-
-    if (cache.items.length >= needed) {
-        if (!getMonthSection(monthKey)) {
-            renderGroupedGrid();
-            return;
-        }
-        if (rendered < showCount) {
-            appendVideosToMonth(monthKey, cache.items.slice(rendered, showCount));
-        }
-        updateLoadMoreButton(monthKey, groupCount - needed);
+    if (!append && cache.items.length) {
+        renderVirtualGrid(true);
+        if (!virtLoading) maybeLoadMore();
+        return;
+    }
+    if (append && cache.items.length && cache.hasMore === false) {
+        renderVirtualGrid(true);
         return;
     }
 
     const offset = cache.items.length;
-    const limit = Math.max(VIDEOS_PER_MONTH, needed - offset);
     cache.loading = true;
     monthVideosCache[monthKey] = cache;
-
-    if (getMonthSection(monthKey)) {
-        setMonthLoading(monthKey, rendered === 0);
-    } else {
-        renderGroupedGrid();
-    }
+    renderVirtualGrid(true);
 
     try {
         const resp = await fetch(
-            `${serverBaseUrl}/api/videos?month=${encodeURIComponent(monthKey)}&offset=${offset}&limit=${limit}`
+            `${serverBaseUrl}/api/videos?month=${encodeURIComponent(monthKey)}&offset=${offset}&limit=${VIDEOS_PER_LOAD}`
         );
         if (!resp.ok) throw new Error('Failed to load month');
         const data = await resp.json();
@@ -1253,32 +1250,25 @@ async function loadMonthVideos(monthKey) {
         if (data.hasMore) libraryHasMore = true;
         const items = sortVideoList((data.videos || []).map(mapVideo));
         registerVideos(items);
-        const newCache = monthVideosCache[monthKey] = {
-            items: sortVideoList(cache.items.concat(items)),
-            total: data.hasMore ? Math.max(data.total || 0, offset + items.length + 1) : (data.total || items.length),
+        const merged = sortVideoList(cache.items.concat(items.filter(item => !cache.items.some(v => v.path === item.path))));
+        const hasMore = !!data.hasMore && items.length > 0;
+        monthVideosCache[monthKey] = {
+            items: merged,
+            total: hasMore ? Math.max(data.total || 0, merged.length + 1) : (data.total || merged.length),
             loading: false,
+            hasMore,
         };
-        if (data.hasMore) {
+        if (hasMore) {
             const summary = monthSummaries.find(s => s.month === monthKey);
-            if (summary && newCache.total > summary.count) summary.count = newCache.total;
-        }
-        const newNeeded = getMonthVisibleLimit(monthKey, groupCount);
-        const newShow = Math.min(newNeeded, newCache.items.length);
-        const nowRendered = getMonthRenderedCount(monthKey);
-
-        if (!getMonthSection(monthKey)) {
-            renderGroupedGrid();
-        } else {
-            setMonthLoading(monthKey, false);
-            if (nowRendered < newShow) {
-                appendVideosToMonth(monthKey, newCache.items.slice(nowRendered, newShow));
+            if (summary && monthVideosCache[monthKey].total > summary.count) {
+                summary.count = monthVideosCache[monthKey].total;
             }
-            const count = monthSummaries.find(s => s.month === monthKey)?.count || newCache.total;
-            updateLoadMoreButton(monthKey, Math.max(0, count - newNeeded));
         }
+        renderVirtualGrid(true);
+        if (!virtLoading) maybeLoadMore();
     } catch (err) {
         monthVideosCache[monthKey] = { ...cache, loading: false };
-        setMonthLoading(monthKey, false);
+        renderVirtualGrid(true);
         alert('Failed to load videos: ' + err.message);
     }
 }
@@ -1286,16 +1276,12 @@ async function loadMonthVideos(monthKey) {
 async function loadSearchVideos(append = false) {
     const q = document.getElementById('searchInput').value.toLowerCase().trim();
     if (!q) return;
+    if (searchResults.loading) return;
     const offset = append ? searchResults.items.length : 0;
+    if (append && searchResults.items.length >= searchResults.total && searchResults.total > 0) return;
     searchResults.loading = true;
     if (!append) searchResults.items = [];
-
-    if (!append || !getMonthSection('search')) {
-        renderGrid();
-    } else {
-        setMonthLoading('search', false);
-        document.getElementById('stats').textContent = `${searchResults.items.length} of ${searchResults.total} results`;
-    }
+    renderGrid();
 
     try {
         const resp = await fetch(
@@ -1306,24 +1292,16 @@ async function loadSearchVideos(append = false) {
         applyFfmpegFlag(data);
         const items = sortVideoList((data.videos || []).map(mapVideo));
         registerVideos(items);
-        const prevCount = append ? searchResults.items.length : 0;
         searchResults = {
             items: append ? sortVideoList(searchResults.items.concat(items)) : items,
             total: data.total || 0,
             loading: false,
         };
         filteredVideos = searchResults.items;
-        document.getElementById('stats').textContent = `${searchResults.items.length} of ${searchResults.total} results`;
-
-        if (!append || !getMonthSection('search')) {
-            renderGrid();
-        } else {
-            const newItems = searchResults.items.slice(prevCount);
-            appendVideosToMonth('search', newItems);
-            updateLoadMoreButton('search', searchResults.total - searchResults.items.length);
-        }
+        renderGrid();
     } catch (err) {
         searchResults.loading = false;
+        renderGrid();
         alert('Search failed: ' + err.message);
     }
 }
@@ -1371,7 +1349,7 @@ async function toggleMonth(key) {
         await loadMonthVideos(key);
     } else {
         collapsedMonths.add(key);
-        renderGroupedGrid();
+        renderVirtualGrid(true);
     }
 }
 
@@ -1394,7 +1372,7 @@ async function showMoreInMonth(key, event) {
         return;
     }
     monthVisibleCounts[key] = (monthVisibleCounts[key] || VIDEOS_PER_MONTH) + VIDEOS_PER_LOAD;
-    await loadMonthVideos(key);
+    await loadMonthVideos(key, true);
 }
 
 function queueThumbLoad(img) {
@@ -1492,7 +1470,7 @@ function renderGrid() {
             return;
         }
         stats.textContent = `${searchResults.items.length} of ${searchResults.total} results`;
-        renderGroupedGrid();
+        renderVirtualGrid(true);
         return;
     }
     if (!monthSummaries.length && !totalVideoCount) {
@@ -1501,70 +1479,165 @@ function renderGrid() {
         return;
     }
     stats.textContent = libraryHasMore
-        ? `Latest ${totalVideoCount} videos — older clips load when you ask`
+        ? `Latest ${totalVideoCount} videos — scroll for older clips`
         : `${totalVideoCount} videos — expand a month or browse the latest below` +
         (serverHasVthumb ? '' : ' (tap ▶ to play — thumbnails loading)');
-    renderGroupedGrid();
+    renderVirtualGrid(true);
 }
 
 function getMonthSection(monthKey) {
-    return document.querySelector(`.month-section[data-month="${monthKey}"]`);
+    return document.querySelector(`.month-header[data-month="${monthKey}"]`);
 }
 
-function getMonthRenderedCount(monthKey) {
-    const section = getMonthSection(monthKey);
-    return section ? section.querySelectorAll('.video-card').length : 0;
+function getGridMetrics() {
+    const grid = document.getElementById('videoGrid');
+    const width = Math.max(grid.clientWidth, 320);
+    const w = window.innerWidth;
+    const cols = w <= 768 ? 2 : w <= 1200 ? 3 : w <= 1600 ? 4 : 5;
+    const gap = w <= 480 ? 8 : w <= 768 ? 10 : 16;
+    const colWidth = (width - gap * (cols - 1)) / cols;
+    const cardHeight = colWidth * 9 / 16;
+    return { cols, gap, cardHeight, rowHeight: cardHeight + gap, width };
 }
 
-function ensureMonthGrid(monthKey) {
-    const section = getMonthSection(monthKey);
-    if (!section) return null;
-    let grid = section.querySelector('.month-grid');
-    if (!grid) {
-        grid = document.createElement('div');
-        grid.className = 'month-grid';
-        const btn = section.querySelector('.load-more-btn');
-        if (btn) section.insertBefore(grid, btn);
-        else section.appendChild(grid);
-    }
-    section.querySelector('.month-loading')?.remove();
-    return grid;
+function loadedFeedVideos() {
+    if (searchMode) return searchResults.items.slice();
+    const out = [];
+    monthSummaries.forEach(summary => {
+        if (collapsedMonths.has(summary.month)) return;
+        out.push(...((monthVideosCache[summary.month] || {}).items || []));
+    });
+    return out;
 }
 
-function setMonthLoading(monthKey, show) {
-    const section = getMonthSection(monthKey);
-    if (!section) return;
-    section.querySelector('.month-loading')?.remove();
-    if (!show) return;
-    const rendered = getMonthRenderedCount(monthKey);
-    if (rendered > 0) return;
-    const el = document.createElement('div');
-    el.className = 'month-loading';
-    el.innerHTML = '<div class="loading-spinner"></div>';
-    const grid = section.querySelector('.month-grid');
-    if (grid) section.insertBefore(el, grid);
-    else section.appendChild(el);
-}
-
-function updateLoadMoreButton(monthKey, remaining) {
-    const section = getMonthSection(monthKey);
-    if (!section) return;
-    let btn = section.querySelector('.load-more-btn');
-    if (remaining > 0) {
-        const label = `Show ${remaining} more`;
-        if (btn) {
-            btn.textContent = label;
-            btn.style.display = '';
-        } else {
-            btn = document.createElement('button');
-            btn.className = 'load-more-btn';
-            btn.textContent = label;
-            btn.addEventListener('click', (e) => showMoreInMonth(monthKey, e));
-            section.appendChild(btn);
+function buildVirtualLayout() {
+    const { cols, gap, cardHeight, rowHeight } = getGridMetrics();
+    const groups = searchMode
+        ? [{ key: 'search', label: 'Search results', count: searchResults.total, items: searchResults.items, loading: searchResults.loading }]
+        : monthSummaries.map(s => ({
+            key: s.month,
+            label: getMonthLabel(s.month),
+            count: s.count,
+            items: (monthVideosCache[s.month] || {}).items || [],
+            loading: (monthVideosCache[s.month] || {}).loading,
+        }));
+    const blocks = [];
+    let y = 0;
+    groups.forEach(group => {
+        const collapsed = !searchMode && collapsedMonths.has(group.key);
+        blocks.push({ id: `h:${group.key}`, type: 'header', key: group.key, y, height: VIRT_HEADER_HEIGHT, group, collapsed });
+        y += VIRT_HEADER_HEIGHT;
+        if (collapsed) return;
+        const rows = Math.ceil(group.items.length / cols) || (group.loading ? 1 : 0);
+        for (let row = 0; row < rows; row += 1) {
+            const videos = group.items.slice(row * cols, row * cols + cols);
+            blocks.push({
+                id: `r:${group.key}:${row}`,
+                type: 'row',
+                key: group.key,
+                y,
+                height: rowHeight,
+                cardHeight,
+                videos,
+                loading: group.loading && !group.items.length && row === 0,
+            });
+            y += rowHeight;
         }
-    } else if (btn) {
-        btn.remove();
+        if (group.loading && group.items.length) {
+            blocks.push({ id: `l:${group.key}`, type: 'loading', y, height: 48 });
+            y += 48;
+        }
+    });
+    return { blocks, totalHeight: Math.max(y, 1), cols, gap, cardHeight, rowHeight };
+}
+
+function renderVirtualGrid(force = false) {
+    const grid = document.getElementById('videoGrid');
+    if (!grid) return;
+    if (grid.querySelector('.empty-state, .loading-spinner') && !monthSummaries.length && !searchMode) return;
+    const layout = buildVirtualLayout();
+    virtLayout = layout;
+    const gridRect = grid.getBoundingClientRect();
+    const viewTop = -gridRect.top;
+    const viewBottom = viewTop + window.innerHeight;
+    const pad = layout.rowHeight * VIRT_OVERSCAN_ROWS;
+    const visible = layout.blocks.filter(block =>
+        block.y + block.height >= viewTop - pad && block.y <= viewBottom + pad
+    );
+    const rangeKey = `${visible[0]?.id || ''}|${visible[visible.length - 1]?.id || ''}|${layout.cols}|${layout.totalHeight}|${layout.blocks.length}`;
+    if (!force && rangeKey === virtRangeKey) return;
+    virtRangeKey = rangeKey;
+
+    const visibleVideos = loadedFeedVideos();
+    window._visibleVideos = visibleVideos;
+
+    let html = `<div class="virt-space" style="height:${layout.totalHeight}px">`;
+    visible.forEach(block => {
+        if (block.type === 'header') {
+            const toggle = block.collapsed ? '▶' : '▼';
+            html += `<div class="month-header virt-block virt-header" data-month="${block.key}" style="top:${block.y}px;height:${block.height}px" onclick="toggleMonth('${block.key}')"><span class="month-toggle">${toggle}</span><span class="month-label">${block.group.label}</span><span class="month-count">${block.group.count}</span><button type="button" class="month-random" title="Shuffle ${block.group.label}" onclick="startMonthRandom('${block.key}', event)">🎲 Random</button></div>`;
+            return;
+        }
+        if (block.type === 'loading') {
+            html += `<div class="virt-block" style="top:${block.y}px;height:${block.height}px"><div class="loading-spinner" style="margin:10px auto"></div></div>`;
+            return;
+        }
+        html += `<div class="month-grid virt-block virt-row" data-month="${block.key}" style="top:${block.y}px;height:${block.cardHeight}px;gap:${layout.gap}px;grid-template-columns:repeat(${layout.cols},1fr)">`;
+        if (block.loading) html += '<div class="month-loading" style="grid-column:1/-1"><div class="loading-spinner"></div></div>';
+        else block.videos.forEach(video => { html += buildVideoCardHtml(video); });
+        html += '</div>';
+    });
+    html += '</div>';
+    grid.innerHTML = html;
+    observeThumbs(grid);
+}
+
+async function maybeLoadMore() {
+    if (virtLoading) return;
+    const grid = document.getElementById('videoGrid');
+    if (!grid || !virtLayout) return;
+    if (grid.getBoundingClientRect().bottom > window.innerHeight + 1200) return;
+    virtLoading = true;
+    let loaded = false;
+    try {
+        if (searchMode) {
+            if (searchResults.items.length < searchResults.total) {
+                await loadSearchVideos(true);
+                loaded = true;
+            }
+        } else {
+            const expanded = monthSummaries.filter(summary => !collapsedMonths.has(summary.month));
+            const last = expanded[expanded.length - 1];
+            if (last) {
+                const cache = monthVideosCache[last.month] || { items: [], hasMore: false };
+                if (cache.hasMore || cache.items.length < (cache.total || last.count)) {
+                    await loadMonthVideos(last.month, true);
+                    loaded = true;
+                }
+            }
+            if (!loaded && libraryHasMore) {
+                await loadOlderVideos();
+                loaded = true;
+            }
+        }
+    } finally {
+        virtLoading = false;
     }
+    if (loaded) {
+        requestAnimationFrame(() => {
+            const el = document.getElementById('videoGrid');
+            if (el && el.getBoundingClientRect().bottom <= window.innerHeight + 1200) maybeLoadMore();
+        });
+    }
+}
+
+function scheduleVirtualRender() {
+    if (virtRaf) return;
+    virtRaf = requestAnimationFrame(() => {
+        virtRaf = 0;
+        renderVirtualGrid(false);
+        maybeLoadMore();
+    });
 }
 
 function buildVideoCardHtml(video) {
@@ -1589,62 +1662,6 @@ function buildVideoCardHtml(video) {
             </div>
         </div>
     </div>`;
-}
-
-function appendVideosToMonth(monthKey, videos) {
-    if (!videos.length) return;
-    const grid = ensureMonthGrid(monthKey);
-    if (!grid) return;
-    grid.insertAdjacentHTML('beforeend', videos.map(buildVideoCardHtml).join(''));
-    window._visibleVideos = (window._visibleVideos || []).concat(videos);
-    observeThumbs(grid);
-}
-
-function renderGroupedGrid() {
-    const grid = document.getElementById('videoGrid');
-
-    let visibleVideos = [];
-    let html = '';
-    const groups = searchMode
-        ? [{ key: 'search', label: 'Search results', count: searchResults.total, items: searchResults.items, loading: searchResults.loading }]
-        : monthSummaries.map(s => ({
-            key: s.month,
-            label: getMonthLabel(s.month),
-            count: s.count,
-            items: (monthVideosCache[s.month] || {}).items || [],
-            loading: (monthVideosCache[s.month] || {}).loading,
-        }));
-
-    groups.forEach(group => {
-        const collapsed = !searchMode && collapsedMonths.has(group.key);
-        html += `<div class="month-section" data-month="${group.key}">`;
-        html += `<div class="month-header" onclick="toggleMonth('${group.key}')"><span class="month-toggle">${collapsed ? '▶' : '▼'}</span><span class="month-label">${group.label}</span><span class="month-count">${group.count}</span><button type="button" class="month-random" title="Shuffle ${group.label}" onclick="startMonthRandom('${group.key}', event)">🎲 Random</button></div>`;
-        if (!collapsed) {
-            const limit = searchMode ? searchResults.items.length : getMonthVisibleLimit(group.key, group.count);
-            const shown = group.items.slice(0, limit);
-            const remaining = group.count - shown.length;
-            html += '<div class="month-grid">';
-            if (group.loading && !shown.length) {
-                html += '<div class="month-loading"><div class="loading-spinner"></div></div>';
-            }
-            shown.forEach(video => {
-                visibleVideos.push(video);
-                html += buildVideoCardHtml(video);
-            });
-            html += '</div>';
-            const isOldest = !searchMode && group.key === monthSummaries[monthSummaries.length - 1]?.month;
-            if (remaining > 0 || (isOldest && libraryHasMore)) {
-                const loadKey = searchMode ? 'search' : group.key;
-                const label = remaining > 0 ? `Show ${remaining} more` : 'Load older videos';
-                html += `<button class="load-more-btn" onclick="showMoreInMonth('${loadKey}', event)">${label}</button>`;
-            }
-        }
-        html += `</div>`;
-    });
-
-    window._visibleVideos = visibleVideos;
-    grid.innerHTML = html;
-    observeThumbs();
 }
 
 // ========== THUMBNAILS (fallback when ffmpeg/server thumb unavailable) ==========
@@ -2254,11 +2271,19 @@ async function deleteVideoByPath(event, pathEnc) {
     } catch (err) { alert('Delete failed: ' + err.message); return; }
     allVideos.splice(allVideos.indexOf(video), 1);
     const fi = filteredVideos.indexOf(video); if (fi > -1) filteredVideos.splice(fi, 1);
-    const card = document.querySelector(`.video-card[data-path="${pathEnc}"]`); if (card) card.remove();
-    document.getElementById('stats').textContent = `${filteredVideos.length} of ${allVideos.length} videos`;
+    Object.keys(monthVideosCache).forEach(key => {
+        const cache = monthVideosCache[key];
+        cache.items = (cache.items || []).filter(item => item.path !== video.path);
+    });
+    renderVirtualGrid(true);
 }
 
 // ========== AUTO LOAD ==========
+window.addEventListener('scroll', scheduleVirtualRender, { passive: true });
+window.addEventListener('resize', () => {
+    virtRangeKey = '';
+    scheduleVirtualRender();
+});
 loadFromServer();
 
 document.addEventListener('visibilitychange', () => {
