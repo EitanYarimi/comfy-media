@@ -1302,9 +1302,12 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 error = result.get('error') or drive.last_error
                 if summary:
                     loaded = result.get('loaded') or []
+                    months = result.get('months')
+                    if not months:
+                        months = media_month_summary(loaded)
                     respond_json(self, {
                         'total': result.get('total', len(loaded)),
-                        'months': media_month_summary(loaded),
+                        'months': months,
                         'ffmpeg': bool(_ffmpeg_path),
                         'vthumb': vthumb_available(),
                         'indexing': False,

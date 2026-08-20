@@ -51,6 +51,31 @@ def month_utc_bounds(month):
     return start, end
 
 
+def month_key_from_ts(modified_ts):
+    dt = datetime.fromtimestamp(float(modified_ts), tz=timezone.utc)
+    return f'{dt.year}-{dt.month:02d}'
+
+
+def months_between_keys(oldest_key, newest_key):
+    """Inclusive YYYY-MM range, newest first."""
+    if not oldest_key or not newest_key:
+        return []
+    oy, om = map(int, oldest_key.split('-'))
+    ny, nm = map(int, newest_key.split('-'))
+    if (oy, om) > (ny, nm):
+        oy, om, ny, nm = ny, nm, oy, om
+    keys = []
+    y, m = oy, om
+    while (y, m) <= (ny, nm):
+        keys.append(f'{y}-{m:02d}')
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+    keys.reverse()
+    return keys
+
+
 class DriveStorage:
     """On-demand gateway over a shared Drive folder."""
 
@@ -75,6 +100,7 @@ class DriveStorage:
         self._videos_token = None
         self._videos_complete = False
         self._month_state = {}
+        self._month_keys = None
         self._photos_started = False
         self._list_lock = threading.Lock()
 
@@ -263,6 +289,43 @@ class DriveStorage:
                 used_paths.add(item['path'])
             self._videos.sort(key=lambda video: video['modified'], reverse=True)
 
+    def _discover_month_keys(self):
+        """Build the full month list from oldest+newest video only (2 Drive calls)."""
+        if self._month_keys is not None:
+            return list(self._month_keys)
+        self._ensure_root()
+        newest_resp = self._query_videos(page_size=1)
+        newest_files = newest_resp.get('files') or []
+        if not newest_files:
+            self._month_keys = []
+            return []
+        newest_ts = _parse_drive_time(newest_files[0].get('modifiedTime'))
+        oldest_resp = self._drive_list(
+            q=VIDEO_FILE_QUERY,
+            fields='files(id, modifiedTime)',
+            page_size=1,
+            order_by='modifiedTime',
+        )
+        oldest_files = oldest_resp.get('files') or []
+        oldest_ts = (
+            _parse_drive_time(oldest_files[0].get('modifiedTime'))
+            if oldest_files else newest_ts
+        )
+        keys = months_between_keys(month_key_from_ts(oldest_ts), month_key_from_ts(newest_ts))
+        self._month_keys = keys
+        return list(keys)
+
+    def _months_payload(self, loaded):
+        """Months from oldest→newest span; counts filled only for already-loaded items."""
+        counts = {}
+        for item in loaded or []:
+            key = month_key_from_ts(item['modified'])
+            counts[key] = counts.get(key, 0) + 1
+        keys = self._discover_month_keys()
+        if not keys and counts:
+            keys = sorted(counts.keys(), reverse=True)
+        return [{'month': key, 'count': counts.get(key, 0)} for key in keys]
+
     def _fill_recent(self, min_count):
         self._ensure_root()
         while True:
@@ -346,9 +409,11 @@ class DriveStorage:
                 complete = self._videos_complete
             if summary:
                 page = loaded[:VIDEO_PAGE_SIZE]
+                months = self._months_payload(page)
                 return {
                     'videos': page,
                     'loaded': page,
+                    'months': months,
                     'total': len(page),
                     'hasMore': not complete,
                     'error': None,
@@ -357,6 +422,7 @@ class DriveStorage:
             return {
                 'videos': page,
                 'loaded': loaded,
+                'months': self._months_payload(loaded) if self._month_keys is not None else None,
                 'total': len(loaded),
                 'hasMore': not complete,
                 'error': None,
