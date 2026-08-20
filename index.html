@@ -1220,6 +1220,7 @@ async function loadOlderVideos() {
     updateMonthPicker();
 }
 
+let indexPollTimer = null;
 async function loadFromServer(isPoll = false, forceRefresh = false) {
     if (slideshowActive && !isPoll) stopSlideshow(true);
     if (!isPoll) {
@@ -1233,8 +1234,8 @@ async function loadFromServer(isPoll = false, forceRefresh = false) {
         monthVisibleCounts = {};
         libraryHasMore = false;
         document.getElementById('stats').textContent = forceRefresh
-            ? 'Refreshing from Drive...'
-            : 'Loading latest videos...';
+            ? 'Checking this month for new videos...'
+            : 'Loading library...';
     }
     try {
         const url = forceRefresh
@@ -1251,8 +1252,21 @@ async function loadFromServer(isPoll = false, forceRefresh = false) {
         applyVideosSummary(data);
         if (!isPoll) setupDefaultExpandedMonths();
         updateMonthPicker();
+        if (data.indexing) {
+            document.getElementById('stats').textContent =
+                (totalVideoCount ? `${totalVideoCount} videos — ` : '') + 'scanning Google Drive (one-time)…';
+            if (!indexPollTimer) {
+                indexPollTimer = setTimeout(() => { indexPollTimer = null; loadFromServer(true); }, 2500);
+            }
+        }
         if (activeMonth) {
-            await loadMonthVideos(activeMonth);
+            // Polling must not wipe/re-render the grid — that causes scroll flicker
+            const have = monthVideosCache[activeMonth]?.items?.length;
+            if (!(isPoll && have)) {
+                await loadMonthVideos(activeMonth);
+            }
+        } else if (data.indexing) {
+            document.getElementById('videoGrid').innerHTML = '<div class="loading-spinner"></div>';
         } else {
             renderGrid();
         }

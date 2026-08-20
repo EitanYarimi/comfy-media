@@ -5,6 +5,7 @@ import json
 import os
 import re
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,6 +23,11 @@ _VIDEO_EXT_QUERY = ' or '.join(
     f"fileExtension='{ext.lstrip('.')}'" for ext in sorted(VIDEO_EXTENSIONS)
 )
 VIDEO_FILE_QUERY = f"trashed=false and (mimeType contains 'video/' or {_VIDEO_EXT_QUERY})"
+_IMAGE_EXT_QUERY = ' or '.join(
+    f"fileExtension='{ext.lstrip('.')}'" for ext in sorted(IMAGE_EXTENSIONS)
+)
+IMAGE_FILE_QUERY = f"trashed=false and (mimeType contains 'image/' or {_IMAGE_EXT_QUERY})"
+INDEX_ITEM_KEYS = ('path', 'name', 'id', 'size', 'modified', 'mime', 'thumbnailLink', 'hasThumbnail')
 
 
 def _clean_id(value):
@@ -82,6 +88,10 @@ class DriveStorage:
     def __init__(self, cache_root: Path, video_dir: str, photo_dirs: list[str]):
         self.thumb_cache = cache_root / 'drive_thumbs'
         self.thumb_cache.mkdir(parents=True, exist_ok=True)
+        self.index_dir = Path(cache_root) / 'drive_index'
+        self.index_dir.mkdir(parents=True, exist_ok=True)
+        self._video_index_path = self.index_dir / 'videos.json'
+        self._photo_index_path = self.index_dir / 'photos.json'
         self.video_prefix = video_dir.replace('\\', '/').strip('/')
         self.photo_prefixes = [p.replace('\\', '/').strip('/') for p in photo_dirs]
         self.root_folder_id = _clean_id(os.environ.get('DRIVE_ROOT_FOLDER_ID', ''))
@@ -99,10 +109,14 @@ class DriveStorage:
         self.photos_indexing = False
         self._videos_token = None
         self._videos_complete = False
+        self._videos_started = False
+        self._photos_complete = False
         self._month_state = {}
         self._month_keys = None
         self._photos_started = False
         self._list_lock = threading.Lock()
+        self._video_scan_lock = threading.Lock()
+        self._load_persisted_indexes()
 
     def _build_clients(self):
         from google.auth.transport.requests import AuthorizedSession
@@ -125,6 +139,140 @@ class DriveStorage:
             service = build('drive', 'v3', credentials=creds, cache_discovery=False)
         session = AuthorizedSession(creds)
         return creds, service, session
+
+    def _serialize_item(self, item):
+        return {key: item.get(key) for key in INDEX_ITEM_KEYS}
+
+    def _read_index_file(self, path):
+        try:
+            if not path.is_file():
+                return None
+            data = json.loads(path.read_text(encoding='utf-8'))
+            if not isinstance(data, list):
+                return None
+            items = []
+            for raw in data:
+                if not isinstance(raw, dict) or not raw.get('id'):
+                    continue
+                item = {key: raw.get(key) for key in INDEX_ITEM_KEYS}
+                item['size'] = int(item.get('size') or 0)
+                item['modified'] = float(item.get('modified') or 0)
+                item['mime'] = item.get('mime') or ''
+                item['thumbnailLink'] = item.get('thumbnailLink') or ''
+                item['hasThumbnail'] = bool(item.get('hasThumbnail'))
+                item['path'] = item.get('path') or item.get('name') or item['id']
+                item['name'] = item.get('name') or Path(item['path']).name
+                items.append(item)
+            return items
+        except Exception as exc:
+            print(f'   Failed to read Drive index {path}: {exc}')
+            return None
+
+    def _write_index_file(self, path, items):
+        payload = [self._serialize_item(item) for item in items]
+        tmp = path.with_suffix(path.suffix + '.tmp')
+        tmp.write_text(json.dumps(payload), encoding='utf-8')
+        tmp.replace(path)
+
+    def _register_items(self, items, *, as_videos=False, as_photos=False):
+        """Register items into _files / lists. Caller must hold _list_lock."""
+        if as_videos:
+            for old in self._videos:
+                self._files.pop(old['path'], None)
+            self._videos = sorted(items, key=lambda video: video['modified'], reverse=True)
+            for item in self._videos:
+                self._files[item['path']] = item
+        if as_photos:
+            for old in self._photos:
+                self._files.pop(old['path'], None)
+            self._photos = sorted(items, key=lambda photo: photo['modified'], reverse=True)
+            for item in self._photos:
+                self._files[item['path']] = item
+
+    def _load_persisted_indexes(self):
+        videos = self._read_index_file(self._video_index_path)
+        if videos is not None:
+            with self._list_lock:
+                self._register_items(videos, as_videos=True)
+                self._videos_complete = True
+                self._videos_started = True
+                self._videos_token = None
+                self._rebuild_month_keys_locked()
+            print(f'   Loaded {len(videos)} videos from disk index')
+        photos = self._read_index_file(self._photo_index_path)
+        if photos is not None:
+            with self._list_lock:
+                self._register_items(photos, as_photos=True)
+                self._photos_complete = True
+                self._photos_started = True
+            print(f'   Loaded {len(photos)} photos from disk index')
+
+    def _persist_videos(self):
+        # Copy under the list lock, but never call _months_payload here — Lock is not reentrant.
+        with self._list_lock:
+            items = [self._serialize_item(video) for video in self._videos]
+        try:
+            self._write_index_file(self._video_index_path, items)
+        except Exception as exc:
+            print(f'   Failed to persist video index: {exc}')
+
+    def _persist_photos(self):
+        with self._list_lock:
+            items = [self._serialize_item(photo) for photo in self._photos]
+        try:
+            self._write_index_file(self._photo_index_path, items)
+        except Exception as exc:
+            print(f'   Failed to persist photo index: {exc}')
+
+    def _rebuild_month_keys_locked(self):
+        """Rebuild month keys from in-memory videos. Caller must hold _list_lock."""
+        if not self._videos:
+            self._month_keys = []
+            return
+        oldest = min(video['modified'] for video in self._videos)
+        newest = max(video['modified'] for video in self._videos)
+        self._month_keys = months_between_keys(month_key_from_ts(oldest), month_key_from_ts(newest))
+
+    def ensure_full_index(self):
+        self.start_video_scan_if_needed()
+        self.start_photo_scan_if_needed()
+
+    def start_video_scan_if_needed(self):
+        with self._list_lock:
+            if self._videos_complete or self._videos_started or self.videos_indexing:
+                return
+            self._videos_started = True
+            self.videos_indexing = True
+        threading.Thread(target=self._full_scan_videos, daemon=True).start()
+
+    def start_photo_scan_if_needed(self):
+        with self._list_lock:
+            if self._photos_complete or self._photos_started or self.photos_indexing:
+                return
+            self._photos_started = True
+        threading.Thread(target=self._index_photos, daemon=True).start()
+
+    def _current_month_start_iso(self):
+        now = datetime.now(timezone.utc)
+        start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+        month_key = f'{now.year}-{now.month:02d}'
+        return start.strftime('%Y-%m-%dT%H:%M:%SZ'), month_key
+
+    def _merge_items_by_id(self, existing, incoming):
+        by_id = {item['id']: dict(item) for item in existing}
+        used_paths = {item['path'] for item in existing}
+        for item in incoming:
+            item = dict(item)
+            if item['id'] in by_id:
+                kept_path = by_id[item['id']]['path']
+                item['path'] = kept_path
+                by_id[item['id']] = item
+                continue
+            if item['path'] in used_paths:
+                item['path'] = f"{item['id']}/{item['name']}"
+            by_id[item['id']] = item
+            used_paths.add(item['path'])
+        return sorted(by_id.values(), key=lambda entry: entry['modified'], reverse=True)
 
     def _ensure_root(self):
         if self._root_name:
@@ -264,11 +412,24 @@ class DriveStorage:
             order_by='modifiedTime desc',
         )
 
-    def _entries_from_files(self, files):
+    def _query_images(self, extra_q='', page_size=VIDEO_PAGE_SIZE, page_token=None):
+        q = IMAGE_FILE_QUERY
+        if extra_q:
+            q = f'{q} and ({extra_q})'
+        return self._drive_list(
+            q=q,
+            fields=VIDEO_LIST_FIELDS,
+            page_size=page_size,
+            page_token=page_token,
+            order_by='modifiedTime desc',
+        )
+
+    def _entries_from_files(self, files, extensions=None):
+        allowed = VIDEO_EXTENSIONS if extensions is None else extensions
         items = []
         for item in files or []:
             name = item.get('name', '')
-            if Path(name).suffix.lower() not in VIDEO_EXTENSIONS:
+            if Path(name).suffix.lower() not in allowed:
                 continue
             items.append(self._file_entry(item, prefix=''))
         return items
@@ -299,6 +460,7 @@ class DriveStorage:
             self._videos = []
             self._videos_token = None
             self._videos_complete = False
+            self._videos_started = False
             self._month_state = {}
             self._month_keys = None
             self.videos_error = None
@@ -311,6 +473,7 @@ class DriveStorage:
                 self._files.pop(path, None)
             self._photos = []
             self._photos_started = False
+            self._photos_complete = False
             self.photos_error = None
 
     def _discover_month_keys(self):
@@ -356,22 +519,147 @@ class DriveStorage:
 
     def _fill_recent(self, min_count):
         self._ensure_root()
-        while True:
-            with self._list_lock:
-                have = len(self._videos)
-                complete = self._videos_complete
-                token = self._videos_token
-            if complete or have >= min_count:
-                return
-            resp = self._query_videos(page_size=VIDEO_PAGE_SIZE, page_token=token)
-            files = resp.get('files') or []
-            self._remember_videos(self._entries_from_files(files))
-            next_token = resp.get('nextPageToken')
-            with self._list_lock:
-                self._videos_token = next_token
-                if not next_token or not files:
-                    self._videos_complete = True
+        finished_complete = False
+        with self._video_scan_lock:
+            while True:
+                with self._list_lock:
+                    have = len(self._videos)
+                    complete = self._videos_complete
+                    token = self._videos_token
+                if complete or have >= min_count:
                     return
+                resp = self._query_videos(page_size=VIDEO_PAGE_SIZE, page_token=token)
+                files = resp.get('files') or []
+                self._remember_videos(self._entries_from_files(files))
+                next_token = resp.get('nextPageToken')
+                with self._list_lock:
+                    self._videos_token = next_token
+                    if not next_token or not files:
+                        self._videos_complete = True
+                        self._rebuild_month_keys_locked()
+                        finished_complete = True
+                        break
+        if finished_complete:
+            self._persist_videos()
+
+    def _full_scan_videos(self):
+        try:
+            self.videos_error = None
+            self._ensure_root()
+            print('   Scanning Drive videos (one-time full index)...')
+            with self._video_scan_lock:
+                while True:
+                    with self._list_lock:
+                        if self._videos_complete:
+                            break
+                        token = self._videos_token
+                    resp = self._query_videos(page_size=1000, page_token=token)
+                    files = resp.get('files') or []
+                    self._remember_videos(self._entries_from_files(files))
+                    next_token = resp.get('nextPageToken')
+                    with self._list_lock:
+                        self._videos_token = next_token
+                        count = len(self._videos)
+                        if not next_token or not files:
+                            self._videos_complete = True
+                            self._rebuild_month_keys_locked()
+                            break
+                    print(f'   Videos indexed so far: {count}')
+            with self._list_lock:
+                total = len(self._videos)
+            self._persist_videos()
+            print(f'   Videos ready: {total} (saved to disk index)')
+        except Exception as exc:
+            self.videos_error = str(exc)
+            print(f'   Video full scan failed: {exc}')
+        finally:
+            self.videos_indexing = False
+
+    def _refresh_current_month_videos(self):
+        """Merge videos modified in the current UTC month into the saved library."""
+        self._ensure_root()
+        start_iso, month_key = self._current_month_start_iso()
+        extra = f"modifiedTime >= '{start_iso}'"
+        incoming = []
+        token = None
+        while True:
+            resp = self._query_videos(extra_q=extra, page_size=1000, page_token=token)
+            files = resp.get('files') or []
+            incoming.extend(self._entries_from_files(files))
+            token = resp.get('nextPageToken')
+            if not token or not files:
+                break
+        with self._list_lock:
+            merged = self._merge_items_by_id(self._videos, incoming)
+            self._register_items(merged, as_videos=True)
+            self._videos_complete = True
+            self._videos_started = True
+            self._videos_token = None
+            self._month_state.pop(month_key, None)
+            self._rebuild_month_keys_locked()
+        self._persist_videos()
+        print(f'   Refresh: merged {len(incoming)} videos from {month_key}')
+
+    def _refresh_current_month_photos(self):
+        """Merge images modified in the current UTC month into the saved library."""
+        self._ensure_root()
+        start_iso, month_key = self._current_month_start_iso()
+        extra = f"modifiedTime >= '{start_iso}'"
+        incoming = []
+        token = None
+        while True:
+            resp = self._query_images(extra_q=extra, page_size=1000, page_token=token)
+            files = resp.get('files') or []
+            incoming.extend(self._entries_from_files(files, extensions=IMAGE_EXTENSIONS))
+            token = resp.get('nextPageToken')
+            if not token or not files:
+                break
+        with self._list_lock:
+            merged = self._merge_items_by_id(self._photos, incoming)
+            self._register_items(merged, as_photos=True)
+            self._photos_complete = True
+            self._photos_started = True
+        self._persist_photos()
+        print(f'   Refresh: merged {len(incoming)} photos from {month_key}')
+
+    def _videos_from_memory(self, month=None, q=None, offset=0, limit=VIDEO_PAGE_SIZE, summary=False):
+        with self._list_lock:
+            videos = list(self._videos)
+            complete = self._videos_complete
+            indexing = bool(self.videos_indexing or not complete)
+        if q:
+            needle = q.lower()
+            videos = [video for video in videos if needle in (video.get('name') or '').lower()]
+        if month:
+            start, end = month_utc_bounds(month)
+            start_ts, end_ts = start.timestamp(), end.timestamp()
+            videos = [
+                video for video in videos
+                if start_ts <= float(video.get('modified') or 0) < end_ts
+            ]
+        if summary:
+            page = videos[:VIDEO_PAGE_SIZE]
+            # Counts use all loaded videos; month keys come from discover/rebuild.
+            months = self._months_payload(videos)
+            return {
+                'videos': page,
+                'loaded': page,
+                'months': months,
+                'total': len(videos),
+                'hasMore': not complete,
+                'indexing': indexing,
+                'error': None,
+            }
+        page = videos[offset:offset + limit]
+        return {
+            'videos': page,
+            'loaded': videos,
+            'months': self._months_payload(videos) if self._month_keys is not None else None,
+            'total': len(videos),
+            'hasMore': (offset + limit) < len(videos) if complete else True,
+            'indexing': indexing,
+            'error': None,
+        }
 
     def _paged_video_query(self, extra_q, offset, limit, state):
         needed = offset + limit
@@ -408,56 +696,51 @@ class DriveStorage:
         return self._paged_video_query(extra, offset, limit, state)
 
     def list_videos(self, month=None, q=None, offset=0, limit=VIDEO_PAGE_SIZE, summary=False, refresh=False):
-        """Fetch only the requested page of videos. Does not crawl the whole library."""
+        """Serve from persisted/full index; Refresh only merges the current calendar month."""
         self.videos_error = None
         try:
             self._ensure_root()
-            # Only wipe caches when the user hits Refresh.
             if refresh:
-                self.reset_video_cache()
+                self._refresh_current_month_videos()
+                return self._videos_from_memory(
+                    month=month, q=q, offset=offset, limit=limit, summary=summary
+                )
+
+            if self._videos_complete or self.videos_indexing:
+                return self._videos_from_memory(
+                    month=month, q=q, offset=offset, limit=limit, summary=summary
+                )
+
+            # Cold start: first page quickly, then background full scan.
             if q:
                 page, total, has_more = self._search_videos(q, offset, limit)
+                self.start_video_scan_if_needed()
                 return {
                     'videos': page,
                     'loaded': page,
                     'total': total,
                     'hasMore': has_more,
+                    'indexing': True,
                     'error': None,
                 }
             if month:
                 page, total, has_more = self._month_videos(month, offset, limit)
+                self.start_video_scan_if_needed()
                 return {
                     'videos': page,
                     'loaded': page,
                     'total': total,
                     'hasMore': has_more,
+                    'indexing': True,
                     'error': None,
                 }
+
             wanted = VIDEO_PAGE_SIZE if summary else max(offset + limit, VIDEO_PAGE_SIZE)
             self._fill_recent(wanted)
-            with self._list_lock:
-                loaded = list(self._videos)
-                complete = self._videos_complete
-            if summary:
-                page = loaded[:VIDEO_PAGE_SIZE]
-                months = self._months_payload(page)
-                return {
-                    'videos': page,
-                    'loaded': page,
-                    'months': months,
-                    'total': len(page),
-                    'hasMore': not complete,
-                    'error': None,
-                }
-            page = loaded[offset:offset + limit]
-            return {
-                'videos': page,
-                'loaded': loaded,
-                'months': self._months_payload(loaded) if self._month_keys is not None else None,
-                'total': len(loaded),
-                'hasMore': not complete,
-                'error': None,
-            }
+            self.start_video_scan_if_needed()
+            return self._videos_from_memory(
+                month=month, q=q, offset=offset, limit=limit, summary=summary
+            )
         except Exception as exc:
             self.videos_error = str(exc)
             print(f'   Video list failed: {exc}')
@@ -466,6 +749,7 @@ class DriveStorage:
                 'loaded': [],
                 'total': 0,
                 'hasMore': False,
+                'indexing': False,
                 'error': self.videos_error,
             }
 
@@ -499,7 +783,10 @@ class DriveStorage:
                 )
                 collected.extend(folder_items)
             publish(collected)
-            print(f'   Photos ready: {len(collected)}')
+            with self._list_lock:
+                self._photos_complete = True
+            self._persist_photos()
+            print(f'   Photos ready: {len(collected)} (saved to disk index)')
         except Exception as exc:
             self.photos_error = str(exc)
             print(f'   Photo index failed: {exc}')
@@ -512,10 +799,10 @@ class DriveStorage:
 
     def scan_photos(self, refresh=False):
         if refresh:
-            self.reset_photo_cache()
-        if not self._photos_started:
-            self._photos_started = True
-            threading.Thread(target=self._index_photos, daemon=True).start()
+            self._refresh_current_month_photos()
+            with self._list_lock:
+                return list(self._photos)
+        self.start_photo_scan_if_needed()
         with self._list_lock:
             return list(self._photos)
 
@@ -534,7 +821,7 @@ class DriveStorage:
             return None
         entries = self._entries_from_files(resp.get('files') or [])
         if not entries:
-            entries = [self._file_entry(item, prefix='') for item in resp.get('files') or []]
+            entries = [self._file_entry(item, prefix='') for item in (resp.get('files') or [])]
         if not entries:
             return None
         entry = entries[0]

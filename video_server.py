@@ -1301,6 +1301,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     refresh=force,
                 )
                 error = result.get('error') or drive.last_error
+                indexing = bool(result.get('indexing') or drive.videos_indexing)
                 if summary:
                     loaded = result.get('loaded') or []
                     months = result.get('months')
@@ -1311,7 +1312,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                         'months': months,
                         'ffmpeg': bool(_ffmpeg_path),
                         'vthumb': vthumb_available(),
-                        'indexing': False,
+                        'indexing': indexing,
                         'hasMore': bool(result.get('hasMore')),
                         'error': error,
                     })
@@ -1323,7 +1324,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     'videos': result.get('videos') or [],
                     'ffmpeg': bool(_ffmpeg_path),
                     'vthumb': vthumb_available(),
-                    'indexing': False,
+                    'indexing': indexing,
                     'hasMore': bool(result.get('hasMore')),
                     'error': error,
                 })
@@ -1600,7 +1601,15 @@ if __name__ == '__main__':
         print(f'   Drive folder: {os.environ.get("DRIVE_ROOT_FOLDER_ID")}')
         print(f'   Videos: {VIDEO_DIR}')
         print(f'   Photos: {PHOTO_DIRS}')
-        print('   Gateway: lists the latest Drive videos on demand (no full library scan)')
+        print('   Gateway: one-time Drive scan saved to disk; Refresh checks current month only')
+
+        def _boot_drive_index():
+            try:
+                get_drive_storage().ensure_full_index()
+            except Exception as exc:
+                print(f'   Drive index bootstrap failed: {exc}')
+
+        threading.Thread(target=_boot_drive_index, daemon=True).start()
     else:
         print(f'   MEDIA_ROOT: {os.getcwd()}')
         print(f'   Videos: {os.path.abspath(VIDEO_DIR)}')

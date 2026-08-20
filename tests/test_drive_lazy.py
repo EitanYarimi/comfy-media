@@ -3,9 +3,11 @@
 
 import os
 import sys
+import tempfile
 import threading
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -14,20 +16,33 @@ sys.path.insert(0, ROOT)
 import drive_backend  # noqa: E402
 
 
-def _blank_drive():
+def _blank_drive(tmp=None):
     storage = drive_backend.DriveStorage.__new__(drive_backend.DriveStorage)
     storage._files = {}
     storage._videos = []
+    storage._photos = []
     storage._videos_token = None
     storage._videos_complete = False
+    storage._videos_started = False
+    storage._photos_complete = False
+    storage._photos_started = False
     storage._month_state = {}
     storage._month_keys = None
     storage._list_lock = threading.Lock()
+    storage._video_scan_lock = threading.Lock()
     storage._root_name = 'ComfyUI'
     storage.root_folder_id = 'root'
     storage.last_error = None
     storage.videos_error = None
+    storage.photos_error = None
     storage.videos_indexing = False
+    storage.photos_indexing = False
+    if tmp is None:
+        tmp = tempfile.mkdtemp(prefix='comfy-drive-index-')
+    storage.index_dir = Path(tmp) / 'drive_index'
+    storage.index_dir.mkdir(parents=True, exist_ok=True)
+    storage._video_index_path = storage.index_dir / 'videos.json'
+    storage._photo_index_path = storage.index_dir / 'photos.json'
     return storage
 
 
@@ -65,6 +80,7 @@ class LazyDriveListTests(unittest.TestCase):
 
         with patch.object(storage, '_ensure_root'), \
              patch.object(storage, '_query_videos', side_effect=fake_query), \
+             patch.object(storage, 'start_video_scan_if_needed'), \
              patch.object(storage, '_discover_month_keys', return_value=['2026-08']):
             result = storage.list_videos(summary=True, limit=40)
 
@@ -86,6 +102,7 @@ class LazyDriveListTests(unittest.TestCase):
 
         with patch.object(storage, '_ensure_root'), \
              patch.object(storage, '_query_videos', side_effect=fake_query), \
+             patch.object(storage, 'start_video_scan_if_needed'), \
              patch.object(storage, '_discover_month_keys', return_value=['2026-08', '2026-07']):
             storage.list_videos(summary=True, limit=40)
             later = storage.list_videos(offset=40, limit=40, summary=False)
@@ -99,12 +116,12 @@ class LazyDriveListTests(unittest.TestCase):
 
     def test_summary_months_from_oldest_newest(self):
         storage = _blank_drive()
-        first = [_file(f'id{i}', f'clip{i}.mp4', '2026-08-18T12:00:00Z') for i in range(5)]
-        calls = {'n': 0}
+        # Enough items to satisfy the first-page fill while staying incomplete
+        # (nextPageToken set) so month discovery still queries Drive.
+        first = [_file(f'id{i}', f'clip{i}.mp4', '2026-08-18T12:00:00Z') for i in range(40)]
 
         def fake_query(extra_q='', page_size=40, page_token=None):
-            calls['n'] += 1
-            return {'files': first[:page_size], 'nextPageToken': None}
+            return {'files': first[:page_size], 'nextPageToken': 'more'}
 
         def fake_list(q, fields, page_size=1000, page_token=None, order_by=None):
             # oldest video call
@@ -112,39 +129,82 @@ class LazyDriveListTests(unittest.TestCase):
 
         with patch.object(storage, '_ensure_root'), \
              patch.object(storage, '_query_videos', side_effect=fake_query), \
+             patch.object(storage, 'start_video_scan_if_needed'), \
              patch.object(storage, '_drive_list', side_effect=fake_list):
             result = storage.list_videos(summary=True, limit=40)
 
         months = [m['month'] for m in result['months']]
         self.assertEqual(months, ['2026-08', '2026-07', '2026-06'])
-        self.assertEqual(result['months'][0]['count'], 5)
+        self.assertEqual(result['months'][0]['count'], 40)
+        self.assertTrue(result['hasMore'])
 
-    def test_summary_refresh_picks_up_new_files(self):
+    def test_summary_refresh_merges_current_month(self):
         storage = _blank_drive()
-        pages = {
-            1: [_file('a', 'a.mp4', '2026-08-18T12:00:00Z')],
-            2: [
-                _file('b', 'new.mp4', '2026-08-19T12:00:00Z'),
-                _file('a', 'a.mp4', '2026-08-18T12:00:00Z'),
-            ],
-        }
-        round_id = {'n': 1}
+        existing = storage._entries_from_files([
+            _file('a', 'a.mp4', '2026-08-18T12:00:00Z'),
+        ])
+        with storage._list_lock:
+            storage._register_items(existing, as_videos=True)
+            storage._videos_complete = True
+            storage._videos_started = True
+            storage._rebuild_month_keys_locked()
+
+        refreshed = [
+            _file('b', 'new.mp4', '2026-08-19T12:00:00Z'),
+            _file('a', 'a.mp4', '2026-08-18T12:00:00Z'),
+        ]
+        query_calls = []
 
         def fake_query(extra_q='', page_size=40, page_token=None):
-            return {'files': pages[round_id['n']], 'nextPageToken': None}
+            query_calls.append(extra_q)
+            return {'files': refreshed, 'nextPageToken': None}
 
         with patch.object(storage, '_ensure_root'), \
              patch.object(storage, '_query_videos', side_effect=fake_query), \
+             patch.object(
+                 storage,
+                 '_current_month_start_iso',
+                 return_value=('2026-08-01T00:00:00Z', '2026-08'),
+             ), \
              patch.object(storage, '_discover_month_keys', return_value=['2026-08']):
-            first = storage.list_videos(summary=True)
-            self.assertEqual([v['name'] for v in first['videos']], ['a.mp4'])
-            round_id['n'] = 2
-            # Cached summary must not re-query Drive; new files wait for Refresh
             soft = storage.list_videos(summary=True)
             self.assertEqual([v['name'] for v in soft['videos']], ['a.mp4'])
-            # Explicit refresh still picks up new files
+            self.assertEqual(query_calls, [])
+
             third = storage.list_videos(summary=True, refresh=True)
             self.assertEqual([v['name'] for v in third['videos']], ['new.mp4', 'a.mp4'])
+            self.assertTrue(any('modifiedTime >=' in (q or '') for q in query_calls))
+            self.assertTrue(storage._video_index_path.is_file())
+
+    def test_persisted_index_serves_without_drive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = _blank_drive(tmp=tmp)
+            items = storage._entries_from_files([
+                _file('a', 'a.mp4', '2026-08-18T12:00:00Z'),
+                _file('b', 'b.mp4', '2026-07-01T12:00:00Z'),
+            ])
+            with storage._list_lock:
+                storage._register_items(items, as_videos=True)
+                storage._videos_complete = True
+                storage._videos_started = True
+                storage._rebuild_month_keys_locked()
+            storage._persist_videos()
+
+            loaded = _blank_drive(tmp=tmp)
+            loaded._load_persisted_indexes()
+            self.assertTrue(loaded._videos_complete)
+            self.assertEqual(len(loaded._videos), 2)
+
+            with patch.object(loaded, '_ensure_root'), \
+                 patch.object(loaded, '_query_videos') as query, \
+                 patch.object(loaded, 'start_video_scan_if_needed') as start_scan:
+                result = loaded.list_videos(summary=True)
+                query.assert_not_called()
+                start_scan.assert_not_called()
+
+            self.assertEqual(result['total'], 2)
+            self.assertEqual({v['name'] for v in result['videos']}, {'a.mp4', 'b.mp4'})
+            self.assertFalse(result.get('indexing'))
 
 
 if __name__ == '__main__':
