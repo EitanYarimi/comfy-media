@@ -139,10 +139,10 @@ class LazyDriveListTests(unittest.TestCase):
             first = storage.list_videos(summary=True)
             self.assertEqual([v['name'] for v in first['videos']], ['a.mp4'])
             round_id['n'] = 2
-            # Soft summary should pick up new files without full reset
+            # Cached summary must not re-query Drive; new files wait for Refresh
             soft = storage.list_videos(summary=True)
-            self.assertEqual(soft['videos'][0]['name'], 'new.mp4')
-            # Explicit refresh still works
+            self.assertEqual([v['name'] for v in soft['videos']], ['a.mp4'])
+            # Explicit refresh still picks up new files
             third = storage.list_videos(summary=True, refresh=True)
             self.assertEqual([v['name'] for v in third['videos']], ['new.mp4', 'a.mp4'])
 

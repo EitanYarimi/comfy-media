@@ -412,8 +412,11 @@ async function loadFromServer(isPoll = false, forceRefresh = false) {
             }
         }
         if (activeMonth) {
-            monthPhotosCache = {};
-            await loadMonthPhotos(activeMonth);
+            // Polling must not wipe/re-render the grid — that causes scroll flicker
+            const have = monthPhotosCache[activeMonth]?.items?.length;
+            if (!(isPoll && have)) {
+                await loadMonthPhotos(activeMonth);
+            }
         } else if (data.indexing) {
             document.getElementById('photoGrid').innerHTML = '<div class="loading-spinner"></div>';
         } else {
@@ -430,7 +433,8 @@ async function loadMonthPhotos(monthKey, append = false) {
     let cache = monthPhotosCache[monthKey] || { items: [], total: 0, loading: false, hasMore: true };
     if (cache.loading) return;
     if (!append && cache.items.length) {
-        renderGrid();
+        renderGrouped();
+        updateMonthPicker();
         return;
     }
     if (append && cache.hasMore === false) return;
@@ -439,7 +443,6 @@ async function loadMonthPhotos(monthKey, append = false) {
     cache.loading = true;
     monthPhotosCache[monthKey] = cache;
     if (!append) renderGrid();
-    else showScrollLoader(true);
 
     try {
         const resp = await fetch(
@@ -464,16 +467,21 @@ async function loadMonthPhotos(monthKey, append = false) {
                 summary.count = monthPhotosCache[monthKey].total;
             }
         }
-        if (!append || monthKey !== activeMonth || !document.querySelector('#photoGrid .month-grid')) {
-            renderGrid();
+        const added = merged.slice(prevLen);
+        if (append && monthKey === activeMonth && document.querySelector('#photoGrid .month-grid') && added.length) {
+            appendPhotosToMonth(monthKey, added);
+            const stats = document.getElementById('stats');
+            const c = monthPhotosCache[monthKey];
+            if (stats && c) {
+                stats.textContent = c.hasMore
+                    ? `${c.items.length} loaded — scroll for more`
+                    : `${c.items.length} photos`;
+            }
         } else {
-            appendPhotosToMonth(monthKey, merged.slice(prevLen));
-            showScrollLoader(false);
-            updateMonthPicker();
+            renderGrid();
         }
     } catch (err) {
         monthPhotosCache[monthKey] = { ...cache, loading: false };
-        showScrollLoader(false);
         renderGrid();
         alert('Failed to load photos: ' + err.message);
     }
@@ -487,7 +495,6 @@ async function loadSearchPhotos(append = false) {
     searchResults.loading = true;
     if (!append) searchResults.items = [];
     if (!append) renderGrid();
-    else showScrollLoader(true);
 
     try {
         const resp = await fetch(
@@ -508,11 +515,11 @@ async function loadSearchPhotos(append = false) {
         if (!append) renderGrid();
         else {
             appendPhotosToMonth('search', searchResults.items.slice(prevLen));
-            showScrollLoader(false);
+            const stats = document.getElementById('stats');
+            if (stats) stats.textContent = `${searchResults.items.length} of ${searchResults.total} results`;
         }
     } catch (err) {
         searchResults.loading = false;
-        showScrollLoader(false);
         renderGrid();
         alert('Search failed: ' + err.message);
     }
@@ -530,7 +537,7 @@ async function filterPhotos() {
     searchMode = false;
     searchResults = { items: [], total: 0, loading: false };
     filteredPhotos = [];
-    monthPhotosCache = {};
+    // Keep month page cache — Refresh is the only full wipe
     setupDefaultExpandedMonths();
     if (activeMonth) await loadMonthPhotos(activeMonth);
     else renderGrid();
@@ -565,12 +572,8 @@ function updateMonthPicker() {
 }
 
 async function selectMonth(key) {
-    if (searchMode || !key || key === activeMonth) {
-        if (key === activeMonth) updateMonthPicker();
-        return;
-    }
+    if (searchMode || !key || key === activeMonth) return;
     activeMonth = key;
-    monthPhotosCache[key] = { items: [], total: 0, loading: false, hasMore: true };
     updateMonthPicker();
     window.scrollTo({ top: 0, behavior: 'auto' });
     await loadMonthPhotos(key);
