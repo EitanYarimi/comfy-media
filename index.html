@@ -266,7 +266,7 @@
 
         .month-picker {
             position: sticky;
-            top: 52px;
+            top: var(--header-h, 56px);
             z-index: 90;
             display: none;
             gap: 6px;
@@ -1397,6 +1397,12 @@ async function toggleMonth(key) {
     updateMonthPicker(key);
 }
 
+function syncHeaderOffset() {
+    const header = document.querySelector('header');
+    if (!header) return;
+    document.documentElement.style.setProperty('--header-h', `${header.offsetHeight}px`);
+}
+
 function updateMonthPicker(activeKey) {
     const picker = document.getElementById('monthPicker');
     if (!picker) return;
@@ -1411,6 +1417,7 @@ function updateMonthPicker(activeKey) {
         return `<button type="button" class="month-chip${active ? ' active' : ''}" data-month="${s.month}" onclick="selectMonth('${s.month}')">${getMonthLabel(s.month)}<span class="chip-count">${s.count}</span></button>`;
     }).join('');
     picker.classList.add('visible');
+    syncHeaderOffset();
 }
 
 async function selectMonth(key) {
@@ -1427,7 +1434,9 @@ async function selectMonth(key) {
         const block = virtLayout?.blocks?.find(b => b.type === 'header' && b.key === key);
         const grid = document.getElementById('videoGrid');
         if (!block || !grid) return;
-        const top = window.scrollY + grid.getBoundingClientRect().top + block.y - 100;
+        const headerH = document.querySelector('header')?.offsetHeight || 56;
+        const pickerH = document.getElementById('monthPicker')?.offsetHeight || 0;
+        const top = window.scrollY + grid.getBoundingClientRect().top + block.y - headerH - pickerH - 8;
         window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
     });
 }
@@ -2365,8 +2374,10 @@ async function deleteVideoByPath(event, pathEnc) {
 window.addEventListener('scroll', scheduleVirtualRender, { passive: true });
 window.addEventListener('resize', () => {
     virtRangeKey = '';
+    syncHeaderOffset();
     scheduleVirtualRender();
 });
+syncHeaderOffset();
 loadFromServer();
 
 document.addEventListener('visibilitychange', () => {
