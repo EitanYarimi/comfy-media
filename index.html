@@ -264,6 +264,48 @@
         .virt-row.month-grid { margin: 0; }
         .virt-header.month-header { padding-top: 12px; padding-bottom: 12px; box-sizing: border-box; }
 
+        .month-picker {
+            position: sticky;
+            top: var(--header-h, 56px);
+            z-index: 90;
+            display: none;
+            gap: 6px;
+            padding: 8px 16px;
+            max-width: 1800px;
+            margin: 0 auto;
+            overflow-x: auto;
+            background: rgba(10, 10, 10, 0.92);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid #1a1a1a;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+        }
+        .month-picker::-webkit-scrollbar { display: none; }
+        .month-picker.visible { display: flex; }
+        .month-chip {
+            flex: 0 0 auto;
+            border: 1px solid #2a2a2a;
+            background: #141414;
+            color: #aaa;
+            font-size: 0.72rem;
+            font-family: inherit;
+            padding: 6px 12px;
+            border-radius: 14px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+        }
+        .month-chip:hover { background: #1c1c1c; color: #eee; }
+        .month-chip.active {
+            background: #e60023;
+            border-color: #e60023;
+            color: #fff;
+        }
+        .month-chip .chip-count {
+            opacity: 0.7;
+            margin-left: 4px;
+        }
+
         .video-card {
             border-radius: 16px;
             overflow: hidden;
@@ -931,6 +973,7 @@
 </header>
 
 <div class="stats" id="stats"></div>
+<div class="month-picker" id="monthPicker" aria-label="Choose month"></div>
 
 <div class="video-grid" id="videoGrid">
     <div class="empty-state">
@@ -1351,6 +1394,51 @@ async function toggleMonth(key) {
         collapsedMonths.add(key);
         renderVirtualGrid(true);
     }
+    updateMonthPicker(key);
+}
+
+function syncHeaderOffset() {
+    const header = document.querySelector('header');
+    if (!header) return;
+    document.documentElement.style.setProperty('--header-h', `${header.offsetHeight}px`);
+}
+
+function updateMonthPicker(activeKey) {
+    const picker = document.getElementById('monthPicker');
+    if (!picker) return;
+    if (searchMode || monthSummaries.length < 1) {
+        picker.classList.remove('visible');
+        picker.innerHTML = '';
+        return;
+    }
+    const focus = activeKey || (monthSummaries.find(s => !collapsedMonths.has(s.month)) || monthSummaries[0]).month;
+    picker.innerHTML = monthSummaries.map(s => {
+        const active = s.month === focus && !collapsedMonths.has(s.month);
+        return `<button type="button" class="month-chip${active ? ' active' : ''}" data-month="${s.month}" onclick="selectMonth('${s.month}')">${getMonthLabel(s.month)}<span class="chip-count">${s.count}</span></button>`;
+    }).join('');
+    picker.classList.add('visible');
+    syncHeaderOffset();
+}
+
+async function selectMonth(key) {
+    if (searchMode || !key) return;
+    // Focus one month at a time so choosing months stays clear while virtual scrolling
+    monthSummaries.forEach(s => {
+        if (s.month === key) collapsedMonths.delete(s.month);
+        else collapsedMonths.add(s.month);
+    });
+    updateMonthPicker(key);
+    await loadMonthVideos(key);
+    renderVirtualGrid(true);
+    requestAnimationFrame(() => {
+        const block = virtLayout?.blocks?.find(b => b.type === 'header' && b.key === key);
+        const grid = document.getElementById('videoGrid');
+        if (!block || !grid) return;
+        const headerH = document.querySelector('header')?.offsetHeight || 56;
+        const pickerH = document.getElementById('monthPicker')?.offsetHeight || 0;
+        const top = window.scrollY + grid.getBoundingClientRect().top + block.y - headerH - pickerH - 8;
+        window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    });
 }
 
 function getMonthVisibleLimit(key, total) {
@@ -1459,6 +1547,7 @@ function renderGrid() {
     const grid = document.getElementById('videoGrid');
     const stats = document.getElementById('stats');
     if (searchMode) {
+        updateMonthPicker();
         if (searchResults.loading && !searchResults.items.length) {
             grid.innerHTML = '<div class="loading-spinner"></div>';
             stats.textContent = 'Searching...';
@@ -1474,14 +1563,16 @@ function renderGrid() {
         return;
     }
     if (!monthSummaries.length && !totalVideoCount) {
+        updateMonthPicker();
         grid.innerHTML = '<div class="empty-state"><div class="icon">📂</div><h2>No videos found</h2><p style="color:#666;margin-top:8px;font-size:0.85rem">Check that ComfyUI/output/video exists.</p></div>';
         stats.textContent = '';
         return;
     }
     stats.textContent = libraryHasMore
         ? `Latest ${totalVideoCount} videos — scroll for older clips`
-        : `${totalVideoCount} videos — expand a month or browse the latest below` +
+        : `${totalVideoCount} videos — pick a month above or browse below` +
         (serverHasVthumb ? '' : ' (tap ▶ to play — thumbnails loading)');
+    updateMonthPicker();
     renderVirtualGrid(true);
 }
 
@@ -1590,6 +1681,7 @@ function renderVirtualGrid(force = false) {
     html += '</div>';
     grid.innerHTML = html;
     observeThumbs(grid);
+    if (force && !searchMode) updateMonthPicker();
 }
 
 async function maybeLoadMore() {
@@ -2282,8 +2374,10 @@ async function deleteVideoByPath(event, pathEnc) {
 window.addEventListener('scroll', scheduleVirtualRender, { passive: true });
 window.addEventListener('resize', () => {
     virtRangeKey = '';
+    syncHeaderOffset();
     scheduleVirtualRender();
 });
+syncHeaderOffset();
 loadFromServer();
 
 document.addEventListener('visibilitychange', () => {
