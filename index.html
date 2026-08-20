@@ -961,7 +961,7 @@
             <option value="size-desc">Largest</option>
             <option value="size-asc">Smallest</option>
         </select>
-        <button class="btn" onclick="loadFromServer()">↻ Refresh</button>
+        <button class="btn" onclick="loadFromServer(false, true)">↻ Refresh</button>
         <button class="btn" onclick="startSlideshow(false)" id="slideshowSeqBtn">▶ Slideshow</button>
         <button class="btn" onclick="startSlideshow(true)" id="slideshowRandomBtn">🎲 Random</button>
         <button class="btn btn--panic" onclick="togglePanic()">⚡ Boss</button>
@@ -1225,7 +1225,7 @@ async function loadOlderVideos() {
     updateMonthPicker();
 }
 
-async function loadFromServer(isPoll = false) {
+async function loadFromServer(isPoll = false, forceRefresh = false) {
     if (slideshowActive && !isPoll) stopSlideshow(true);
     if (!isPoll) {
         showLoading();
@@ -1237,10 +1237,15 @@ async function loadFromServer(isPoll = false) {
         searchResults = { items: [], total: 0, loading: false };
         monthVisibleCounts = {};
         libraryHasMore = false;
-        document.getElementById('stats').textContent = 'Loading latest videos...';
+        document.getElementById('stats').textContent = forceRefresh
+            ? 'Refreshing from Drive...'
+            : 'Loading latest videos...';
     }
     try {
-        const resp = await fetch(serverBaseUrl + '/api/videos?summary=1&refresh=1');
+        const url = forceRefresh
+            ? serverBaseUrl + '/api/videos?summary=1&refresh=1'
+            : serverBaseUrl + '/api/videos?summary=1';
+        const resp = await fetch(url);
         if (!resp.ok) {
             throw new Error(`Server returned ${resp.status}. Is video_server.py running?`);
         }

@@ -313,31 +313,59 @@ class DriveStorage:
             self._photos_started = False
             self.photos_error = None
 
+    def _soft_refresh_recent(self):
+        """Re-fetch the newest page and merge it in front (1 Drive call)."""
+        self._ensure_root()
+        resp = self._query_videos(page_size=VIDEO_PAGE_SIZE)
+        batch = self._entries_from_files(resp.get('files') or [])
+        with self._list_lock:
+            seen = set()
+            ordered = []
+            for item in batch:
+                ordered.append(item)
+                seen.add(item['id'])
+                self._files[item['path']] = item
+            for video in self._videos:
+                if video['id'] in seen:
+                    continue
+                ordered.append(video)
+            self._videos = ordered
+            self._videos_token = resp.get('nextPageToken')
+            self._videos_complete = not bool(self._videos_token)
+            if batch and self._month_keys:
+                top = month_key_from_ts(batch[0]['modified'])
+                if self._month_keys[0] != top:
+                    self._month_keys = None
+
     def _discover_month_keys(self):
         """Build the full month list from oldest+newest video only (2 Drive calls)."""
         if self._month_keys is not None:
             return list(self._month_keys)
         self._ensure_root()
-        newest_resp = self._query_videos(page_size=1)
-        newest_files = newest_resp.get('files') or []
-        if not newest_files:
-            self._month_keys = []
+        try:
+            newest_resp = self._query_videos(page_size=1)
+            newest_files = newest_resp.get('files') or []
+            if not newest_files:
+                self._month_keys = []
+                return []
+            newest_ts = _parse_drive_time(newest_files[0].get('modifiedTime'))
+            oldest_resp = self._drive_list(
+                q=VIDEO_FILE_QUERY,
+                fields='files(id, modifiedTime)',
+                page_size=1,
+                order_by='modifiedTime',
+            )
+            oldest_files = oldest_resp.get('files') or []
+            oldest_ts = (
+                _parse_drive_time(oldest_files[0].get('modifiedTime'))
+                if oldest_files else newest_ts
+            )
+            keys = months_between_keys(month_key_from_ts(oldest_ts), month_key_from_ts(newest_ts))
+            self._month_keys = keys
+            return list(keys)
+        except Exception as exc:
+            print(f'   Month discovery failed: {exc}')
             return []
-        newest_ts = _parse_drive_time(newest_files[0].get('modifiedTime'))
-        oldest_resp = self._drive_list(
-            q=VIDEO_FILE_QUERY,
-            fields='files(id, modifiedTime)',
-            page_size=1,
-            order_by='modifiedTime',
-        )
-        oldest_files = oldest_resp.get('files') or []
-        oldest_ts = (
-            _parse_drive_time(oldest_files[0].get('modifiedTime'))
-            if oldest_files else newest_ts
-        )
-        keys = months_between_keys(month_key_from_ts(oldest_ts), month_key_from_ts(newest_ts))
-        self._month_keys = keys
-        return list(keys)
 
     def _months_payload(self, loaded):
         """Months from oldest→newest span; counts filled only for already-loaded items."""
@@ -408,9 +436,12 @@ class DriveStorage:
         self.videos_error = None
         try:
             self._ensure_root()
-            # Summary/refresh must re-query Drive so newly uploaded files appear.
-            if refresh or summary:
+            # Full wipe only on explicit refresh. Normal summary soft-refreshes
+            # the newest page so Render does not time out on every load.
+            if refresh:
                 self.reset_video_cache()
+            elif summary:
+                self._soft_refresh_recent()
             if month and offset == 0:
                 self._month_state.pop(month, None)
             if q:
