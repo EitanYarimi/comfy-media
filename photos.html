@@ -307,7 +307,7 @@ let monthSummaries = [], totalPhotoCount = 0;
 let monthPhotosCache = {};
 let searchMode = false;
 let searchResults = { items: [], total: 0, loading: false };
-let collapsedMonths = new Set(), initialCollapseApplied = false;
+let activeMonth = null;
 let monthVisibleCounts = {};
 let thumbObserver = null;
 let thumbLoadQueue = [], thumbLoadActive = 0;
@@ -359,11 +359,7 @@ function buildMonthSummaries(items, dateKey = 'date') {
 }
 
 function setupDefaultExpandedMonths() {
-    initialCollapseApplied = true;
-    collapsedMonths = new Set();
-    if (monthSummaries.length > 1) {
-        monthSummaries.slice(1).forEach(s => collapsedMonths.add(s.month));
-    }
+    activeMonth = monthSummaries[0]?.month || null;
 }
 
 function applyPhotosSummary(data) {
@@ -407,6 +403,7 @@ async function loadFromServer(isPoll = false, forceRefresh = false) {
         }
         applyPhotosSummary(data);
         if (!isPoll) setupDefaultExpandedMonths();
+        updateMonthPicker();
         if (data.indexing) {
             document.getElementById('stats').textContent =
                 (totalPhotoCount ? `${totalPhotoCount} photos — ` : '') + 'still scanning Google Drive…';
@@ -414,9 +411,9 @@ async function loadFromServer(isPoll = false, forceRefresh = false) {
                 indexPollTimer = setTimeout(() => { indexPollTimer = null; loadFromServer(true); }, 2500);
             }
         }
-        if (monthSummaries.length > 0) {
+        if (activeMonth) {
             monthPhotosCache = {};
-            await loadMonthPhotos(monthSummaries[0].month);
+            await loadMonthPhotos(activeMonth);
         } else if (data.indexing) {
             document.getElementById('photoGrid').innerHTML = '<div class="loading-spinner"></div>';
         } else {
@@ -467,12 +464,12 @@ async function loadMonthPhotos(monthKey, append = false) {
                 summary.count = monthPhotosCache[monthKey].total;
             }
         }
-        if (!append || !document.querySelector(`.month-section[data-month="${monthKey}"]`)) {
+        if (!append || monthKey !== activeMonth || !document.querySelector('#photoGrid .month-grid')) {
             renderGrid();
         } else {
             appendPhotosToMonth(monthKey, merged.slice(prevLen));
             showScrollLoader(false);
-            updateMonthPicker(monthKey);
+            updateMonthPicker();
         }
     } catch (err) {
         monthPhotosCache[monthKey] = { ...cache, loading: false };
@@ -535,8 +532,7 @@ async function filterPhotos() {
     filteredPhotos = [];
     monthPhotosCache = {};
     setupDefaultExpandedMonths();
-    const first = monthSummaries[0]?.month;
-    if (first) await loadMonthPhotos(first);
+    if (activeMonth) await loadMonthPhotos(activeMonth);
     else renderGrid();
 }
 
@@ -549,19 +545,7 @@ function syncHeaderOffset() {
     document.documentElement.style.setProperty('--header-h', `${header.offsetHeight}px`);
 }
 
-async function toggleMonth(key) {
-    if (searchMode) return;
-    if (collapsedMonths.has(key)) {
-        collapsedMonths.delete(key);
-        await loadMonthPhotos(key);
-    } else {
-        collapsedMonths.add(key);
-        renderGrid();
-    }
-    updateMonthPicker(key);
-}
-
-function updateMonthPicker(activeKey) {
+function updateMonthPicker() {
     const picker = document.getElementById('monthPicker');
     if (!picker) return;
     if (searchMode || monthSummaries.length < 1) {
@@ -569,24 +553,26 @@ function updateMonthPicker(activeKey) {
         picker.innerHTML = '';
         return;
     }
-    const focus = activeKey || (monthSummaries.find(s => !collapsedMonths.has(s.month)) || monthSummaries[0]).month;
+    if (!activeMonth || !monthSummaries.some(s => s.month === activeMonth)) {
+        activeMonth = monthSummaries[0].month;
+    }
     picker.innerHTML = monthSummaries.map(s => {
-        const active = s.month === focus && !collapsedMonths.has(s.month);
-        return `<button type="button" class="month-chip${active ? ' active' : ''}" data-month="${s.month}" onclick="selectMonth('${s.month}')">${getMonthLabel(s.month)}<span class="chip-count">${s.count}</span></button>`;
+        const active = s.month === activeMonth;
+        return `<button type="button" class="month-chip${active ? ' active' : ''}" data-month="${s.month}" onclick="selectMonth('${s.month}')">${getMonthLabel(s.month)}${s.count ? `<span class="chip-count">${s.count}</span>` : ''}</button>`;
     }).join('');
     picker.classList.add('visible');
     syncHeaderOffset();
 }
 
 async function selectMonth(key) {
-    if (searchMode || !key) return;
-    monthSummaries.forEach(s => {
-        if (s.month === key) collapsedMonths.delete(s.month);
-        else collapsedMonths.add(s.month);
-    });
+    if (searchMode || !key || key === activeMonth) {
+        if (key === activeMonth) updateMonthPicker();
+        return;
+    }
+    activeMonth = key;
     monthPhotosCache[key] = { items: [], total: 0, loading: false, hasMore: true };
-    updateMonthPicker(key);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    updateMonthPicker();
+    window.scrollTo({ top: 0, behavior: 'auto' });
     await loadMonthPhotos(key);
 }
 
@@ -672,67 +658,56 @@ function renderGrid() {
         stats.textContent = '';
         return;
     }
-    const active = monthSummaries.find(s => !collapsedMonths.has(s.month));
-    const cache = active ? (monthPhotosCache[active.month] || {}) : {};
+    if (!activeMonth) activeMonth = monthSummaries[0]?.month || null;
+    const cache = activeMonth ? (monthPhotosCache[activeMonth] || {}) : {};
     stats.textContent = cache.hasMore
         ? `${cache.items?.length || 0} loaded — scroll for more`
-        : `${totalPhotoCount} photos`;
+        : `${cache.items?.length || 0} photos`;
     updateMonthPicker();
     renderGrouped();
 }
 
 function appendPhotosToMonth(monthKey, photos) {
-    if (!photos.length) return;
-    const section = document.querySelector(`.month-section[data-month="${monthKey}"]`);
-    if (!section) {
+    if (!photos.length || (!searchMode && monthKey !== activeMonth)) return;
+    const gridEl = document.querySelector('#photoGrid .month-grid');
+    if (!gridEl) {
         renderGrouped();
         return;
     }
-    let grid = section.querySelector('.month-grid');
-    if (!grid) {
-        grid = document.createElement('div');
-        grid.className = 'month-grid';
-        section.appendChild(grid);
-    }
-    section.querySelector('.month-loading')?.remove();
-    grid.insertAdjacentHTML('beforeend', photos.map(buildPhotoCardHtml).join(''));
+    document.querySelector('#photoGrid .month-loading')?.remove();
+    gridEl.insertAdjacentHTML('beforeend', photos.map(buildPhotoCardHtml).join(''));
     window._visiblePhotos = (window._visiblePhotos || []).concat(photos);
-    observeThumbs(grid);
+    observeThumbs(gridEl);
 }
 
 function renderGrouped() {
     const grid = document.getElementById('photoGrid');
-    let visible = [], html = '';
-    const groups = searchMode
-        ? [{ key: 'search', label: 'Search results', count: searchResults.total, items: searchResults.items, loading: searchResults.loading }]
-        : monthSummaries.map(s => ({
-            key: s.month,
-            label: getMonthLabel(s.month),
-            count: s.count,
-            items: (monthPhotosCache[s.month] || {}).items || [],
-            loading: (monthPhotosCache[s.month] || {}).loading,
-        }));
+    let items = [];
+    let loading = false;
+    let key = 'search';
+    if (searchMode) {
+        items = searchResults.items;
+        loading = searchResults.loading;
+        key = 'search';
+    } else {
+        if (!activeMonth) activeMonth = monthSummaries[0]?.month || null;
+        key = activeMonth || 'none';
+        const cache = monthPhotosCache[activeMonth] || {};
+        items = cache.items || [];
+        loading = !!cache.loading;
+    }
 
-    groups.forEach(group => {
-        const collapsed = !searchMode && collapsedMonths.has(group.key);
-        html += `<div class="month-section" data-month="${group.key}">`;
-        html += `<div class="month-header" onclick="toggleMonth('${group.key}')"><span class="month-toggle">${collapsed?'▶':'▼'}</span><span class="month-label">${group.label}</span><span class="month-count">${group.count}</span></div>`;
-        if (!collapsed) {
-            html += '<div class="month-grid">';
-            if (group.loading && !group.items.length) {
-                html += '<div class="month-loading" style="grid-column:1/-1"><div class="loading-spinner"></div></div>';
-            } else {
-                group.items.forEach(photo => {
-                    visible.push(photo);
-                    html += buildPhotoCardHtml(photo);
-                });
-            }
-            html += '</div>';
-        }
-        html += `</div>`;
-    });
+    let html = `<div class="month-section" data-month="${key}"><div class="month-grid">`;
+    if (loading && !items.length) {
+        html += '<div class="month-loading" style="grid-column:1/-1"><div class="loading-spinner"></div></div>';
+    } else if (!items.length) {
+        html += '<div class="empty-state" style="grid-column:1/-1"><div class="icon">🖼️</div><h2>No photos in this month</h2></div>';
+    } else {
+        items.forEach(photo => { html += buildPhotoCardHtml(photo); });
+    }
+    html += '</div></div>';
 
-    window._visiblePhotos = visible;
+    window._visiblePhotos = items.slice();
     grid.innerHTML = html;
     observeThumbs(grid);
 }
@@ -748,22 +723,10 @@ async function maybeLoadMore() {
             if (searchResults.items.length < searchResults.total) await loadSearchPhotos(true);
             return;
         }
-        const active = monthSummaries.find(s => !collapsedMonths.has(s.month));
-        if (!active) return;
-        const cache = monthPhotosCache[active.month] || { items: [], hasMore: false };
-        if (cache.hasMore !== false && (cache.hasMore || cache.items.length < (cache.total || active.count))) {
-            await loadMonthPhotos(active.month, true);
-            return;
-        }
-        if (cache.hasMore === false) {
-            const idx = monthSummaries.findIndex(s => s.month === active.month);
-            const next = monthSummaries[idx + 1];
-            if (next) {
-                collapsedMonths.add(active.month);
-                collapsedMonths.delete(next.month);
-                updateMonthPicker(next.month);
-                await loadMonthPhotos(next.month);
-            }
+        if (!activeMonth) return;
+        const cache = monthPhotosCache[activeMonth] || { items: [], hasMore: false };
+        if (cache.hasMore !== false && (cache.hasMore || cache.items.length < (cache.total || 0))) {
+            await loadMonthPhotos(activeMonth, true);
         }
     } finally {
         pageLoading = false;
