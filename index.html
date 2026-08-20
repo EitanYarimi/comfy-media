@@ -261,7 +261,10 @@
             left: 0;
             right: 0;
         }
-        .virt-row.month-grid { margin: 0; }
+        .virt-row.month-grid {
+            margin: 0;
+            align-items: start;
+        }
         .virt-header.month-header { padding-top: 12px; padding-bottom: 12px; box-sizing: border-box; }
 
         .month-picker {
@@ -307,7 +310,7 @@
         }
 
         .video-card {
-            border-radius: 16px;
+            border-radius: 12px;
             overflow: hidden;
             position: relative;
             background: #141414;
@@ -325,7 +328,6 @@
         .thumbnail-container {
             position: relative;
             width: 100%;
-            aspect-ratio: 16 / 9;
             background: #0a0a0a;
             overflow: hidden;
             cursor: pointer;
@@ -336,28 +338,33 @@
         .thumbnail-container img {
             display: block;
             width: 100%;
-            height: 100%;
-            object-fit: cover;
-            position: absolute;
-            inset: 0;
+            height: auto;
+            vertical-align: bottom;
         }
 
         .thumbnail-container img.thumb-lazy {
-            min-height: 80px;
+            min-height: 48px;
             background: linear-gradient(135deg, #141414 0%, #1c1c1c 100%);
         }
 
         .thumbnail-placeholder {
-            position: absolute;
-            inset: 0;
             width: 100%;
-            min-height: 0;
+            aspect-ratio: 16 / 9;
+            min-height: 48px;
             display: flex;
             align-items: center;
             justify-content: center;
             background: linear-gradient(135deg, #141414 0%, #1c1c1c 100%);
             color: #333;
-            font-size: 2rem;
+            font-size: 1.4rem;
+        }
+
+        /* After thumb loads, placeholder overlays until hidden */
+        .thumbnail-container:has(.video-thumb[src]) .thumbnail-placeholder {
+            position: absolute;
+            inset: 0;
+            aspect-ratio: unset;
+            min-height: 0;
         }
 
         .video-overlay {
@@ -1063,6 +1070,7 @@ let virtRangeKey = '';
 let virtRaf = 0;
 let virtLoading = false;
 let virtLayout = null;
+let aspectByPath = {}; // path -> width/height
 let thumbLoadPaused = false;
 let modalLoadToken = 0;
 let modalRetryCount = 0;
@@ -1534,6 +1542,17 @@ function observeThumbs(root) {
 function onThumbLoaded(img) {
     const ph = img.parentElement.querySelector('.thumbnail-placeholder');
     if (ph) ph.style.display = 'none';
+    const pathEnc = img.closest('[data-path]')?.dataset?.path;
+    if (pathEnc && img.naturalWidth > 0 && img.naturalHeight > 0) {
+        let path;
+        try { path = decodeURIComponent(pathEnc); } catch (_) { path = pathEnc; }
+        const next = img.naturalWidth / img.naturalHeight;
+        if (Math.abs((aspectByPath[path] || 0) - next) > 0.01) {
+            aspectByPath[path] = next;
+            virtRangeKey = '';
+            scheduleVirtualRender();
+        }
+    }
 }
 
 function fallbackThumbnail(img) {
@@ -1584,11 +1603,24 @@ function getGridMetrics() {
     const grid = document.getElementById('videoGrid');
     const width = Math.max(grid.clientWidth, 320);
     const w = window.innerWidth;
-    const cols = w <= 768 ? 2 : w <= 1200 ? 3 : w <= 1600 ? 4 : 5;
-    const gap = w <= 480 ? 8 : w <= 768 ? 10 : 16;
+    // More columns = smaller thumbnails
+    const cols = w <= 480 ? 3 : w <= 768 ? 4 : w <= 1200 ? 6 : w <= 1600 ? 7 : 8;
+    const gap = w <= 480 ? 6 : w <= 768 ? 8 : 10;
     const colWidth = (width - gap * (cols - 1)) / cols;
-    const cardHeight = colWidth * 9 / 16;
-    return { cols, gap, cardHeight, rowHeight: cardHeight + gap, width };
+    return { cols, gap, colWidth, width };
+}
+
+function itemAspect(item, fallback = 16 / 9) {
+    return aspectByPath[item.path] || fallback;
+}
+
+function rowCardHeight(items, colWidth, fallbackAspect) {
+    let maxH = colWidth / fallbackAspect;
+    items.forEach(item => {
+        const h = colWidth / itemAspect(item, fallbackAspect);
+        if (h > maxH) maxH = h;
+    });
+    return maxH;
 }
 
 function loadedFeedVideos() {
@@ -1602,7 +1634,7 @@ function loadedFeedVideos() {
 }
 
 function buildVirtualLayout() {
-    const { cols, gap, cardHeight, rowHeight } = getGridMetrics();
+    const { cols, gap, colWidth } = getGridMetrics();
     const groups = searchMode
         ? [{ key: 'search', label: 'Search results', count: searchResults.total, items: searchResults.items, loading: searchResults.loading }]
         : monthSummaries.map(s => ({
@@ -1622,6 +1654,8 @@ function buildVirtualLayout() {
         const rows = Math.ceil(group.items.length / cols) || (group.loading ? 1 : 0);
         for (let row = 0; row < rows; row += 1) {
             const videos = group.items.slice(row * cols, row * cols + cols);
+            const cardHeight = rowCardHeight(videos, colWidth, 16 / 9);
+            const rowHeight = cardHeight + gap;
             blocks.push({
                 id: `r:${group.key}:${row}`,
                 type: 'row',
@@ -1639,7 +1673,8 @@ function buildVirtualLayout() {
             y += 48;
         }
     });
-    return { blocks, totalHeight: Math.max(y, 1), cols, gap, cardHeight, rowHeight };
+    const estRow = colWidth * 9 / 16 + gap;
+    return { blocks, totalHeight: Math.max(y, 1), cols, gap, cardHeight: colWidth * 9 / 16, rowHeight: estRow };
 }
 
 function renderVirtualGrid(force = false) {
