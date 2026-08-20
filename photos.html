@@ -386,7 +386,7 @@ async function loadFromServer(isPoll = false, forceRefresh = false) {
         searchResults = { items: [], total: 0, loading: false };
         monthVisibleCounts = {};
         document.getElementById('stats').textContent = forceRefresh
-            ? 'Refreshing from Drive...'
+            ? 'Checking this month for new photos...'
             : 'Scanning library...';
     }
     try {
@@ -406,7 +406,7 @@ async function loadFromServer(isPoll = false, forceRefresh = false) {
         updateMonthPicker();
         if (data.indexing) {
             document.getElementById('stats').textContent =
-                (totalPhotoCount ? `${totalPhotoCount} photos — ` : '') + 'still scanning Google Drive…';
+                (totalPhotoCount ? `${totalPhotoCount} photos — ` : '') + 'scanning Google Drive (one-time)…';
             if (!indexPollTimer) {
                 indexPollTimer = setTimeout(() => { indexPollTimer = null; loadFromServer(true); }, 2500);
             }
