@@ -1290,18 +1290,49 @@ class VideoHandler(SimpleHTTPRequestHandler):
         if path.split('?', 1)[0] == '/api/videos':
             query = parse_qs(urlparse(self.path).query)
             force, summary, month, q, offset, limit = parse_media_api_query(query)
+            if STORAGE_MODE == 'drive':
+                drive = get_drive_storage()
+                result = drive.list_videos(
+                    month=month or None,
+                    q=q or None,
+                    offset=offset,
+                    limit=limit,
+                    summary=summary,
+                )
+                error = result.get('error') or drive.last_error
+                if summary:
+                    loaded = result.get('loaded') or []
+                    respond_json(self, {
+                        'total': result.get('total', len(loaded)),
+                        'months': media_month_summary(loaded),
+                        'ffmpeg': bool(_ffmpeg_path),
+                        'vthumb': vthumb_available(),
+                        'indexing': False,
+                        'hasMore': bool(result.get('hasMore')),
+                        'error': error,
+                    })
+                    return
+                respond_json(self, {
+                    'total': result.get('total', 0),
+                    'offset': offset,
+                    'limit': limit,
+                    'videos': result.get('videos') or [],
+                    'ffmpeg': bool(_ffmpeg_path),
+                    'vthumb': vthumb_available(),
+                    'indexing': False,
+                    'hasMore': bool(result.get('hasMore')),
+                    'error': error,
+                })
+                return
             videos = get_videos_cached(force=force)
-            drive = get_drive_storage() if STORAGE_MODE == 'drive' else None
-            indexing = bool(drive and drive.videos_indexing)
-            error = (drive.videos_error or drive.last_error) if drive else None
             if summary:
                 respond_json(self, {
                     'total': len(videos),
                     'months': media_month_summary(videos),
                     'ffmpeg': bool(_ffmpeg_path),
                     'vthumb': vthumb_available(),
-                    'indexing': indexing,
-                    'error': error,
+                    'indexing': False,
+                    'error': None,
                 })
                 return
             total, page = paginate_media(videos, month=month or None, q=q or None, offset=offset, limit=limit, kind='videos')
@@ -1312,8 +1343,8 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 'videos': page,
                 'ffmpeg': bool(_ffmpeg_path),
                 'vthumb': vthumb_available(),
-                'indexing': indexing,
-                'error': error,
+                'indexing': False,
+                'error': None,
             })
             return
 
@@ -1565,7 +1596,7 @@ if __name__ == '__main__':
         print(f'   Drive folder: {os.environ.get("DRIVE_ROOT_FOLDER_ID")}')
         print(f'   Videos: {VIDEO_DIR}')
         print(f'   Photos: {PHOTO_DIRS}')
-        print('   Gateway: streams Drive bytes on demand (no full-file cache)')
+        print('   Gateway: lists the latest Drive videos on demand (no full library scan)')
     else:
         print(f'   MEDIA_ROOT: {os.getcwd()}')
         print(f'   Videos: {os.path.abspath(VIDEO_DIR)}')
@@ -1578,17 +1609,17 @@ if __name__ == '__main__':
     else:
         print('   Video thumbnails: unavailable (install ffmpeg: brew install ffmpeg)')
     print(f'   Cache (local disk): {CACHE_ROOT}')
-    def _load_index_background():
-        print('   Loading video index...')
-        t0 = time.time()
-        try:
-            video_count = len(get_videos_cached())
-            print(f'   Ready: {video_count} videos ({(time.time() - t0) * 1000:.0f} ms)')
-        except Exception as exc:
-            print(f'   Drive index failed (site is up, gallery empty until this is fixed): {exc}')
-
-    threading.Thread(target=_load_index_background, daemon=True).start()
     if STORAGE_MODE != 'drive':
+        def _load_index_background():
+            print('   Loading video index...')
+            t0 = time.time()
+            try:
+                video_count = len(get_videos_cached())
+                print(f'   Ready: {video_count} videos ({(time.time() - t0) * 1000:.0f} ms)')
+            except Exception as exc:
+                print(f'   Video index failed: {exc}')
+
+        threading.Thread(target=_load_index_background, daemon=True).start()
         threading.Thread(target=_faststart_worker, daemon=True).start()
         if PREWARM_ENABLED:
             prewarm_workers = 2

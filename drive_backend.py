@@ -5,14 +5,8 @@ import json
 import os
 import re
 import threading
-import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-
-import requests
-from google.auth.transport.requests import AuthorizedSession
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
 
 VIDEO_EXTENSIONS = {'.mp4', '.webm', '.ogg', '.mov', '.mkv', '.avi', '.m4v', '.3gp', '.flv', '.wmv'}
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.avif', '.heic'}
@@ -20,6 +14,14 @@ IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.
 DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 MEDIA_URL = 'https://www.googleapis.com/drive/v3/files/{file_id}?alt=media&supportsAllDrives=true'
 FOLDER_MIME = 'application/vnd.google-apps.folder'
+VIDEO_PAGE_SIZE = 40
+VIDEO_LIST_FIELDS = (
+    'nextPageToken, files(id, name, mimeType, size, modifiedTime, thumbnailLink, hasThumbnail)'
+)
+_VIDEO_EXT_QUERY = ' or '.join(
+    f"fileExtension='{ext.lstrip('.')}'" for ext in sorted(VIDEO_EXTENSIONS)
+)
+VIDEO_FILE_QUERY = f"trashed=false and (mimeType contains 'video/' or {_VIDEO_EXT_QUERY})"
 
 
 def _clean_id(value):
@@ -35,6 +37,18 @@ def _parse_drive_time(value):
         return dt.timestamp()
     except (TypeError, ValueError):
         return 0.0
+
+
+def month_utc_bounds(month):
+    """Return UTC [start, end) datetimes for a YYYY-MM key."""
+    year_s, month_s = month.split('-')
+    year, mon = int(year_s), int(month_s)
+    start = datetime(year, mon, 1, tzinfo=timezone.utc)
+    if mon == 12:
+        end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        end = datetime(year, mon + 1, 1, tzinfo=timezone.utc)
+    return start, end
 
 
 class DriveStorage:
@@ -58,11 +72,17 @@ class DriveStorage:
         self.photos_error = None
         self.videos_indexing = False
         self.photos_indexing = False
-        self._videos_started = False
+        self._videos_token = None
+        self._videos_complete = False
+        self._month_state = {}
         self._photos_started = False
         self._list_lock = threading.Lock()
 
     def _build_clients(self):
+        from google.auth.transport.requests import AuthorizedSession
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+
         raw = (os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON') or '').strip()
         if not raw:
             raise RuntimeError('GOOGLE_SERVICE_ACCOUNT_JSON is required for STORAGE_MODE=drive')
@@ -98,7 +118,7 @@ class DriveStorage:
             )
             raise RuntimeError(self.last_error) from exc
 
-    def _drive_list(self, q, fields, page_size=1000, page_token=None):
+    def _drive_list(self, q, fields, page_size=1000, page_token=None, order_by=None):
         kwargs = {
             'q': q,
             'fields': fields,
@@ -108,10 +128,17 @@ class DriveStorage:
         }
         if page_token:
             kwargs['pageToken'] = page_token
+        if order_by:
+            kwargs['orderBy'] = order_by
         try:
             return self.service.files().list(corpora='allDrives', **kwargs).execute()
         except Exception:
-            return self.service.files().list(**kwargs).execute()
+            fallback = dict(kwargs)
+            fallback.pop('orderBy', None)
+            try:
+                return self.service.files().list(corpora='allDrives', **fallback).execute()
+            except Exception:
+                return self.service.files().list(**fallback).execute()
 
     def _find_child_folder(self, parent_id, name):
         parent_id = _clean_id(parent_id)
@@ -199,70 +226,151 @@ class DriveStorage:
                 ))
         return found
 
-    def _index_videos(self):
-        self.videos_indexing = True
-        try:
-            self.last_error = None
-            self.videos_error = None
-            self._ensure_root()
-            found_by_id = {}
+    def _query_videos(self, extra_q='', page_size=VIDEO_PAGE_SIZE, page_token=None):
+        q = VIDEO_FILE_QUERY
+        if extra_q:
+            q = f'{q} and ({extra_q})'
+        return self._drive_list(
+            q=q,
+            fields=VIDEO_LIST_FIELDS,
+            page_size=page_size,
+            page_token=page_token,
+            order_by='modifiedTime desc',
+        )
 
-            def publish():
-                items = sorted(found_by_id.values(), key=lambda v: v['modified'], reverse=True)
-                with self._list_lock:
-                    self._videos = items
-                    for item in items:
-                        self._files[item['path']] = item
-                print(f'   Videos indexed so far: {len(items)}')
+    def _entries_from_files(self, files):
+        items = []
+        for item in files or []:
+            name = item.get('name', '')
+            if Path(name).suffix.lower() not in VIDEO_EXTENSIONS:
+                continue
+            items.append(self._file_entry(item, prefix=''))
+        return items
 
-            try:
-                for page in self._iter_query_pages(
-                    q="trashed=false and mimeType contains 'video/'",
-                    fields=(
-                        'nextPageToken, files(id, name, mimeType, size, modifiedTime, '
-                        'thumbnailLink, hasThumbnail)'
-                    ),
-                ):
-                    for item in page:
-                        name = item.get('name', '')
-                        if Path(name).suffix.lower() not in VIDEO_EXTENSIONS:
-                            continue
-                        entry = self._file_entry(item, prefix='')
-                        found_by_id[entry['id']] = entry
-                    if found_by_id:
-                        publish()
-            except Exception as exc:
-                print(f'   Drive video mime query failed: {exc}')
-
-            folder_id = None
-            prefix = self.video_prefix or 'output/video'
-            for rel in (self.video_prefix, 'output/video', 'output', 'video'):
-                if not rel:
+    def _remember_videos(self, items):
+        with self._list_lock:
+            known = {video['id'] for video in self._videos}
+            used_paths = {video['path'] for video in self._videos}
+            for item in items:
+                if item['id'] in known:
                     continue
-                folder_id = self._folder_id_for_path(rel)
-                if folder_id:
-                    prefix = rel
-                    break
-            if folder_id:
-                print(f'   Indexing Drive videos from {prefix}...')
+                if item['path'] in used_paths:
+                    item = dict(item)
+                    item['path'] = f"{item['id']}/{item['name']}"
+                self._videos.append(item)
+                self._files[item['path']] = item
+                known.add(item['id'])
+                used_paths.add(item['path'])
+            self._videos.sort(key=lambda video: video['modified'], reverse=True)
 
-                def publish_walk(items):
-                    for item in items:
-                        found_by_id[item['id']] = item
-                    publish()
-
-                self._index_folder_files(folder_id, prefix, VIDEO_EXTENSIONS, on_batch=publish_walk)
-            elif not found_by_id:
-                self.videos_error = 'Drive video folder not found (tried output/video, output, and video)'
-                print(f'   {self.videos_error}')
+    def _fill_recent(self, min_count):
+        self._ensure_root()
+        while True:
+            with self._list_lock:
+                have = len(self._videos)
+                complete = self._videos_complete
+                token = self._videos_token
+            if complete or have >= min_count:
                 return
-            publish()
-            print(f'   Videos ready: {len(found_by_id)}')
+            resp = self._query_videos(page_size=VIDEO_PAGE_SIZE, page_token=token)
+            files = resp.get('files') or []
+            self._remember_videos(self._entries_from_files(files))
+            next_token = resp.get('nextPageToken')
+            with self._list_lock:
+                self._videos_token = next_token
+                if not next_token or not files:
+                    self._videos_complete = True
+                    return
+
+    def _paged_video_query(self, extra_q, offset, limit, state):
+        needed = offset + limit
+        while not state['complete'] and len(state['items']) < needed:
+            resp = self._query_videos(
+                extra_q=extra_q,
+                page_size=VIDEO_PAGE_SIZE,
+                page_token=state['token'],
+            )
+            files = resp.get('files') or []
+            batch = self._entries_from_files(files)
+            self._remember_videos(batch)
+            state['items'].extend(batch)
+            state['token'] = resp.get('nextPageToken')
+            if not state['token'] or not files:
+                state['complete'] = True
+                break
+        page = state['items'][offset:offset + limit]
+        return page, len(state['items']), not state['complete']
+
+    def _month_videos(self, month, offset, limit):
+        start, end = month_utc_bounds(month)
+        extra = (
+            f"modifiedTime >= '{start.strftime('%Y-%m-%dT%H:%M:%SZ')}' and "
+            f"modifiedTime < '{end.strftime('%Y-%m-%dT%H:%M:%SZ')}'"
+        )
+        state = self._month_state.setdefault(month, {'items': [], 'token': None, 'complete': False})
+        return self._paged_video_query(extra, offset, limit, state)
+
+    def _search_videos(self, q, offset, limit):
+        safe = q.replace("'", "\\'")[:100]
+        extra = f"name contains '{safe}'"
+        state = {'items': [], 'token': None, 'complete': False}
+        return self._paged_video_query(extra, offset, limit, state)
+
+    def list_videos(self, month=None, q=None, offset=0, limit=VIDEO_PAGE_SIZE, summary=False):
+        """Fetch only the requested page of videos. Does not crawl the whole library."""
+        self.videos_error = None
+        try:
+            self._ensure_root()
+            if q:
+                page, total, has_more = self._search_videos(q, offset, limit)
+                return {
+                    'videos': page,
+                    'loaded': page,
+                    'total': total,
+                    'hasMore': has_more,
+                    'error': None,
+                }
+            if month:
+                page, total, has_more = self._month_videos(month, offset, limit)
+                return {
+                    'videos': page,
+                    'loaded': page,
+                    'total': total,
+                    'hasMore': has_more,
+                    'error': None,
+                }
+            wanted = VIDEO_PAGE_SIZE if summary else max(offset + limit, VIDEO_PAGE_SIZE)
+            self._fill_recent(wanted)
+            with self._list_lock:
+                loaded = list(self._videos)
+                complete = self._videos_complete
+            if summary:
+                page = loaded[:VIDEO_PAGE_SIZE]
+                return {
+                    'videos': page,
+                    'loaded': page,
+                    'total': len(page),
+                    'hasMore': not complete,
+                    'error': None,
+                }
+            page = loaded[offset:offset + limit]
+            return {
+                'videos': page,
+                'loaded': loaded,
+                'total': len(loaded),
+                'hasMore': not complete,
+                'error': None,
+            }
         except Exception as exc:
             self.videos_error = str(exc)
-            print(f'   Video index failed: {exc}')
-        finally:
-            self.videos_indexing = False
+            print(f'   Video list failed: {exc}')
+            return {
+                'videos': [],
+                'loaded': [],
+                'total': 0,
+                'hasMore': False,
+                'error': self.videos_error,
+            }
 
     def _index_photos(self):
         self.photos_indexing = True
@@ -302,11 +410,8 @@ class DriveStorage:
             self.photos_indexing = False
 
     def scan_videos(self):
-        if not self._videos_started:
-            self._videos_started = True
-            threading.Thread(target=self._index_videos, daemon=True).start()
-        with self._list_lock:
-            return list(self._videos)
+        result = self.list_videos(summary=True)
+        return list(result.get('loaded') or [])
 
     def scan_photos(self):
         if not self._photos_started:
@@ -315,16 +420,40 @@ class DriveStorage:
         with self._list_lock:
             return list(self._photos)
 
+    def _lookup_by_name(self, name):
+        if not name:
+            return None
+        safe = name.replace("'", "\\'")
+        try:
+            self._ensure_root()
+            resp = self._drive_list(
+                q=f"name='{safe}' and trashed=false",
+                fields=VIDEO_LIST_FIELDS,
+                page_size=5,
+            )
+        except Exception:
+            return None
+        entries = self._entries_from_files(resp.get('files') or [])
+        if not entries:
+            entries = [self._file_entry(item, prefix='') for item in resp.get('files') or []]
+        if not entries:
+            return None
+        entry = entries[0]
+        with self._list_lock:
+            self._files[entry['path']] = entry
+        return entry
+
     def get_meta(self, virtual_path):
         virtual_path = virtual_path.replace('\\', '/').lstrip('/')
+        name = Path(virtual_path).name
         with self._list_lock:
             found = self._files.get(virtual_path)
-        if found:
-            return found
-        self.scan_videos()
-        self.scan_photos()
-        with self._list_lock:
-            return self._files.get(virtual_path)
+            if found:
+                return found
+            for item in self._files.values():
+                if item.get('path') == virtual_path or item.get('name') == name:
+                    return item
+        return self._lookup_by_name(name)
 
     def exists(self, virtual_path):
         return self.get_meta(virtual_path) is not None
@@ -365,7 +494,7 @@ class DriveStorage:
             seen.add(url)
             try:
                 resp = self.session.get(url, timeout=30)
-            except requests.RequestException:
+            except Exception:
                 continue
             ctype = (resp.headers.get('Content-Type') or '').split(';')[0].strip()
             if resp.status_code == 200 and resp.content and ctype.startswith('image/'):

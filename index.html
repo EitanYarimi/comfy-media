@@ -1020,6 +1020,7 @@ let collapsedMonths = new Set();
 let initialCollapseApplied = false;
 let monthVisibleCounts = {};
 let monthSummaries = [], totalVideoCount = 0;
+let libraryHasMore = false;
 let monthVideosCache = {};
 let searchMode = false;
 let searchResults = { items: [], total: 0, loading: false };
@@ -1134,6 +1135,7 @@ function applyVideosSummary(data) {
     }
     monthSummaries = data.months || [];
     totalVideoCount = data.total || 0;
+    libraryHasMore = !!data.hasMore;
     applyVthumbFlag(data);
 }
 
@@ -1141,7 +1143,37 @@ function applyFfmpegFlag(data) {
     applyVthumbFlag(data);
 }
 
-let indexPollTimer = null;
+async function loadOlderVideos() {
+    const offset = allVideos.length;
+    const resp = await fetch(
+        `${serverBaseUrl}/api/videos?offset=${offset}&limit=${VIDEOS_PER_LOAD}`
+    );
+    if (!resp.ok) throw new Error('Failed to load older videos');
+    const data = await resp.json();
+    applyFfmpegFlag(data);
+    libraryHasMore = !!data.hasMore;
+    const items = sortVideoList((data.videos || []).map(mapVideo));
+    registerVideos(items);
+    items.forEach(video => {
+        const key = getMonthKey(video.date);
+        let summary = monthSummaries.find(s => s.month === key);
+        if (!summary) {
+            summary = { month: key, count: 0 };
+            monthSummaries.push(summary);
+            monthSummaries.sort((a, b) => b.month.localeCompare(a.month));
+        }
+        summary.count += 1;
+        const cache = monthVideosCache[key] || { items: [], total: 0, loading: false };
+        if (!cache.items.some(item => item.path === video.path)) {
+            cache.items = sortVideoList(cache.items.concat([video]));
+        }
+        cache.total = Math.max(cache.total, cache.items.length);
+        monthVideosCache[key] = cache;
+    });
+    totalVideoCount = allVideos.length;
+    renderGrid();
+}
+
 async function loadFromServer(isPoll = false) {
     if (slideshowActive && !isPoll) stopSlideshow(true);
     if (!isPoll) {
@@ -1153,7 +1185,8 @@ async function loadFromServer(isPoll = false) {
         searchMode = false;
         searchResults = { items: [], total: 0, loading: false };
         monthVisibleCounts = {};
-        document.getElementById('stats').textContent = 'Scanning library...';
+        libraryHasMore = false;
+        document.getElementById('stats').textContent = 'Loading latest videos...';
     }
     try {
         const resp = await fetch(serverBaseUrl + '/api/videos?summary=1');
@@ -1166,22 +1199,8 @@ async function loadFromServer(isPoll = false) {
         }
         applyVideosSummary(data);
         if (!isPoll) setupDefaultExpandedMonths();
-        if (data.indexing) {
-            document.getElementById('stats').textContent =
-                (totalVideoCount ? `${totalVideoCount} videos — ` : '') + 'still scanning Google Drive…';
-            if (!indexPollTimer) {
-                indexPollTimer = setTimeout(() => { indexPollTimer = null; loadFromServer(true); }, 2500);
-            }
-        }
         if (monthSummaries.length > 0) {
-            if (isPoll) {
-                monthVideosCache = {};
-                await loadMonthVideos(monthSummaries[0].month);
-            } else {
-                await loadMonthVideos(monthSummaries[0].month);
-            }
-        } else if (data.indexing) {
-            document.getElementById('videoGrid').innerHTML = '<div class="loading-spinner"></div>';
+            await loadMonthVideos(monthSummaries[0].month);
         } else {
             renderGrid();
         }
@@ -1231,13 +1250,18 @@ async function loadMonthVideos(monthKey) {
         if (!resp.ok) throw new Error('Failed to load month');
         const data = await resp.json();
         applyFfmpegFlag(data);
+        if (data.hasMore) libraryHasMore = true;
         const items = sortVideoList((data.videos || []).map(mapVideo));
         registerVideos(items);
         const newCache = monthVideosCache[monthKey] = {
             items: sortVideoList(cache.items.concat(items)),
-            total: data.total || 0,
+            total: data.hasMore ? Math.max(data.total || 0, offset + items.length + 1) : (data.total || items.length),
             loading: false,
         };
+        if (data.hasMore) {
+            const summary = monthSummaries.find(s => s.month === monthKey);
+            if (summary && newCache.total > summary.count) summary.count = newCache.total;
+        }
         const newNeeded = getMonthVisibleLimit(monthKey, groupCount);
         const newShow = Math.min(newNeeded, newCache.items.length);
         const nowRendered = getMonthRenderedCount(monthKey);
@@ -1249,7 +1273,8 @@ async function loadMonthVideos(monthKey) {
             if (nowRendered < newShow) {
                 appendVideosToMonth(monthKey, newCache.items.slice(nowRendered, newShow));
             }
-            updateLoadMoreButton(monthKey, groupCount - newNeeded);
+            const count = monthSummaries.find(s => s.month === monthKey)?.count || newCache.total;
+            updateLoadMoreButton(monthKey, Math.max(0, count - newNeeded));
         }
     } catch (err) {
         monthVideosCache[monthKey] = { ...cache, loading: false };
@@ -1361,6 +1386,13 @@ async function showMoreInMonth(key, event) {
         await loadSearchVideos(true);
         return;
     }
+    const summary = monthSummaries.find(s => s.month === key);
+    const cache = monthVideosCache[key] || { items: [] };
+    const isOldest = key === monthSummaries[monthSummaries.length - 1]?.month;
+    if (isOldest && libraryHasMore && cache.items.length >= (summary?.count || 0)) {
+        await loadOlderVideos();
+        return;
+    }
     monthVisibleCounts[key] = (monthVisibleCounts[key] || VIDEOS_PER_MONTH) + VIDEOS_PER_LOAD;
     await loadMonthVideos(key);
 }
@@ -1468,7 +1500,9 @@ function renderGrid() {
         stats.textContent = '';
         return;
     }
-    stats.textContent = `${totalVideoCount} videos — expand a month or browse the latest below` +
+    stats.textContent = libraryHasMore
+        ? `Latest ${totalVideoCount} videos — older clips load when you ask`
+        : `${totalVideoCount} videos — expand a month or browse the latest below` +
         (serverHasVthumb ? '' : ' (tap ▶ to play — thumbnails loading)');
     renderGroupedGrid();
 }
@@ -1598,9 +1632,11 @@ function renderGroupedGrid() {
                 html += buildVideoCardHtml(video);
             });
             html += '</div>';
-            if (remaining > 0) {
+            const isOldest = !searchMode && group.key === monthSummaries[monthSummaries.length - 1]?.month;
+            if (remaining > 0 || (isOldest && libraryHasMore)) {
                 const loadKey = searchMode ? 'search' : group.key;
-                html += `<button class="load-more-btn" onclick="showMoreInMonth('${loadKey}', event)">Show ${remaining} more</button>`;
+                const label = remaining > 0 ? `Show ${remaining} more` : 'Load older videos';
+                html += `<button class="load-more-btn" onclick="showMoreInMonth('${loadKey}', event)">${label}</button>`;
             }
         }
         html += `</div>`;
