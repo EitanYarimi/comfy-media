@@ -313,30 +313,6 @@ class DriveStorage:
             self._photos_started = False
             self.photos_error = None
 
-    def _soft_refresh_recent(self):
-        """Re-fetch the newest page and merge it in front (1 Drive call)."""
-        self._ensure_root()
-        resp = self._query_videos(page_size=VIDEO_PAGE_SIZE)
-        batch = self._entries_from_files(resp.get('files') or [])
-        with self._list_lock:
-            seen = set()
-            ordered = []
-            for item in batch:
-                ordered.append(item)
-                seen.add(item['id'])
-                self._files[item['path']] = item
-            for video in self._videos:
-                if video['id'] in seen:
-                    continue
-                ordered.append(video)
-            self._videos = ordered
-            self._videos_token = resp.get('nextPageToken')
-            self._videos_complete = not bool(self._videos_token)
-            if batch and self._month_keys:
-                top = month_key_from_ts(batch[0]['modified'])
-                if self._month_keys[0] != top:
-                    self._month_keys = None
-
     def _discover_month_keys(self):
         """Build the full month list from oldest+newest video only (2 Drive calls)."""
         if self._month_keys is not None:
@@ -436,14 +412,9 @@ class DriveStorage:
         self.videos_error = None
         try:
             self._ensure_root()
-            # Full wipe only on explicit refresh. Normal summary soft-refreshes
-            # the newest page so Render does not time out on every load.
+            # Only wipe caches when the user hits Refresh.
             if refresh:
                 self.reset_video_cache()
-            elif summary:
-                self._soft_refresh_recent()
-            if month and offset == 0:
-                self._month_state.pop(month, None)
             if q:
                 page, total, has_more = self._search_videos(q, offset, limit)
                 return {
