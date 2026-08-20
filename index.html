@@ -1408,12 +1408,9 @@ function updateMonthPicker(activeKey) {
     const focus = activeKey || (monthSummaries.find(s => !collapsedMonths.has(s.month)) || monthSummaries[0]).month;
     picker.innerHTML = monthSummaries.map(s => {
         const active = s.month === focus && !collapsedMonths.has(s.month);
-        return `<button type="button" class="month-chip${active ? ' active' : ''}" data-month="${s.month}">${getMonthLabel(s.month)}<span class="chip-count">${s.count}</span></button>`;
+        return `<button type="button" class="month-chip${active ? ' active' : ''}" data-month="${s.month}" onclick="selectMonth('${s.month}')">${getMonthLabel(s.month)}<span class="chip-count">${s.count}</span></button>`;
     }).join('');
     picker.classList.add('visible');
-    picker.querySelectorAll('.month-chip').forEach(btn => {
-        btn.addEventListener('click', () => selectMonth(btn.dataset.month));
-    });
 }
 
 async function selectMonth(key) {
@@ -1675,6 +1672,7 @@ function renderVirtualGrid(force = false) {
     html += '</div>';
     grid.innerHTML = html;
     observeThumbs(grid);
+    if (force && !searchMode) updateMonthPicker();
 }
 
 async function maybeLoadMore() {
