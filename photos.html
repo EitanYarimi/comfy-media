@@ -46,17 +46,55 @@
             gap: 16px;
         }
 
+        .virt-space { position: relative; width: 100%; }
+        .virt-block { position: absolute; left: 0; right: 0; }
+        .virt-row.month-grid { margin: 0; }
+        .virt-header.month-header { padding-top: 12px; padding-bottom: 12px; box-sizing: border-box; }
+
+        .month-picker {
+            position: sticky;
+            top: var(--header-h, 56px);
+            z-index: 90;
+            display: none;
+            gap: 6px;
+            padding: 8px 16px;
+            max-width: 1800px;
+            margin: 0 auto;
+            overflow-x: auto;
+            background: rgba(10, 10, 10, 0.92);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid #1a1a1a;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+        }
+        .month-picker::-webkit-scrollbar { display: none; }
+        .month-picker.visible { display: flex; }
+        .month-chip {
+            flex: 0 0 auto;
+            border: 1px solid #2a2a2a;
+            background: #141414;
+            color: #aaa;
+            font-size: 0.72rem;
+            font-family: inherit;
+            padding: 6px 12px;
+            border-radius: 14px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .month-chip:hover { background: #1c1c1c; color: #eee; }
+        .month-chip.active { background: #e60023; border-color: #e60023; color: #fff; }
+        .month-chip .chip-count { opacity: 0.7; margin-left: 4px; }
+
         .photo-card {
             border-radius: 16px;
             overflow: hidden;
             position: relative;
             background: #141414;
             cursor: zoom-in;
-            opacity: 0;
-            animation: pinFadeIn 0.45s ease forwards;
+            opacity: 1;
+            aspect-ratio: 1 / 1;
             transition: transform 0.25s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.25s ease;
             box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
-            will-change: transform;
         }
 
         .photo-card:hover {
@@ -68,12 +106,14 @@
         .photo-card img {
             display: block;
             width: 100%;
-            height: auto;
-            vertical-align: bottom;
+            height: 100%;
+            object-fit: cover;
+            position: absolute;
+            inset: 0;
         }
 
         .photo-card img.thumb-lazy {
-            min-height: 80px;
+            min-height: 0;
             background: linear-gradient(135deg, #141414 0%, #1c1c1c 100%);
         }
 
@@ -243,6 +283,7 @@
     </div>
 </header>
 <div class="stats" id="stats"></div>
+<div class="month-picker" id="monthPicker" aria-label="Choose month"></div>
 <div id="networkHint" style="display:none;background:#3b1c1c;border:1px solid #7f1d1d;color:#fca5a5;padding:10px 16px;margin:0 16px 12px;border-radius:12px;font-size:0.85rem;line-height:1.5"></div>
 <div class="photo-grid" id="photoGrid"><div class="loading-spinner"></div></div>
 
@@ -266,6 +307,12 @@ const PHOTOS_PER_MONTH = 40;
 const PHOTOS_PER_LOAD = 40;
 const SLIDESHOW_INTERVAL = 4000;
 const THUMB_CONCURRENCY = 6;
+const VIRT_OVERSCAN_ROWS = 3;
+const VIRT_HEADER_HEIGHT = 56;
+let virtRangeKey = '';
+let virtRaf = 0;
+let virtLoading = false;
+let virtLayout = null;
 let allPhotos = [], filteredPhotos = [], currentPhotoIndex = -1;
 let monthSummaries = [], totalPhotoCount = 0;
 let monthPhotosCache = {};
@@ -361,6 +408,9 @@ async function loadFromServer(isPoll = false) {
             throw new Error(`Server returned ${resp.status}. Is video_server.py running?`);
         }
         const data = await resp.json();
+        if (data.error && !data.total) {
+            throw new Error(data.error);
+        }
         applyPhotosSummary(data);
         if (!isPoll) setupDefaultExpandedMonths();
         if (data.indexing) {
@@ -385,67 +435,51 @@ async function loadFromServer(isPoll = false) {
     }
 }
 
-async function loadMonthPhotos(monthKey) {
-    const groupCount = monthSummaries.find(s => s.month === monthKey)?.count || 0;
-    const needed = getMonthVisibleLimit(monthKey, groupCount);
-    let cache = monthPhotosCache[monthKey] || { items: [], total: 0, loading: false };
+async function loadMonthPhotos(monthKey, append = false) {
+    let cache = monthPhotosCache[monthKey] || { items: [], total: 0, loading: false, hasMore: false };
     if (cache.loading) return;
-
-    const rendered = getMonthRenderedCount(monthKey);
-    const showCount = Math.min(needed, cache.items.length);
-
-    if (cache.items.length >= needed) {
-        if (!getMonthSection(monthKey)) {
-            renderGrouped();
-            return;
-        }
-        if (rendered < showCount) {
-            appendPhotosToMonth(monthKey, cache.items.slice(rendered, showCount));
-        }
-        updateLoadMoreButton(monthKey, groupCount - needed);
+    if (!append && cache.items.length) {
+        renderVirtualGrid(true);
+        if (!virtLoading) maybeLoadMore();
+        return;
+    }
+    if (append && cache.items.length && cache.hasMore === false) {
+        renderVirtualGrid(true);
         return;
     }
 
     const offset = cache.items.length;
-    const limit = Math.max(PHOTOS_PER_MONTH, needed - offset);
     cache.loading = true;
     monthPhotosCache[monthKey] = cache;
-
-    if (getMonthSection(monthKey)) {
-        setMonthLoading(monthKey, rendered === 0);
-    } else {
-        renderGrouped();
-    }
+    renderVirtualGrid(true);
 
     try {
         const resp = await fetch(
-            `${serverBaseUrl}/api/photos?month=${encodeURIComponent(monthKey)}&offset=${offset}&limit=${limit}`
+            `${serverBaseUrl}/api/photos?month=${encodeURIComponent(monthKey)}&offset=${offset}&limit=${PHOTOS_PER_LOAD}`
         );
         if (!resp.ok) throw new Error('Failed to load month');
         const data = await resp.json();
         const items = (data.photos || []).map(mapPhoto);
         registerPhotos(items);
-        const newCache = monthPhotosCache[monthKey] = {
-            items: cache.items.concat(items),
-            total: data.total || 0,
+        const merged = cache.items.concat(items.filter(item => !cache.items.some(p => p.path === item.path)));
+        const hasMore = !!data.hasMore && items.length > 0;
+        monthPhotosCache[monthKey] = {
+            items: merged,
+            total: hasMore ? Math.max(data.total || 0, merged.length + 1) : (data.total || merged.length),
             loading: false,
+            hasMore,
         };
-        const newNeeded = getMonthVisibleLimit(monthKey, groupCount);
-        const newShow = Math.min(newNeeded, newCache.items.length);
-        const nowRendered = getMonthRenderedCount(monthKey);
-
-        if (!getMonthSection(monthKey)) {
-            renderGrouped();
-        } else {
-            setMonthLoading(monthKey, false);
-            if (nowRendered < newShow) {
-                appendPhotosToMonth(monthKey, newCache.items.slice(nowRendered, newShow));
+        if (hasMore) {
+            const summary = monthSummaries.find(s => s.month === monthKey);
+            if (summary && monthPhotosCache[monthKey].total > summary.count) {
+                summary.count = monthPhotosCache[monthKey].total;
             }
-            updateLoadMoreButton(monthKey, groupCount - newNeeded);
         }
+        renderVirtualGrid(true);
+        if (!virtLoading) maybeLoadMore();
     } catch (err) {
         monthPhotosCache[monthKey] = { ...cache, loading: false };
-        setMonthLoading(monthKey, false);
+        renderVirtualGrid(true);
         alert('Failed to load photos: ' + err.message);
     }
 }
@@ -453,15 +487,11 @@ async function loadMonthPhotos(monthKey) {
 async function loadSearchPhotos(append = false) {
     const q = document.getElementById('searchInput').value.toLowerCase().trim();
     if (!q) return;
+    if (searchResults.loading) return;
     const offset = append ? searchResults.items.length : 0;
     searchResults.loading = true;
     if (!append) searchResults.items = [];
-
-    if (!append || !getMonthSection('search')) {
-        renderGrid();
-    } else {
-        document.getElementById('stats').textContent = `${searchResults.items.length} of ${searchResults.total} results`;
-    }
+    renderGrid();
 
     try {
         const resp = await fetch(
@@ -471,23 +501,16 @@ async function loadSearchPhotos(append = false) {
         const data = await resp.json();
         const items = (data.photos || []).map(mapPhoto);
         registerPhotos(items);
-        const prevCount = append ? searchResults.items.length : 0;
         searchResults = {
             items: append ? searchResults.items.concat(items) : items,
             total: data.total || 0,
             loading: false,
         };
         filteredPhotos = searchResults.items;
-        document.getElementById('stats').textContent = `${searchResults.items.length} of ${searchResults.total} results`;
-
-        if (!append || !getMonthSection('search')) {
-            renderGrid();
-        } else {
-            appendPhotosToMonth('search', searchResults.items.slice(prevCount));
-            updateLoadMoreButton('search', searchResults.total - searchResults.items.length);
-        }
+        renderGrid();
     } catch (err) {
         searchResults.loading = false;
+        renderGrid();
         alert('Search failed: ' + err.message);
     }
 }
@@ -524,8 +547,52 @@ async function toggleMonth(key) {
         await loadMonthPhotos(key);
     } else {
         collapsedMonths.add(key);
-        renderGrouped();
+        renderVirtualGrid(true);
     }
+    updateMonthPicker(key);
+}
+
+function syncHeaderOffset() {
+    const header = document.querySelector('header');
+    if (!header) return;
+    document.documentElement.style.setProperty('--header-h', `${header.offsetHeight}px`);
+}
+
+function updateMonthPicker(activeKey) {
+    const picker = document.getElementById('monthPicker');
+    if (!picker) return;
+    if (searchMode || monthSummaries.length < 1) {
+        picker.classList.remove('visible');
+        picker.innerHTML = '';
+        return;
+    }
+    const focus = activeKey || (monthSummaries.find(s => !collapsedMonths.has(s.month)) || monthSummaries[0]).month;
+    picker.innerHTML = monthSummaries.map(s => {
+        const active = s.month === focus && !collapsedMonths.has(s.month);
+        return `<button type="button" class="month-chip${active ? ' active' : ''}" data-month="${s.month}" onclick="selectMonth('${s.month}')">${getMonthLabel(s.month)}<span class="chip-count">${s.count}</span></button>`;
+    }).join('');
+    picker.classList.add('visible');
+    syncHeaderOffset();
+}
+
+async function selectMonth(key) {
+    if (searchMode || !key) return;
+    monthSummaries.forEach(s => {
+        if (s.month === key) collapsedMonths.delete(s.month);
+        else collapsedMonths.add(s.month);
+    });
+    updateMonthPicker(key);
+    await loadMonthPhotos(key);
+    renderVirtualGrid(true);
+    requestAnimationFrame(() => {
+        const block = virtLayout?.blocks?.find(b => b.type === 'header' && b.key === key);
+        const grid = document.getElementById('photoGrid');
+        if (!block || !grid) return;
+        const headerH = document.querySelector('header')?.offsetHeight || 56;
+        const pickerH = document.getElementById('monthPicker')?.offsetHeight || 0;
+        const top = window.scrollY + grid.getBoundingClientRect().top + block.y - headerH - pickerH - 8;
+        window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    });
 }
 
 function getMonthVisibleLimit(key, total) {
@@ -540,7 +607,7 @@ async function showMoreInMonth(key, event) {
         return;
     }
     monthVisibleCounts[key] = (monthVisibleCounts[key] || PHOTOS_PER_MONTH) + PHOTOS_PER_LOAD;
-    await loadMonthPhotos(key);
+    await loadMonthPhotos(key, true);
 }
 
 function queueThumbLoad(img) {
@@ -569,7 +636,7 @@ function initThumbObserver() {
             if (img.dataset.src) queueThumbLoad(img);
             thumbObserver.unobserve(img);
         });
-    }, { rootMargin: '80px', threshold: 0.01 });
+    }, { rootMargin: '250px', threshold: 0.01 });
 }
 
 function observeThumbs(root) {
@@ -584,6 +651,7 @@ function observeThumbs(root) {
 function renderGrid() {
     const grid = document.getElementById('photoGrid'), stats = document.getElementById('stats');
     if (searchMode) {
+        updateMonthPicker();
         if (searchResults.loading && !searchResults.items.length) {
             grid.innerHTML = '<div class="loading-spinner"></div>';
             stats.textContent = 'Searching...';
@@ -595,75 +663,165 @@ function renderGrid() {
             return;
         }
         stats.textContent = `${searchResults.items.length} of ${searchResults.total} results`;
-        renderGrouped();
+        renderVirtualGrid(true);
         return;
     }
     if (!monthSummaries.length && !totalPhotoCount) {
+        updateMonthPicker();
         grid.innerHTML = '<div class="empty-state"><div class="icon">🖼️</div><h2>No photos found</h2><p style="color:#666;margin-top:8px;font-size:0.85rem">Check that ComfyUI output folders exist.</p></div>';
         stats.textContent = '';
         return;
     }
-    stats.textContent = `${totalPhotoCount} photos — expand a month or browse the latest below`;
-    renderGrouped();
+    stats.textContent = `${totalPhotoCount} photos — pick a month above or scroll for more`;
+    updateMonthPicker();
+    renderVirtualGrid(true);
 }
 
-function getMonthSection(monthKey) {
-    return document.querySelector(`.month-section[data-month="${monthKey}"]`);
+function getGridMetrics() {
+    const grid = document.getElementById('photoGrid');
+    const width = Math.max(grid.clientWidth, 320);
+    const w = window.innerWidth;
+    const cols = w <= 768 ? 2 : w <= 1200 ? 3 : w <= 1600 ? 4 : 5;
+    const gap = w <= 480 ? 8 : w <= 768 ? 10 : 16;
+    const colWidth = (width - gap * (cols - 1)) / cols;
+    const cardHeight = colWidth; // 1:1 photo cards
+    return { cols, gap, cardHeight, rowHeight: cardHeight + gap, width };
 }
 
-function getMonthRenderedCount(monthKey) {
-    const section = getMonthSection(monthKey);
-    return section ? section.querySelectorAll('.photo-card').length : 0;
+function loadedFeedPhotos() {
+    if (searchMode) return searchResults.items.slice();
+    const out = [];
+    monthSummaries.forEach(summary => {
+        if (collapsedMonths.has(summary.month)) return;
+        out.push(...((monthPhotosCache[summary.month] || {}).items || []));
+    });
+    return out;
 }
 
-function ensureMonthGrid(monthKey) {
-    const section = getMonthSection(monthKey);
-    if (!section) return null;
-    let grid = section.querySelector('.month-grid');
-    if (!grid) {
-        grid = document.createElement('div');
-        grid.className = 'month-grid';
-        const btn = section.querySelector('.load-more-btn');
-        if (btn) section.insertBefore(grid, btn);
-        else section.appendChild(grid);
-    }
-    section.querySelector('.month-loading')?.remove();
-    return grid;
-}
-
-function setMonthLoading(monthKey, show) {
-    const section = getMonthSection(monthKey);
-    if (!section) return;
-    section.querySelector('.month-loading')?.remove();
-    if (!show) return;
-    if (getMonthRenderedCount(monthKey) > 0) return;
-    const el = document.createElement('div');
-    el.className = 'month-loading';
-    el.innerHTML = '<div class="loading-spinner"></div>';
-    const grid = section.querySelector('.month-grid');
-    if (grid) section.insertBefore(el, grid);
-    else section.appendChild(el);
-}
-
-function updateLoadMoreButton(monthKey, remaining) {
-    const section = getMonthSection(monthKey);
-    if (!section) return;
-    let btn = section.querySelector('.load-more-btn');
-    if (remaining > 0) {
-        const label = `Show ${remaining} more`;
-        if (btn) {
-            btn.textContent = label;
-            btn.style.display = '';
-        } else {
-            btn = document.createElement('button');
-            btn.className = 'load-more-btn';
-            btn.textContent = label;
-            btn.addEventListener('click', (e) => showMoreInMonth(monthKey, e));
-            section.appendChild(btn);
+function buildVirtualLayout() {
+    const { cols, gap, cardHeight, rowHeight } = getGridMetrics();
+    const groups = searchMode
+        ? [{ key: 'search', label: 'Search results', count: searchResults.total, items: searchResults.items, loading: searchResults.loading }]
+        : monthSummaries.map(s => ({
+            key: s.month,
+            label: getMonthLabel(s.month),
+            count: s.count,
+            items: (monthPhotosCache[s.month] || {}).items || [],
+            loading: (monthPhotosCache[s.month] || {}).loading,
+        }));
+    const blocks = [];
+    let y = 0;
+    groups.forEach(group => {
+        const collapsed = !searchMode && collapsedMonths.has(group.key);
+        blocks.push({ id: `h:${group.key}`, type: 'header', key: group.key, y, height: VIRT_HEADER_HEIGHT, group, collapsed });
+        y += VIRT_HEADER_HEIGHT;
+        if (collapsed) return;
+        const rows = Math.ceil(group.items.length / cols) || (group.loading ? 1 : 0);
+        for (let row = 0; row < rows; row += 1) {
+            const photos = group.items.slice(row * cols, row * cols + cols);
+            blocks.push({
+                id: `r:${group.key}:${row}`,
+                type: 'row',
+                key: group.key,
+                y,
+                height: rowHeight,
+                cardHeight,
+                photos,
+                loading: group.loading && !group.items.length && row === 0,
+            });
+            y += rowHeight;
         }
-    } else if (btn) {
-        btn.remove();
+        if (group.loading && group.items.length) {
+            blocks.push({ id: `l:${group.key}`, type: 'loading', y, height: 48 });
+            y += 48;
+        }
+    });
+    return { blocks, totalHeight: Math.max(y, 1), cols, gap, cardHeight, rowHeight };
+}
+
+function renderVirtualGrid(force = false) {
+    const grid = document.getElementById('photoGrid');
+    if (!grid) return;
+    if (grid.querySelector('.empty-state, .loading-spinner') && !monthSummaries.length && !searchMode) return;
+    const layout = buildVirtualLayout();
+    virtLayout = layout;
+    const gridRect = grid.getBoundingClientRect();
+    const viewTop = -gridRect.top;
+    const viewBottom = viewTop + window.innerHeight;
+    const pad = layout.rowHeight * VIRT_OVERSCAN_ROWS;
+    const visible = layout.blocks.filter(block =>
+        block.y + block.height >= viewTop - pad && block.y <= viewBottom + pad
+    );
+    const rangeKey = `${visible[0]?.id || ''}|${visible[visible.length - 1]?.id || ''}|${layout.cols}|${layout.totalHeight}|${layout.blocks.length}`;
+    if (!force && rangeKey === virtRangeKey) return;
+    virtRangeKey = rangeKey;
+
+    window._visiblePhotos = loadedFeedPhotos();
+
+    let html = `<div class="virt-space" style="height:${layout.totalHeight}px">`;
+    visible.forEach(block => {
+        if (block.type === 'header') {
+            const toggle = block.collapsed ? '▶' : '▼';
+            html += `<div class="month-header virt-block virt-header" data-month="${block.key}" style="top:${block.y}px;height:${block.height}px" onclick="toggleMonth('${block.key}')"><span class="month-toggle">${toggle}</span><span class="month-label">${block.group.label}</span><span class="month-count">${block.group.count}</span></div>`;
+            return;
+        }
+        if (block.type === 'loading') {
+            html += `<div class="virt-block" style="top:${block.y}px;height:${block.height}px"><div class="loading-spinner" style="margin:10px auto"></div></div>`;
+            return;
+        }
+        html += `<div class="month-grid virt-block virt-row" data-month="${block.key}" style="top:${block.y}px;height:${block.cardHeight}px;gap:${layout.gap}px;grid-template-columns:repeat(${layout.cols},1fr)">`;
+        if (block.loading) html += '<div class="month-loading" style="grid-column:1/-1"><div class="loading-spinner"></div></div>';
+        else block.photos.forEach(photo => { html += buildPhotoCardHtml(photo); });
+        html += '</div>';
+    });
+    html += '</div>';
+    grid.innerHTML = html;
+    observeThumbs(grid);
+    if (force && !searchMode) updateMonthPicker();
+}
+
+async function maybeLoadMore() {
+    if (virtLoading) return;
+    const grid = document.getElementById('photoGrid');
+    if (!grid || !virtLayout) return;
+    if (grid.getBoundingClientRect().bottom > window.innerHeight + 1200) return;
+    virtLoading = true;
+    let loaded = false;
+    try {
+        if (searchMode) {
+            if (searchResults.items.length < searchResults.total) {
+                await loadSearchPhotos(true);
+                loaded = true;
+            }
+        } else {
+            const expanded = monthSummaries.filter(summary => !collapsedMonths.has(summary.month));
+            const last = expanded[expanded.length - 1];
+            if (last) {
+                const cache = monthPhotosCache[last.month] || { items: [], hasMore: false };
+                if (cache.hasMore || cache.items.length < (cache.total || last.count)) {
+                    await loadMonthPhotos(last.month, true);
+                    loaded = true;
+                }
+            }
+        }
+    } finally {
+        virtLoading = false;
     }
+    if (loaded) {
+        requestAnimationFrame(() => {
+            const el = document.getElementById('photoGrid');
+            if (el && el.getBoundingClientRect().bottom <= window.innerHeight + 1200) maybeLoadMore();
+        });
+    }
+}
+
+function scheduleVirtualRender() {
+    if (virtRaf) return;
+    virtRaf = requestAnimationFrame(() => {
+        virtRaf = 0;
+        renderVirtualGrid(false);
+        maybeLoadMore();
+    });
 }
 
 function buildPhotoCardHtml(photo) {
@@ -678,63 +836,6 @@ function buildPhotoCardHtml(photo) {
             <div class="photo-name">${escapeHtml(photo.name)}</div>
         </div>
     </div>`;
-}
-
-function appendPhotosToMonth(monthKey, photos) {
-    if (!photos.length) return;
-    const grid = ensureMonthGrid(monthKey);
-    if (!grid) return;
-    grid.insertAdjacentHTML('beforeend', photos.map(buildPhotoCardHtml).join(''));
-    window._visiblePhotos = (window._visiblePhotos || []).concat(photos);
-    observeThumbs(grid);
-}
-
-function renderGrouped() {
-    const grid = document.getElementById('photoGrid');
-
-    let visible = [], html = '';
-    const groups = searchMode
-        ? [{ key: 'search', label: 'Search results', count: searchResults.total, items: searchResults.items, loading: searchResults.loading }]
-        : monthSummaries.map(s => ({
-            key: s.month,
-            label: getMonthLabel(s.month),
-            count: s.count,
-            items: (monthPhotosCache[s.month] || {}).items || [],
-            loading: (monthPhotosCache[s.month] || {}).loading,
-        }));
-
-    groups.forEach(group => {
-        const collapsed = !searchMode && collapsedMonths.has(group.key);
-        html += `<div class="month-section" data-month="${group.key}">`;
-        html += `<div class="month-header" onclick="toggleMonth('${group.key}')"><span class="month-toggle">${collapsed?'▶':'▼'}</span><span class="month-label">${group.label}</span><span class="month-count">${group.count}</span></div>`;
-        if (!collapsed) {
-            const limit = searchMode ? searchResults.items.length : getMonthVisibleLimit(group.key, group.count);
-            const shown = group.items.slice(0, limit);
-            const remaining = group.count - shown.length;
-            html += '<div class="month-grid">';
-            if (group.loading && !shown.length) {
-                html += '<div class="month-loading"><div class="loading-spinner"></div></div>';
-            }
-            shown.forEach(photo => {
-                visible.push(photo);
-                html += buildPhotoCardHtml(photo);
-            });
-            html += '</div>';
-            if (remaining > 0) {
-                const loadKey = searchMode ? 'search' : group.key;
-                html += `<button class="load-more-btn" onclick="showMoreInMonth('${loadKey}', event)">Show ${remaining} more</button>`;
-            }
-        }
-        html += `</div>`;
-    });
-
-    if (searchMode && !groups[0]?.items?.length && !searchResults.loading) {
-        html = '<div class="empty-state"><div class="icon">🔍</div><h2>No results</h2></div>';
-    }
-
-    window._visiblePhotos = visible;
-    grid.innerHTML = html;
-    observeThumbs();
 }
 
 // ========== LIGHTBOX ==========
@@ -1074,6 +1175,13 @@ document.getElementById('lightbox').addEventListener('click',(e)=>{if(e.target==
     }
 })();
 loadFromServer();
+window.addEventListener('scroll', scheduleVirtualRender, { passive: true });
+window.addEventListener('resize', () => {
+    virtRangeKey = '';
+    syncHeaderOffset();
+    scheduleVirtualRender();
+});
+syncHeaderOffset();
 </script>
 </body>
 </html>
