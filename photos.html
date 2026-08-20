@@ -272,7 +272,7 @@
         <input type="text" id="searchInput" placeholder="Search...">
         <button class="btn" onclick="startSlideshow(false)" id="slideshowSeqBtn">▶ Slideshow</button>
         <button class="btn" onclick="startSlideshow(true)" id="slideshowRandomBtn">🎲 Random</button>
-        <button class="btn" onclick="loadFromServer()">↻ Refresh</button>
+        <button class="btn" onclick="loadFromServer(false, true)">↻ Refresh</button>
     </div>
 </header>
 <div class="stats" id="stats"></div>
@@ -379,7 +379,7 @@ function applyPhotosSummary(data) {
 
 // ========== LOAD ==========
 let indexPollTimer = null;
-async function loadFromServer(isPoll = false) {
+async function loadFromServer(isPoll = false, forceRefresh = false) {
     if (slideshowActive && !isPoll) stopSlideshow(true);
     if (!isPoll) {
         showLoading();
@@ -389,10 +389,15 @@ async function loadFromServer(isPoll = false) {
         searchMode = false;
         searchResults = { items: [], total: 0, loading: false };
         monthVisibleCounts = {};
-        document.getElementById('stats').textContent = 'Scanning library...';
+        document.getElementById('stats').textContent = forceRefresh
+            ? 'Refreshing from Drive...'
+            : 'Scanning library...';
     }
     try {
-        const resp = await fetch(serverBaseUrl + '/api/photos?summary=1&refresh=1');
+        const url = forceRefresh
+            ? serverBaseUrl + '/api/photos?summary=1&refresh=1'
+            : serverBaseUrl + '/api/photos?summary=1';
+        const resp = await fetch(url);
         if (!resp.ok) {
             throw new Error(`Server returned ${resp.status}. Is video_server.py running?`);
         }
