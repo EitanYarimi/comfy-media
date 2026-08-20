@@ -48,7 +48,7 @@
 
         .virt-space { position: relative; width: 100%; }
         .virt-block { position: absolute; left: 0; right: 0; }
-        .virt-row.month-grid { margin: 0; }
+        .virt-row.month-grid { margin: 0; align-items: start; }
         .virt-header.month-header { padding-top: 12px; padding-bottom: 12px; box-sizing: border-box; }
 
         .month-picker {
@@ -86,13 +86,12 @@
         .month-chip .chip-count { opacity: 0.7; margin-left: 4px; }
 
         .photo-card {
-            border-radius: 16px;
+            border-radius: 12px;
             overflow: hidden;
             position: relative;
             background: #141414;
             cursor: zoom-in;
             opacity: 1;
-            aspect-ratio: 1 / 1;
             transition: transform 0.25s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.25s ease;
             box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
         }
@@ -106,14 +105,12 @@
         .photo-card img {
             display: block;
             width: 100%;
-            height: 100%;
-            object-fit: cover;
-            position: absolute;
-            inset: 0;
+            height: auto;
+            vertical-align: bottom;
         }
 
         .photo-card img.thumb-lazy {
-            min-height: 0;
+            min-height: 48px;
             background: linear-gradient(135deg, #141414 0%, #1c1c1c 100%);
         }
 
@@ -313,6 +310,7 @@ let virtRangeKey = '';
 let virtRaf = 0;
 let virtLoading = false;
 let virtLayout = null;
+let aspectByPath = {};
 let allPhotos = [], filteredPhotos = [], currentPhotoIndex = -1;
 let monthSummaries = [], totalPhotoCount = 0;
 let monthPhotosCache = {};
@@ -621,7 +619,25 @@ function processThumbQueue() {
         const src = img.dataset.src;
         if (!src) continue;
         thumbLoadActive++;
-        img.onload = img.onerror = () => { thumbLoadActive--; processThumbQueue(); };
+        img.onload = () => {
+            thumbLoadActive--;
+            const card = img.closest('.photo-card');
+            const vid = card?.dataset?.vid;
+            if (vid && img.naturalWidth > 0 && img.naturalHeight > 0) {
+                let name;
+                try { name = decodeURIComponent(vid); } catch (_) { name = vid; }
+                const photo = allPhotos.find(p => p.name === name);
+                const key = photo?.path || name;
+                const next = img.naturalWidth / img.naturalHeight;
+                if (Math.abs((aspectByPath[key] || 0) - next) > 0.01) {
+                    aspectByPath[key] = next;
+                    virtRangeKey = '';
+                    scheduleVirtualRender();
+                }
+            }
+            processThumbQueue();
+        };
+        img.onerror = () => { thumbLoadActive--; processThumbQueue(); };
         img.src = src;
         img.removeAttribute('data-src');
     }
@@ -681,11 +697,23 @@ function getGridMetrics() {
     const grid = document.getElementById('photoGrid');
     const width = Math.max(grid.clientWidth, 320);
     const w = window.innerWidth;
-    const cols = w <= 768 ? 2 : w <= 1200 ? 3 : w <= 1600 ? 4 : 5;
-    const gap = w <= 480 ? 8 : w <= 768 ? 10 : 16;
+    const cols = w <= 480 ? 3 : w <= 768 ? 4 : w <= 1200 ? 6 : w <= 1600 ? 7 : 8;
+    const gap = w <= 480 ? 6 : w <= 768 ? 8 : 10;
     const colWidth = (width - gap * (cols - 1)) / cols;
-    const cardHeight = colWidth; // 1:1 photo cards
-    return { cols, gap, cardHeight, rowHeight: cardHeight + gap, width };
+    return { cols, gap, colWidth, width };
+}
+
+function itemAspect(item, fallback = 1) {
+    return aspectByPath[item.path] || fallback;
+}
+
+function rowCardHeight(items, colWidth, fallbackAspect) {
+    let maxH = colWidth / fallbackAspect;
+    items.forEach(item => {
+        const h = colWidth / itemAspect(item, fallbackAspect);
+        if (h > maxH) maxH = h;
+    });
+    return maxH;
 }
 
 function loadedFeedPhotos() {
@@ -699,7 +727,7 @@ function loadedFeedPhotos() {
 }
 
 function buildVirtualLayout() {
-    const { cols, gap, cardHeight, rowHeight } = getGridMetrics();
+    const { cols, gap, colWidth } = getGridMetrics();
     const groups = searchMode
         ? [{ key: 'search', label: 'Search results', count: searchResults.total, items: searchResults.items, loading: searchResults.loading }]
         : monthSummaries.map(s => ({
@@ -719,6 +747,8 @@ function buildVirtualLayout() {
         const rows = Math.ceil(group.items.length / cols) || (group.loading ? 1 : 0);
         for (let row = 0; row < rows; row += 1) {
             const photos = group.items.slice(row * cols, row * cols + cols);
+            const cardHeight = rowCardHeight(photos, colWidth, 1);
+            const rowHeight = cardHeight + gap;
             blocks.push({
                 id: `r:${group.key}:${row}`,
                 type: 'row',
@@ -736,7 +766,8 @@ function buildVirtualLayout() {
             y += 48;
         }
     });
-    return { blocks, totalHeight: Math.max(y, 1), cols, gap, cardHeight, rowHeight };
+    const estRow = colWidth + gap;
+    return { blocks, totalHeight: Math.max(y, 1), cols, gap, cardHeight: colWidth, rowHeight: estRow };
 }
 
 function renderVirtualGrid(force = false) {
