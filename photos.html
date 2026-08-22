@@ -792,17 +792,47 @@ function shufflePhotos(arr) {
     return [...arr].sort(() => Math.random() - 0.5);
 }
 
+async function fetchPagedPhotos(baseParams, maxItems = 2000) {
+    const pageSize = 200;
+    const collected = [];
+    let offset = 0;
+    let guard = 0;
+    while (collected.length < maxItems && guard < 50) {
+        guard += 1;
+        const params = new URLSearchParams({
+            ...baseParams,
+            offset: String(offset),
+            limit: String(pageSize),
+        });
+        const resp = await fetch(`${serverBaseUrl}/api/photos?${params}`);
+        if (!resp.ok) throw new Error('Failed to load slideshow');
+        const data = await resp.json();
+        const batch = (data.photos || []).map(mapPhoto);
+        if (!batch.length) break;
+        registerPhotos(batch);
+        for (const item of batch) {
+            if (!collected.some(p => p.path === item.path)) collected.push(item);
+        }
+        offset += batch.length;
+        if (!data.hasMore) break;
+        if (batch.length < pageSize) break;
+    }
+    return collected.sort((a, b) => b.date - a.date);
+}
+
 async function fetchSlideshowPool() {
+    // Prefer already-loaded feed/search so Random/Slideshow start immediately.
+    if (searchMode && searchResults.items?.length) {
+        return searchResults.items.slice();
+    }
+    if (!searchMode && feedCache.items?.length) {
+        return feedCache.items.slice();
+    }
+    const params = {};
     const q = document.getElementById('searchInput').value.trim();
-    const url = q
-        ? `${serverBaseUrl}/api/photos?q=${encodeURIComponent(q)}&limit=5000`
-        : `${serverBaseUrl}/api/photos?limit=5000`;
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error('Failed to load slideshow');
-    const data = await resp.json();
-    const items = (data.photos || []).map(mapPhoto);
-    registerPhotos(items);
-    return items.sort((a, b) => b.date - a.date);
+    if (q) params.q = q;
+    else if (activeMonth) params.month = activeMonth;
+    return fetchPagedPhotos(params);
 }
 
 function getSlideshowPool() {
@@ -894,13 +924,21 @@ async function startSlideshow(random = false) {
         return;
     }
     slideshowRandom = random;
+    const stats = document.getElementById('stats');
+    const prevStats = stats ? stats.textContent : '';
+    if (stats) stats.textContent = random ? 'Loading random playlist…' : 'Loading slideshow…';
     try {
         slideshowPlaylist = await fetchSlideshowPool();
     } catch (err) {
+        if (stats) stats.textContent = prevStats;
         alert('Slideshow failed: ' + err.message);
         return;
     }
-    if (!slideshowPlaylist.length) return;
+    if (!slideshowPlaylist.length) {
+        if (stats) stats.textContent = prevStats;
+        alert('No photos available for slideshow yet. Wait for the library to load, then try again.');
+        return;
+    }
     if (random) slideshowPlaylist = shufflePhotos(slideshowPlaylist);
     slideshowActive = true;
     slideshowPaused = false;

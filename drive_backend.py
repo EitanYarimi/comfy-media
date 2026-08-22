@@ -735,7 +735,12 @@ class DriveStorage:
                     'error': None,
                 }
 
-            wanted = VIDEO_PAGE_SIZE if summary else max(offset + limit, VIDEO_PAGE_SIZE)
+            # Cold start only sync-fills a small first page. Large limits (slideshow)
+            # must not crawl Drive on the request thread — that times out on Render.
+            if summary:
+                wanted = VIDEO_PAGE_SIZE
+            else:
+                wanted = min(max(offset + limit, VIDEO_PAGE_SIZE), VIDEO_PAGE_SIZE * 2)
             self._fill_recent(wanted)
             self.start_video_scan_if_needed()
             return self._videos_from_memory(

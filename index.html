@@ -1703,18 +1703,48 @@ function shuffleVideos(arr) {
     return [...arr].sort(() => Math.random() - 0.5);
 }
 
+async function fetchPagedVideos(baseParams, maxItems = 2000) {
+    const pageSize = 200;
+    const collected = [];
+    let offset = 0;
+    let guard = 0;
+    while (collected.length < maxItems && guard < 50) {
+        guard += 1;
+        const params = new URLSearchParams({
+            ...baseParams,
+            offset: String(offset),
+            limit: String(pageSize),
+        });
+        const resp = await fetch(`${serverBaseUrl}/api/videos?${params}`);
+        if (!resp.ok) throw new Error('Failed to load playlist');
+        const data = await resp.json();
+        applyFfmpegFlag(data);
+        const batch = sortVideoList((data.videos || []).map(mapVideo));
+        if (!batch.length) break;
+        registerVideos(batch);
+        for (const item of batch) {
+            if (!collected.some(v => v.path === item.path)) collected.push(item);
+        }
+        offset += batch.length;
+        if (!data.hasMore) break;
+        if (batch.length < pageSize) break;
+    }
+    return sortVideoList(collected);
+}
+
 async function fetchSlideshowVideos() {
+    // Prefer already-loaded feed/search for an instant start.
+    if (searchMode && searchResults.items?.length) {
+        return searchResults.items.slice();
+    }
+    if (!searchMode && feedCache.items?.length) {
+        return feedCache.items.slice();
+    }
+    const params = {};
     const q = document.getElementById('searchInput').value.trim();
-    const url = q
-        ? `${serverBaseUrl}/api/videos?q=${encodeURIComponent(q)}&limit=5000`
-        : `${serverBaseUrl}/api/videos?limit=5000`;
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error('Failed to load playlist');
-    const data = await resp.json();
-    applyFfmpegFlag(data);
-    const items = sortVideoList((data.videos || []).map(mapVideo));
-    registerVideos(items);
-    return items;
+    if (q) params.q = q;
+    else if (activeMonth) params.month = activeMonth;
+    return fetchPagedVideos(params);
 }
 
 function updateSlideshowUI() {
@@ -1785,23 +1815,19 @@ function onVideoEnded() {
 async function fetchMonthPlaylist(monthKey) {
     if (monthKey === 'search') return searchResults.items.slice();
     if ((monthKey === 'all' || !monthKey) && !activeMonth && feedCache.items.length) {
-        return feedCache.items.slice();
+        const haveAll = feedCache.hasMore === false
+            || (feedCache.total > 0 && feedCache.items.length >= feedCache.total);
+        if (haveAll) return feedCache.items.slice();
     }
     if (monthKey === activeMonth && feedCache.items.length) {
         const summary = monthSummaries.find(s => s.month === monthKey);
         if (summary && feedCache.items.length >= summary.count) return feedCache.items.slice();
+        if (feedCache.hasMore === false) return feedCache.items.slice();
     }
 
-    const qs = (monthKey && monthKey !== 'all')
-        ? `month=${encodeURIComponent(monthKey)}&limit=5000`
-        : 'limit=5000';
-    const resp = await fetch(`${serverBaseUrl}/api/videos?${qs}`);
-    if (!resp.ok) throw new Error('Failed to load month playlist');
-    const data = await resp.json();
-    applyFfmpegFlag(data);
-    const items = sortVideoList((data.videos || []).map(mapVideo));
-    registerVideos(items);
-    return items;
+    const params = {};
+    if (monthKey && monthKey !== 'all') params.month = monthKey;
+    return fetchPagedVideos(params);
 }
 
 async function startMonthRandom(monthKey, event) {
@@ -1814,7 +1840,10 @@ async function startMonthRandom(monthKey, event) {
         alert('Random failed: ' + err.message);
         return;
     }
-    if (!items.length) return;
+    if (!items.length) {
+        alert('No videos available yet. Wait for the library to load, then try again.');
+        return;
+    }
     modalPlaylist = shuffleVideos(items);
     slideshowRandom = true;
     slideshowActive = true;
@@ -1830,13 +1859,21 @@ async function startSlideshow(random = false) {
         return;
     }
     slideshowRandom = random;
+    const stats = document.getElementById('stats');
+    const prevStats = stats ? stats.textContent : '';
+    if (stats) stats.textContent = random ? 'Loading random playlist…' : 'Loading slideshow…';
     try {
         modalPlaylist = await fetchSlideshowVideos();
     } catch (err) {
+        if (stats) stats.textContent = prevStats;
         alert('Slideshow failed: ' + err.message);
         return;
     }
-    if (!modalPlaylist.length) return;
+    if (!modalPlaylist.length) {
+        if (stats) stats.textContent = prevStats;
+        alert('No videos available for slideshow yet. Wait for the library to load, then try again.');
+        return;
+    }
     if (random) modalPlaylist = shuffleVideos(modalPlaylist);
     slideshowActive = true;
     slideshowPaused = false;
@@ -1905,8 +1942,8 @@ function openModal(video, keepZoom = false) {
     const player = document.getElementById('modalVideo');
     player.removeAttribute('poster');
     player.preload = 'auto';
-    // Opening from the grid starts muted; next/previous keeps whatever the user chose.
-    if (!keepZoom) player.muted = true;
+    // Opening from the grid / slideshow starts muted so autoplay is allowed.
+    if (!keepZoom || slideshowActive) player.muted = true;
     document.getElementById('modalTitle').textContent = video.name;
     document.getElementById('modalOverlay').classList.add('active');
     document.getElementById('slideshowProgress').style.width = '0%';
