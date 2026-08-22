@@ -1051,7 +1051,6 @@ let currentVideoIndex = -1;
 const VIDEO_EXTENSIONS = ['.mp4', '.webm', '.ogg', '.mov', '.mkv', '.avi', '.m4v', '.3gp', '.flv', '.wmv'];
 const THUMB_CONCURRENCY = 6;
 const THUMB_RETRY_MAX = 3;
-const VIDEOS_PER_MONTH = 40;
 const VIDEOS_PER_LOAD = 40;
 let pageLoading = false;
 let scrollTicking = false;
@@ -1060,13 +1059,11 @@ let modalLoadToken = 0;
 let modalRetryCount = 0;
 let thumbQueue = [];
 let thumbActive = 0;
-let activeMonth = null;
-let monthVisibleCounts = {};
+let activeMonth = null; // null = All (continuous chronological feed)
 let monthSummaries = [], totalVideoCount = 0;
-let libraryHasMore = false;
-let monthVideosCache = {};
+let feedCache = { items: [], total: 0, loading: false, hasMore: true };
 let searchMode = false;
-let searchResults = { items: [], total: 0, loading: false };
+let searchResults = { items: [], total: 0, loading: false, hasMore: false };
 let modalPlaylist = [];
 let slideshowActive = false;
 let slideshowPaused = false;
@@ -1159,10 +1156,6 @@ function buildMonthSummaries(items) {
         .map(month => ({ month, count: counts[month] }));
 }
 
-function setupDefaultExpandedMonths() {
-    activeMonth = monthSummaries[0]?.month || null;
-}
-
 function applyVideosSummary(data) {
     if (Array.isArray(data)) {
         allVideos = data.map(mapVideo);
@@ -1174,7 +1167,6 @@ function applyVideosSummary(data) {
     }
     monthSummaries = data.months || [];
     totalVideoCount = data.total || 0;
-    libraryHasMore = !!data.hasMore;
     applyVthumbFlag(data);
 }
 
@@ -1182,42 +1174,9 @@ function applyFfmpegFlag(data) {
     applyVthumbFlag(data);
 }
 
-async function loadOlderVideos() {
-    const offset = allVideos.length;
-    const resp = await fetch(
-        `${serverBaseUrl}/api/videos?offset=${offset}&limit=${VIDEOS_PER_LOAD}`
-    );
-    if (!resp.ok) throw new Error('Failed to load older videos');
-    const data = await resp.json();
-    applyFfmpegFlag(data);
-    libraryHasMore = !!data.hasMore;
-    const items = sortVideoList((data.videos || []).map(mapVideo));
-    registerVideos(items);
-    const byMonth = {};
-    items.forEach(video => {
-        const key = getMonthKey(video.date);
-        let summary = monthSummaries.find(s => s.month === key);
-        if (!summary) {
-            summary = { month: key, count: 0 };
-            monthSummaries.push(summary);
-            monthSummaries.sort((a, b) => b.month.localeCompare(a.month));
-        }
-        summary.count += 1;
-        if (!byMonth[key]) byMonth[key] = [];
-        byMonth[key].push(video);
-    });
-    if (!items.length) libraryHasMore = false;
-    totalVideoCount = Math.max(totalVideoCount, allVideos.length);
-    // Attach to existing caches only; do not auto-expand every month
-    Object.keys(byMonth).forEach(key => {
-        const cache = monthVideosCache[key] || { items: [], total: 0, loading: false, hasMore: true };
-        const add = byMonth[key].filter(v => !cache.items.some(x => x.path === v.path));
-        cache.items = sortVideoList(cache.items.concat(add));
-        cache.total = Math.max(cache.total, cache.items.length);
-        monthVideosCache[key] = cache;
-        if (key === activeMonth && add.length) appendVideosToMonth(key, add);
-    });
-    updateMonthPicker();
+function resolveHasMore(data, mergedLen) {
+    if (data.hasMore != null) return !!data.hasMore;
+    return mergedLen < (data.total || 0);
 }
 
 let indexPollTimer = null;
@@ -1228,13 +1187,12 @@ async function loadFromServer(isPoll = false, forceRefresh = false) {
         allVideos = [];
         filteredVideos = [];
         monthSummaries = [];
-        monthVideosCache = {};
+        feedCache = { items: [], total: 0, loading: false, hasMore: true };
         searchMode = false;
-        searchResults = { items: [], total: 0, loading: false };
-        monthVisibleCounts = {};
-        libraryHasMore = false;
+        searchResults = { items: [], total: 0, loading: false, hasMore: false };
+        activeMonth = null;
         document.getElementById('stats').textContent = forceRefresh
-            ? 'Checking this month for new videos...'
+            ? 'Checking last 30 days for new videos...'
             : 'Loading library...';
     }
     try {
@@ -1250,7 +1208,6 @@ async function loadFromServer(isPoll = false, forceRefresh = false) {
             throw new Error(data.error);
         }
         applyVideosSummary(data);
-        if (!isPoll) setupDefaultExpandedMonths();
         updateMonthPicker();
         if (data.indexing) {
             document.getElementById('stats').textContent =
@@ -1259,16 +1216,16 @@ async function loadFromServer(isPoll = false, forceRefresh = false) {
                 indexPollTimer = setTimeout(() => { indexPollTimer = null; loadFromServer(true); }, 2500);
             }
         }
-        if (activeMonth) {
-            // Polling must not wipe/re-render the grid — that causes scroll flicker
-            const have = monthVideosCache[activeMonth]?.items?.length;
-            if (!(isPoll && have)) {
-                await loadMonthVideos(activeMonth);
-            }
-        } else if (data.indexing) {
-            document.getElementById('videoGrid').innerHTML = '<div class="loading-spinner"></div>';
+        if (!isPoll || !feedCache.items.length) {
+            await loadFeed(false);
         } else {
-            renderGrid();
+            const stats = document.getElementById('stats');
+            if (stats && !data.indexing) {
+                stats.textContent = feedCache.hasMore
+                    ? `${feedCache.items.length} loaded — scroll for more`
+                    : `${feedCache.items.length} videos` +
+                    (serverHasVthumb ? '' : ' (tap ▶ to play — thumbnails loading)');
+            }
         }
     } catch (err) {
         document.getElementById('videoGrid').innerHTML =
@@ -1277,62 +1234,57 @@ async function loadFromServer(isPoll = false, forceRefresh = false) {
     }
 }
 
-async function loadMonthVideos(monthKey, append = false) {
-    let cache = monthVideosCache[monthKey] || { items: [], total: 0, loading: false, hasMore: true };
-    if (cache.loading) return;
-    if (!append && cache.items.length) {
+async function loadFeed(append = false) {
+    if (feedCache.loading) return;
+    if (!append && feedCache.items.length) {
         renderGroupedGrid();
         updateMonthPicker();
         return;
     }
-    if (append && cache.hasMore === false) return;
+    if (append && feedCache.hasMore === false) return;
 
-    const offset = cache.items.length;
-    cache.loading = true;
-    monthVideosCache[monthKey] = cache;
+    const offset = feedCache.items.length;
+    feedCache.loading = true;
     if (!append) renderGrid();
 
     try {
-        const resp = await fetch(
-            `${serverBaseUrl}/api/videos?month=${encodeURIComponent(monthKey)}&offset=${offset}&limit=${VIDEOS_PER_LOAD}`
-        );
-        if (!resp.ok) throw new Error('Failed to load month');
+        const qs = activeMonth
+            ? `month=${encodeURIComponent(activeMonth)}&offset=${offset}&limit=${VIDEOS_PER_LOAD}`
+            : `offset=${offset}&limit=${VIDEOS_PER_LOAD}`;
+        const resp = await fetch(`${serverBaseUrl}/api/videos?${qs}`);
+        if (!resp.ok) throw new Error('Failed to load feed');
         const data = await resp.json();
         applyFfmpegFlag(data);
-        if (data.hasMore) libraryHasMore = true;
         const items = sortVideoList((data.videos || []).map(mapVideo));
         registerVideos(items);
-        const prevLen = cache.items.length;
-        const merged = sortVideoList(cache.items.concat(items.filter(item => !cache.items.some(v => v.path === item.path))));
-        const hasMore = !!data.hasMore && items.length > 0;
-        monthVideosCache[monthKey] = {
+        const prevLen = feedCache.items.length;
+        const merged = sortVideoList(
+            feedCache.items.concat(items.filter(item => !feedCache.items.some(v => v.path === item.path)))
+        );
+        let hasMore = resolveHasMore(data, merged.length);
+        if (!items.length) hasMore = false;
+        feedCache = {
             items: merged,
-            total: hasMore ? Math.max(data.total || 0, merged.length + 1) : (data.total || merged.length),
+            total: data.total != null ? data.total : merged.length,
             loading: false,
             hasMore,
         };
-        if (hasMore) {
-            const summary = monthSummaries.find(s => s.month === monthKey);
-            if (summary && monthVideosCache[monthKey].total > summary.count) {
-                summary.count = monthVideosCache[monthKey].total;
-            }
-        }
         const added = merged.slice(prevLen);
-        if (append && monthKey === activeMonth && document.querySelector('#videoGrid .month-grid') && added.length) {
-            appendVideosToMonth(monthKey, added);
+        const viewKey = activeMonth || 'all';
+        if (append && document.querySelector('#videoGrid .month-grid') && added.length) {
+            appendVideosToMonth(viewKey, added);
             const stats = document.getElementById('stats');
-            const c = monthVideosCache[monthKey];
-            if (stats && c) {
-                stats.textContent = c.hasMore
-                    ? `${c.items.length} loaded — scroll for more`
-                    : `${c.items.length} videos` +
+            if (stats) {
+                stats.textContent = feedCache.hasMore
+                    ? `${feedCache.items.length} loaded — scroll for more`
+                    : `${feedCache.items.length} videos` +
                     (serverHasVthumb ? '' : ' (tap ▶ to play — thumbnails loading)');
             }
         } else {
             renderGrid();
         }
     } catch (err) {
-        monthVideosCache[monthKey] = { ...cache, loading: false };
+        feedCache.loading = false;
         renderGrid();
         alert('Failed to load videos: ' + err.message);
     }
@@ -1357,11 +1309,12 @@ async function loadSearchVideos(append = false) {
         const items = sortVideoList((data.videos || []).map(mapVideo));
         registerVideos(items);
         const prevLen = append ? searchResults.items.length : 0;
+        const mergedLen = append ? prevLen + items.length : items.length;
         searchResults = {
             items: append ? searchResults.items.concat(items) : items,
             total: data.total || 0,
             loading: false,
-            hasMore: (append ? prevLen + items.length : items.length) < (data.total || 0),
+            hasMore: resolveHasMore(data, mergedLen),
         };
         if (!append) renderGrid();
         else {
@@ -1377,17 +1330,13 @@ async function loadSearchVideos(append = false) {
 }
 
 function sortAndRender() {
-    Object.keys(monthVideosCache).forEach(key => {
-        const cache = monthVideosCache[key];
-        if (cache?.items?.length) cache.items = sortVideoList(cache.items);
-    });
+    if (feedCache.items?.length) feedCache.items = sortVideoList(feedCache.items);
     if (searchResults.items?.length) searchResults.items = sortVideoList(searchResults.items);
     renderGrid();
 }
 
 async function filterVideos() {
     const q = document.getElementById('searchInput').value.toLowerCase().trim();
-    monthVisibleCounts = {};
     if (slideshowActive) stopSlideshow(true);
     if (q) {
         searchMode = true;
@@ -1395,12 +1344,10 @@ async function filterVideos() {
         return;
     }
     searchMode = false;
-    searchResults = { items: [], total: 0, loading: false };
+    searchResults = { items: [], total: 0, loading: false, hasMore: false };
     filteredVideos = [];
-    // Keep month page cache — Refresh is the only full wipe
-    setupDefaultExpandedMonths();
-    if (activeMonth) await loadMonthVideos(activeMonth);
-    else renderGrid();
+    if (feedCache.items.length) renderGrid();
+    else await loadFeed(false);
 }
 
 function getMonthKey(date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`; }
@@ -1415,34 +1362,31 @@ function syncHeaderOffset() {
 function updateMonthPicker() {
     const picker = document.getElementById('monthPicker');
     if (!picker) return;
-    if (searchMode || monthSummaries.length < 1) {
+    if (searchMode || (monthSummaries.length < 1 && !totalVideoCount && !feedCache.items.length)) {
         picker.classList.remove('visible');
         picker.innerHTML = '';
         return;
     }
-    if (!activeMonth || !monthSummaries.some(s => s.month === activeMonth)) {
-        activeMonth = monthSummaries[0].month;
-    }
-    picker.innerHTML = monthSummaries.map(s => {
+    const allActive = activeMonth === null;
+    let html = `<button type="button" class="month-chip${allActive ? ' active' : ''}" data-month="all" onclick="selectMonth('all')">All${totalVideoCount ? `<span class="chip-count">${totalVideoCount}</span>` : ''}</button>`;
+    html += monthSummaries.map(s => {
         const active = s.month === activeMonth;
         return `<button type="button" class="month-chip${active ? ' active' : ''}" data-month="${s.month}" onclick="selectMonth('${s.month}')">${getMonthLabel(s.month)}${s.count ? `<span class="chip-count">${s.count}</span>` : ''}</button>`;
     }).join('');
+    picker.innerHTML = html;
     picker.classList.add('visible');
     syncHeaderOffset();
 }
 
 async function selectMonth(key) {
-    if (searchMode || !key || key === activeMonth) return;
-    activeMonth = key;
+    if (searchMode) return;
+    const next = (!key || key === 'all') ? null : key;
+    if (next === activeMonth) return;
+    activeMonth = next;
+    feedCache = { items: [], total: 0, loading: false, hasMore: true };
     updateMonthPicker();
     window.scrollTo({ top: 0, behavior: 'auto' });
-    // Reuse cached pages — only Refresh clears and re-fetches from Drive
-    await loadMonthVideos(key);
-}
-
-function getMonthVisibleLimit(key, total) {
-    if (!monthVisibleCounts[key]) monthVisibleCounts[key] = VIDEOS_PER_MONTH;
-    return Math.min(monthVisibleCounts[key], total);
+    await loadFeed(false);
 }
 
 function queueThumbLoad(img) {
@@ -1559,24 +1503,28 @@ function renderGrid() {
         renderGroupedGrid();
         return;
     }
-    if (!monthSummaries.length && !totalVideoCount) {
+    if (!monthSummaries.length && !totalVideoCount && !feedCache.items.length && !feedCache.loading) {
         updateMonthPicker();
         grid.innerHTML = '<div class="empty-state"><div class="icon">📂</div><h2>No videos found</h2><p style="color:#666;margin-top:8px;font-size:0.85rem">Check that ComfyUI/output/video exists.</p></div>';
         stats.textContent = '';
         return;
     }
-    if (!activeMonth) activeMonth = monthSummaries[0]?.month || null;
-    const cache = activeMonth ? (monthVideosCache[activeMonth] || {}) : {};
-    stats.textContent = cache.hasMore
-        ? `${cache.items?.length || 0} loaded — scroll for more`
-        : `${cache.items?.length || 0} videos` +
+    stats.textContent = feedCache.hasMore
+        ? `${feedCache.items?.length || 0} loaded — scroll for more`
+        : `${feedCache.items?.length || 0} videos` +
         (serverHasVthumb ? '' : ' (tap ▶ to play — thumbnails loading)');
     updateMonthPicker();
     renderGroupedGrid();
 }
 
 function appendVideosToMonth(monthKey, videos) {
-    if (!videos.length || (!searchMode && monthKey !== activeMonth)) return;
+    if (!videos.length) return;
+    if (searchMode) {
+        if (monthKey !== 'search') return;
+    } else {
+        const viewKey = activeMonth || 'all';
+        if (monthKey !== viewKey) return;
+    }
     const gridEl = document.querySelector('#videoGrid .month-grid');
     if (!gridEl) {
         renderGroupedGrid();
@@ -1598,18 +1546,17 @@ function renderGroupedGrid() {
         loading = searchResults.loading;
         key = 'search';
     } else {
-        if (!activeMonth) activeMonth = monthSummaries[0]?.month || null;
-        key = activeMonth || 'none';
-        const cache = monthVideosCache[activeMonth] || {};
-        items = cache.items || [];
-        loading = !!cache.loading;
+        key = activeMonth || 'all';
+        items = feedCache.items || [];
+        loading = !!feedCache.loading;
     }
 
     let html = `<div class="month-section" data-month="${key}"><div class="month-grid">`;
     if (loading && !items.length) {
         html += '<div class="month-loading" style="grid-column:1/-1"><div class="loading-spinner"></div></div>';
     } else if (!items.length) {
-        html += '<div class="empty-state" style="grid-column:1/-1"><div class="icon">📂</div><h2>No videos in this month</h2></div>';
+        const emptyMsg = activeMonth ? 'No videos in this month' : 'No videos found';
+        html += `<div class="empty-state" style="grid-column:1/-1"><div class="icon">📂</div><h2>${emptyMsg}</h2></div>`;
     } else {
         items.forEach(video => { html += buildVideoCardHtml(video); });
     }
@@ -1628,15 +1575,13 @@ async function maybeLoadMore() {
     pageLoading = true;
     try {
         if (searchMode) {
-            if (searchResults.items.length < searchResults.total) {
+            if (searchResults.hasMore !== false && (searchResults.hasMore || searchResults.items.length < (searchResults.total || 0))) {
                 await loadSearchVideos(true);
             }
             return;
         }
-        if (!activeMonth) return;
-        const cache = monthVideosCache[activeMonth] || { items: [], hasMore: false };
-        if (cache.hasMore !== false && (cache.hasMore || cache.items.length < (cache.total || 0))) {
-            await loadMonthVideos(activeMonth, true);
+        if (feedCache.hasMore !== false && (feedCache.hasMore || feedCache.items.length < (feedCache.total || 0))) {
+            await loadFeed(true);
         }
     } finally {
         pageLoading = false;
@@ -1839,19 +1784,23 @@ function onVideoEnded() {
 
 async function fetchMonthPlaylist(monthKey) {
     if (monthKey === 'search') return searchResults.items.slice();
-    const cached = monthVideosCache[monthKey];
-    const summary = monthSummaries.find(s => s.month === monthKey);
-    if (cached && summary && cached.items.length >= summary.count) return cached.items.slice();
+    if ((monthKey === 'all' || !monthKey) && !activeMonth && feedCache.items.length) {
+        return feedCache.items.slice();
+    }
+    if (monthKey === activeMonth && feedCache.items.length) {
+        const summary = monthSummaries.find(s => s.month === monthKey);
+        if (summary && feedCache.items.length >= summary.count) return feedCache.items.slice();
+    }
 
-    const resp = await fetch(
-        `${serverBaseUrl}/api/videos?month=${encodeURIComponent(monthKey)}&limit=5000`
-    );
+    const qs = (monthKey && monthKey !== 'all')
+        ? `month=${encodeURIComponent(monthKey)}&limit=5000`
+        : 'limit=5000';
+    const resp = await fetch(`${serverBaseUrl}/api/videos?${qs}`);
     if (!resp.ok) throw new Error('Failed to load month playlist');
     const data = await resp.json();
     applyFfmpegFlag(data);
     const items = sortVideoList((data.videos || []).map(mapVideo));
     registerVideos(items);
-    monthVideosCache[monthKey] = { items, total: data.total || items.length, loading: false };
     return items;
 }
 
@@ -2284,10 +2233,10 @@ async function deleteVideoByPath(event, pathEnc) {
     } catch (err) { alert('Delete failed: ' + err.message); return; }
     allVideos.splice(allVideos.indexOf(video), 1);
     const fi = filteredVideos.indexOf(video); if (fi > -1) filteredVideos.splice(fi, 1);
-    Object.keys(monthVideosCache).forEach(key => {
-        const cache = monthVideosCache[key];
-        cache.items = (cache.items || []).filter(item => item.path !== video.path);
-    });
+    feedCache.items = (feedCache.items || []).filter(item => item.path !== video.path);
+    if (searchResults.items?.length) {
+        searchResults.items = searchResults.items.filter(item => item.path !== video.path);
+    }
     renderGrid();
 }
 

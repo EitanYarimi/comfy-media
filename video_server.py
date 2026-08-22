@@ -1337,6 +1337,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     'ffmpeg': bool(_ffmpeg_path),
                     'vthumb': vthumb_available(),
                     'indexing': False,
+                    'hasMore': False,
                     'error': None,
                 })
                 return
@@ -1349,6 +1350,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 'ffmpeg': bool(_ffmpeg_path),
                 'vthumb': vthumb_available(),
                 'indexing': False,
+                'hasMore': (offset + limit) < total,
                 'error': None,
             })
             return
@@ -1357,16 +1359,49 @@ class VideoHandler(SimpleHTTPRequestHandler):
         if path.split('?', 1)[0] == '/api/photos':
             query = parse_qs(urlparse(self.path).query)
             force, summary, month, q, offset, limit = parse_media_api_query(query)
+            if STORAGE_MODE == 'drive':
+                drive = get_drive_storage()
+                result = drive.list_photos(
+                    month=month or None,
+                    q=q or None,
+                    offset=offset,
+                    limit=limit,
+                    summary=summary,
+                    refresh=force,
+                )
+                error = result.get('error') or drive.last_error
+                indexing = bool(result.get('indexing') or drive.photos_indexing)
+                if summary:
+                    loaded = result.get('loaded') or []
+                    months = result.get('months')
+                    if not months:
+                        months = media_month_summary(loaded)
+                    respond_json(self, {
+                        'total': result.get('total', len(loaded)),
+                        'months': months,
+                        'indexing': indexing,
+                        'hasMore': bool(result.get('hasMore')),
+                        'error': error,
+                    })
+                    return
+                respond_json(self, {
+                    'total': result.get('total', 0),
+                    'offset': offset,
+                    'limit': limit,
+                    'photos': result.get('photos') or [],
+                    'indexing': indexing,
+                    'hasMore': bool(result.get('hasMore')),
+                    'error': error,
+                })
+                return
             photos = get_photos_cached(force=force)
-            drive = get_drive_storage() if STORAGE_MODE == 'drive' else None
-            indexing = bool(drive and drive.photos_indexing)
-            error = (drive.photos_error or drive.last_error) if drive else None
             if summary:
                 respond_json(self, {
                     'total': len(photos),
                     'months': media_month_summary(photos),
-                    'indexing': indexing,
-                    'error': error,
+                    'indexing': False,
+                    'hasMore': False,
+                    'error': None,
                 })
                 return
             total, page = paginate_media(photos, month=month or None, q=q or None, offset=offset, limit=limit, kind='photos')
@@ -1375,8 +1410,9 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 'offset': offset,
                 'limit': limit,
                 'photos': page,
-                'indexing': indexing,
-                'error': error,
+                'indexing': False,
+                'hasMore': (offset + limit) < total,
+                'error': None,
             })
             return
 

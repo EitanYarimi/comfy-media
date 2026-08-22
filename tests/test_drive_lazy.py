@@ -138,7 +138,7 @@ class LazyDriveListTests(unittest.TestCase):
         self.assertEqual(result['months'][0]['count'], 40)
         self.assertTrue(result['hasMore'])
 
-    def test_summary_refresh_merges_current_month(self):
+    def test_summary_refresh_merges_recent_window(self):
         storage = _blank_drive()
         existing = storage._entries_from_files([
             _file('a', 'a.mp4', '2026-08-18T12:00:00Z'),
@@ -163,8 +163,8 @@ class LazyDriveListTests(unittest.TestCase):
              patch.object(storage, '_query_videos', side_effect=fake_query), \
              patch.object(
                  storage,
-                 '_current_month_start_iso',
-                 return_value=('2026-08-01T00:00:00Z', '2026-08'),
+                 '_recent_cutoff_iso',
+                 return_value='2026-07-23T12:00:00Z',
              ), \
              patch.object(storage, '_discover_month_keys', return_value=['2026-08']):
             soft = storage.list_videos(summary=True)
@@ -173,8 +173,39 @@ class LazyDriveListTests(unittest.TestCase):
 
             third = storage.list_videos(summary=True, refresh=True)
             self.assertEqual([v['name'] for v in third['videos']], ['new.mp4', 'a.mp4'])
-            self.assertTrue(any('modifiedTime >=' in (q or '') for q in query_calls))
+            self.assertTrue(any("modifiedTime >= '2026-07-23T12:00:00Z'" in (q or '') for q in query_calls))
             self.assertTrue(storage._video_index_path.is_file())
+
+    def test_list_photos_has_more_from_memory(self):
+        storage = _blank_drive()
+        files = [
+            {
+                'id': f'p{i}',
+                'name': f'pic{i}.png',
+                'mimeType': 'image/png',
+                'size': '10',
+                'modifiedTime': f'2026-08-{(i % 28) + 1:02d}T12:00:00Z',
+                'thumbnailLink': '',
+                'hasThumbnail': False,
+            }
+            for i in range(50)
+        ]
+        items = storage._entries_from_files(files, extensions=drive_backend.IMAGE_EXTENSIONS)
+        with storage._list_lock:
+            storage._register_items(items, as_photos=True)
+            storage._photos_complete = True
+            storage._photos_started = True
+
+        with patch.object(storage, '_ensure_root'):
+            page1 = storage.list_photos(offset=0, limit=40, summary=False)
+            page2 = storage.list_photos(offset=40, limit=40, summary=False)
+
+        self.assertEqual(len(page1['photos']), 40)
+        self.assertTrue(page1['hasMore'])
+        self.assertEqual(page1['total'], 50)
+        self.assertEqual(len(page2['photos']), 10)
+        self.assertFalse(page2['hasMore'])
+        self.assertFalse(page1.get('indexing'))
 
     def test_persisted_index_serves_without_drive(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -6,7 +6,7 @@ import os
 import re
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 VIDEO_EXTENSIONS = {'.mp4', '.webm', '.ogg', '.mov', '.mkv', '.avi', '.m4v', '.3gp', '.flv', '.wmv'}
@@ -16,6 +16,7 @@ DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 MEDIA_URL = 'https://www.googleapis.com/drive/v3/files/{file_id}?alt=media&supportsAllDrives=true'
 FOLDER_MIME = 'application/vnd.google-apps.folder'
 VIDEO_PAGE_SIZE = 40
+REFRESH_LOOKBACK_DAYS = 30
 VIDEO_LIST_FIELDS = (
     'nextPageToken, files(id, name, mimeType, size, modifiedTime, thumbnailLink, hasThumbnail)'
 )
@@ -252,11 +253,10 @@ class DriveStorage:
             self._photos_started = True
         threading.Thread(target=self._index_photos, daemon=True).start()
 
-    def _current_month_start_iso(self):
-        now = datetime.now(timezone.utc)
-        start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-        month_key = f'{now.year}-{now.month:02d}'
-        return start.strftime('%Y-%m-%dT%H:%M:%SZ'), month_key
+    def _recent_cutoff_iso(self):
+        """ISO timestamp for now minus REFRESH_LOOKBACK_DAYS (UTC)."""
+        cutoff = datetime.now(timezone.utc) - timedelta(days=REFRESH_LOOKBACK_DAYS)
+        return cutoff.strftime('%Y-%m-%dT%H:%M:%SZ')
 
     def _merge_items_by_id(self, existing, incoming):
         by_id = {item['id']: dict(item) for item in existing}
@@ -575,10 +575,10 @@ class DriveStorage:
         finally:
             self.videos_indexing = False
 
-    def _refresh_current_month_videos(self):
-        """Merge videos modified in the current UTC month into the saved library."""
+    def _refresh_recent_videos(self):
+        """Merge videos modified in the last REFRESH_LOOKBACK_DAYS into the saved library."""
         self._ensure_root()
-        start_iso, month_key = self._current_month_start_iso()
+        start_iso = self._recent_cutoff_iso()
         extra = f"modifiedTime >= '{start_iso}'"
         incoming = []
         token = None
@@ -595,15 +595,15 @@ class DriveStorage:
             self._videos_complete = True
             self._videos_started = True
             self._videos_token = None
-            self._month_state.pop(month_key, None)
+            self._month_state.clear()
             self._rebuild_month_keys_locked()
         self._persist_videos()
-        print(f'   Refresh: merged {len(incoming)} videos from {month_key}')
+        print(f'   Refresh: merged {len(incoming)} videos from last {REFRESH_LOOKBACK_DAYS} days')
 
-    def _refresh_current_month_photos(self):
-        """Merge images modified in the current UTC month into the saved library."""
+    def _refresh_recent_photos(self):
+        """Merge images modified in the last REFRESH_LOOKBACK_DAYS into the saved library."""
         self._ensure_root()
-        start_iso, month_key = self._current_month_start_iso()
+        start_iso = self._recent_cutoff_iso()
         extra = f"modifiedTime >= '{start_iso}'"
         incoming = []
         token = None
@@ -620,7 +620,7 @@ class DriveStorage:
             self._photos_complete = True
             self._photos_started = True
         self._persist_photos()
-        print(f'   Refresh: merged {len(incoming)} photos from {month_key}')
+        print(f'   Refresh: merged {len(incoming)} photos from last {REFRESH_LOOKBACK_DAYS} days')
 
     def _videos_from_memory(self, month=None, q=None, offset=0, limit=VIDEO_PAGE_SIZE, summary=False):
         with self._list_lock:
@@ -696,12 +696,12 @@ class DriveStorage:
         return self._paged_video_query(extra, offset, limit, state)
 
     def list_videos(self, month=None, q=None, offset=0, limit=VIDEO_PAGE_SIZE, summary=False, refresh=False):
-        """Serve from persisted/full index; Refresh only merges the current calendar month."""
+        """Serve from persisted/full index; Refresh merges files from the last REFRESH_LOOKBACK_DAYS."""
         self.videos_error = None
         try:
             self._ensure_root()
             if refresh:
-                self._refresh_current_month_videos()
+                self._refresh_recent_videos()
                 return self._videos_from_memory(
                     month=month, q=q, offset=offset, limit=limit, summary=summary
                 )
@@ -797,14 +797,94 @@ class DriveStorage:
         result = self.list_videos(summary=True)
         return list(result.get('loaded') or [])
 
+    def _photo_months_payload(self, photos):
+        """Month chips from photos actually in memory (newest first)."""
+        counts = {}
+        for item in photos or []:
+            key = month_key_from_ts(item['modified'])
+            counts[key] = counts.get(key, 0) + 1
+        keys = sorted(counts.keys(), reverse=True)
+        return [{'month': key, 'count': counts[key]} for key in keys]
+
+    def _photos_from_memory(self, month=None, q=None, offset=0, limit=VIDEO_PAGE_SIZE, summary=False):
+        with self._list_lock:
+            all_photos = list(self._photos)
+            complete = self._photos_complete
+            indexing = bool(self.photos_indexing or not complete)
+        months = self._photo_months_payload(all_photos)
+        photos = all_photos
+        if q:
+            needle = q.lower()
+            photos = [photo for photo in photos if needle in (photo.get('name') or '').lower()]
+        if month:
+            start, end = month_utc_bounds(month)
+            start_ts, end_ts = start.timestamp(), end.timestamp()
+            photos = [
+                photo for photo in photos
+                if start_ts <= float(photo.get('modified') or 0) < end_ts
+            ]
+        if summary:
+            page = photos[:VIDEO_PAGE_SIZE]
+            return {
+                'photos': page,
+                'loaded': page,
+                'months': months,
+                'total': len(photos),
+                'hasMore': not complete,
+                'indexing': indexing,
+                'error': None,
+            }
+        page = photos[offset:offset + limit]
+        return {
+            'photos': page,
+            'loaded': photos,
+            'months': months,
+            'total': len(photos),
+            'hasMore': (offset + limit) < len(photos) if complete else True,
+            'indexing': indexing,
+            'error': None,
+        }
+
+    def list_photos(self, month=None, q=None, offset=0, limit=VIDEO_PAGE_SIZE, summary=False, refresh=False):
+        """Serve photos from memory like list_videos; Refresh merges last REFRESH_LOOKBACK_DAYS."""
+        self.photos_error = None
+        try:
+            self._ensure_root()
+            if refresh:
+                self._refresh_recent_photos()
+                return self._photos_from_memory(
+                    month=month, q=q, offset=offset, limit=limit, summary=summary
+                )
+
+            if self._photos_complete or self.photos_indexing:
+                return self._photos_from_memory(
+                    month=month, q=q, offset=offset, limit=limit, summary=summary
+                )
+
+            # Cold start: progressive folder scan publishes as it walks; return what we have.
+            self.start_photo_scan_if_needed()
+            return self._photos_from_memory(
+                month=month, q=q, offset=offset, limit=limit, summary=summary
+            )
+        except Exception as exc:
+            self.photos_error = str(exc)
+            print(f'   Photo list failed: {exc}')
+            return {
+                'photos': [],
+                'loaded': [],
+                'total': 0,
+                'hasMore': False,
+                'indexing': False,
+                'error': self.photos_error,
+            }
+
     def scan_photos(self, refresh=False):
         if refresh:
-            self._refresh_current_month_photos()
+            self._refresh_recent_photos()
             with self._list_lock:
                 return list(self._photos)
-        self.start_photo_scan_if_needed()
-        with self._list_lock:
-            return list(self._photos)
+        result = self.list_photos(summary=True)
+        return list(result.get('loaded') or [])
 
     def _lookup_by_name(self, name):
         if not name:
