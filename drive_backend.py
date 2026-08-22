@@ -113,6 +113,7 @@ class DriveStorage:
         self._videos_started = False
         self._photos_complete = False
         self._month_state = {}
+        self._photo_month_state = {}
         self._month_keys = None
         self._photos_started = False
         self._list_lock = threading.Lock()
@@ -450,6 +451,22 @@ class DriveStorage:
                 used_paths.add(item['path'])
             self._videos.sort(key=lambda video: video['modified'], reverse=True)
 
+    def _remember_photos(self, items):
+        with self._list_lock:
+            known = {photo['id'] for photo in self._photos}
+            used_paths = {photo['path'] for photo in self._photos}
+            for item in items:
+                if item['id'] in known:
+                    continue
+                if item['path'] in used_paths:
+                    item = dict(item)
+                    item['path'] = f"{item['id']}/{item['name']}"
+                self._photos.append(item)
+                self._files[item['path']] = item
+                known.add(item['id'])
+                used_paths.add(item['path'])
+            self._photos.sort(key=lambda photo: photo['modified'], reverse=True)
+
     def reset_video_cache(self):
         """Drop cached video pages so the next list hits Drive again."""
         with self._list_lock:
@@ -474,6 +491,7 @@ class DriveStorage:
             self._photos = []
             self._photos_started = False
             self._photos_complete = False
+            self._photo_month_state = {}
             self.photos_error = None
 
     def _discover_month_keys(self):
@@ -695,6 +713,36 @@ class DriveStorage:
         state = {'items': [], 'token': None, 'complete': False}
         return self._paged_video_query(extra, offset, limit, state)
 
+    def _paged_image_query(self, extra_q, offset, limit, state):
+        needed = offset + limit
+        while not state['complete'] and len(state['items']) < needed:
+            resp = self._query_images(
+                extra_q=extra_q,
+                page_size=VIDEO_PAGE_SIZE,
+                page_token=state['token'],
+            )
+            files = resp.get('files') or []
+            batch = self._entries_from_files(files, extensions=IMAGE_EXTENSIONS)
+            self._remember_photos(batch)
+            state['items'].extend(batch)
+            state['token'] = resp.get('nextPageToken')
+            if not state['token'] or not files:
+                state['complete'] = True
+                break
+        page = state['items'][offset:offset + limit]
+        return page, len(state['items']), not state['complete']
+
+    def _month_photos(self, month, offset, limit):
+        start, end = month_utc_bounds(month)
+        extra = (
+            f"modifiedTime >= '{start.strftime('%Y-%m-%dT%H:%M:%SZ')}' and "
+            f"modifiedTime < '{end.strftime('%Y-%m-%dT%H:%M:%SZ')}'"
+        )
+        state = self._photo_month_state.setdefault(
+            month, {'items': [], 'token': None, 'complete': False}
+        )
+        return self._paged_image_query(extra, offset, limit, state)
+
     def list_videos(self, month=None, q=None, offset=0, limit=VIDEO_PAGE_SIZE, summary=False, refresh=False):
         """Serve from persisted/full index; Refresh merges files from the last REFRESH_LOOKBACK_DAYS."""
         self.videos_error = None
@@ -706,24 +754,9 @@ class DriveStorage:
                     month=month, q=q, offset=offset, limit=limit, summary=summary
                 )
 
-            if self._videos_complete or self.videos_indexing:
-                return self._videos_from_memory(
-                    month=month, q=q, offset=offset, limit=limit, summary=summary
-                )
-
-            # Cold start: first page quickly, then background full scan.
-            if q:
-                page, total, has_more = self._search_videos(q, offset, limit)
-                self.start_video_scan_if_needed()
-                return {
-                    'videos': page,
-                    'loaded': page,
-                    'total': total,
-                    'hasMore': has_more,
-                    'indexing': True,
-                    'error': None,
-                }
-            if month:
+            # Month/search pages must hit Drive until the full library is in memory.
+            # Otherwise old months look empty while only recent videos are indexed.
+            if month and not summary and not self._videos_complete:
                 page, total, has_more = self._month_videos(month, offset, limit)
                 self.start_video_scan_if_needed()
                 return {
@@ -734,9 +767,25 @@ class DriveStorage:
                     'indexing': True,
                     'error': None,
                 }
+            if q and not summary and not self._videos_complete:
+                page, total, has_more = self._search_videos(q, offset, limit)
+                self.start_video_scan_if_needed()
+                return {
+                    'videos': page,
+                    'loaded': page,
+                    'total': total,
+                    'hasMore': has_more,
+                    'indexing': True,
+                    'error': None,
+                }
 
-            # Cold start only sync-fills a small first page. Large limits (slideshow)
-            # must not crawl Drive on the request thread — that times out on Render.
+            if self._videos_complete or self.videos_indexing:
+                return self._videos_from_memory(
+                    month=month, q=q, offset=offset, limit=limit, summary=summary
+                )
+
+            # Cold start (All feed / summary): first page quickly, then background full scan.
+            # Large limits (slideshow) must not crawl Drive on the request thread — that times out on Render.
             if summary:
                 wanted = VIDEO_PAGE_SIZE
             else:
@@ -860,6 +909,21 @@ class DriveStorage:
                 return self._photos_from_memory(
                     month=month, q=q, offset=offset, limit=limit, summary=summary
                 )
+
+            # Until the full photo index is ready, load a month directly from Drive
+            # so older months are not empty while the folder crawl is still running.
+            if month and not summary and not self._photos_complete:
+                page, total, has_more = self._month_photos(month, offset, limit)
+                self.start_photo_scan_if_needed()
+                return {
+                    'photos': page,
+                    'loaded': page,
+                    'months': self._photo_months_payload(self._photos),
+                    'total': total,
+                    'hasMore': has_more,
+                    'indexing': True,
+                    'error': None,
+                }
 
             if self._photos_complete or self.photos_indexing:
                 return self._photos_from_memory(

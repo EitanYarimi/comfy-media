@@ -27,6 +27,7 @@ def _blank_drive(tmp=None):
     storage._photos_complete = False
     storage._photos_started = False
     storage._month_state = {}
+    storage._photo_month_state = {}
     storage._month_keys = None
     storage._list_lock = threading.Lock()
     storage._video_scan_lock = threading.Lock()
@@ -236,6 +237,72 @@ class LazyDriveListTests(unittest.TestCase):
             self.assertEqual(result['total'], 2)
             self.assertEqual({v['name'] for v in result['videos']}, {'a.mp4', 'b.mp4'})
             self.assertFalse(result.get('indexing'))
+
+    def test_old_month_hits_drive_while_indexing(self):
+        """While the full scan is running, memory only has recent clips.
+        Month filters must query Drive by date, not filter that incomplete list.
+        """
+        storage = _blank_drive()
+        storage.videos_indexing = True
+        storage._videos_complete = False
+        recent = storage._entries_from_files([
+            _file('new1', 'new1.mp4', '2026-08-18T12:00:00Z'),
+        ])
+        with storage._list_lock:
+            storage._register_items(recent, as_videos=True)
+
+        old_files = [_file('old1', 'old1.mp4', '2026-06-15T12:00:00Z')]
+        calls = {'n': 0, 'extra': []}
+
+        def fake_query(extra_q='', page_size=40, page_token=None):
+            calls['n'] += 1
+            calls['extra'].append(extra_q)
+            return {'files': old_files, 'nextPageToken': None}
+
+        with patch.object(storage, '_ensure_root'), \
+             patch.object(storage, '_query_videos', side_effect=fake_query), \
+             patch.object(storage, 'start_video_scan_if_needed'):
+            # Bug path: memory-only filter would return [].
+            empty = storage._videos_from_memory(month='2026-06', offset=0, limit=40)
+            self.assertEqual(empty['videos'], [])
+
+            result = storage.list_videos(month='2026-06', offset=0, limit=40)
+
+        self.assertEqual(calls['n'], 1)
+        self.assertTrue(any('2026-06-01' in q for q in calls['extra']))
+        self.assertEqual(len(result['videos']), 1)
+        self.assertEqual(result['videos'][0]['name'], 'old1.mp4')
+        self.assertTrue(result.get('indexing'))
+        self.assertFalse(result.get('hasMore'))
+
+    def test_old_photo_month_hits_drive_while_indexing(self):
+        storage = _blank_drive()
+        storage.photos_indexing = True
+        storage._photos_complete = False
+        recent = storage._entries_from_files(
+            [{'id': 'p1', 'name': 'p1.png', 'mimeType': 'image/png', 'size': '1',
+              'modifiedTime': '2026-08-18T12:00:00Z', 'thumbnailLink': '', 'hasThumbnail': False}],
+            extensions=drive_backend.IMAGE_EXTENSIONS,
+        )
+        with storage._list_lock:
+            storage._register_items(recent, as_photos=True)
+
+        old_files = [{
+            'id': 'oldp', 'name': 'oldp.png', 'mimeType': 'image/png', 'size': '1',
+            'modifiedTime': '2026-06-15T12:00:00Z', 'thumbnailLink': '', 'hasThumbnail': False,
+        }]
+
+        def fake_query(extra_q='', page_size=40, page_token=None):
+            return {'files': old_files, 'nextPageToken': None}
+
+        with patch.object(storage, '_ensure_root'), \
+             patch.object(storage, '_query_images', side_effect=fake_query), \
+             patch.object(storage, 'start_photo_scan_if_needed'):
+            result = storage.list_photos(month='2026-06', offset=0, limit=40)
+
+        self.assertEqual(len(result['photos']), 1)
+        self.assertEqual(result['photos'][0]['name'], 'oldp.png')
+        self.assertTrue(result.get('indexing'))
 
 
 if __name__ == '__main__':
