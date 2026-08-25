@@ -1942,8 +1942,8 @@ function openModal(video, keepZoom = false) {
     const player = document.getElementById('modalVideo');
     player.removeAttribute('poster');
     player.preload = 'auto';
-    // Opening from the grid / slideshow starts muted so autoplay is allowed.
-    if (!keepZoom || slideshowActive) player.muted = true;
+    // First open starts muted so autoplay is allowed; next/prev keeps user choice.
+    if (!keepZoom) player.muted = true;
     document.getElementById('modalTitle').textContent = video.name;
     document.getElementById('modalOverlay').classList.add('active');
     document.getElementById('slideshowProgress').style.width = '0%';
