@@ -1000,7 +1000,8 @@ class DriveStorage:
         url = MEDIA_URL.format(file_id=file_id)
         return self.session.get(url, headers=headers, stream=True, timeout=timeout)
 
-    def fetch_thumbnail(self, virtual_path, size=400):
+    def fetch_thumbnail(self, virtual_path, size=220):
+        """Fetch a small preview for the grid. Short timeouts — never block a worker for minutes."""
         meta = self.get_meta(virtual_path)
         if not meta:
             return None
@@ -1019,8 +1020,10 @@ class DriveStorage:
             urls.append(resized)
             if resized != link:
                 urls.append(link)
+        # Prefer the lightweight googleusercontent URL; Drive thumbnail endpoint is a fallback.
         urls.append(f'https://lh3.googleusercontent.com/d/{meta["id"]}=s{size}')
-        urls.append(f'https://drive.google.com/thumbnail?id={meta["id"]}&sz=w{size}')
+        if meta.get('hasThumbnail') or link:
+            urls.append(f'https://drive.google.com/thumbnail?id={meta["id"]}&sz=w{size}')
 
         seen = set()
         for url in urls:
@@ -1028,7 +1031,8 @@ class DriveStorage:
                 continue
             seen.add(url)
             try:
-                resp = self.session.get(url, timeout=30)
+                # (connect, read) — fail fast so the gallery can show placeholders.
+                resp = self.session.get(url, timeout=(3.05, 8))
             except Exception:
                 continue
             ctype = (resp.headers.get('Content-Type') or '').split(';')[0].strip()

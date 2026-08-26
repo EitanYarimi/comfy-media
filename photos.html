@@ -298,7 +298,11 @@
 const serverBaseUrl = window.location.origin;
 const PHOTOS_PER_LOAD = 40;
 const SLIDESHOW_INTERVAL = 4000;
-const THUMB_CONCURRENCY = 6;
+const THUMB_CONCURRENCY = (navigator.connection && navigator.connection.saveData)
+    ? 2
+    : (window.matchMedia('(max-width: 768px)').matches ? 3 : 4);
+const THUMB_LOAD_MARGIN = '100px';
+const THUMB_UNLOAD_MARGIN = '900px';
 let pageLoading = false;
 let scrollTicking = false;
 let allPhotos = [], filteredPhotos = [], currentPhotoIndex = -1;
@@ -308,7 +312,9 @@ let searchMode = false;
 let searchResults = { items: [], total: 0, loading: false, hasMore: false };
 let activeMonth = null; // null = All (continuous chronological feed)
 let thumbObserver = null;
+let thumbUnloadObserver = null;
 let thumbLoadQueue = [], thumbLoadActive = 0;
+let thumbLoadPaused = false;
 let slideshowActive = false;
 let slideshowPaused = false;
 let slideshowTimer = null;
@@ -571,21 +577,57 @@ async function selectMonth(key) {
     await loadFeed(false);
 }
 
+function clearThumbLoadQueue() {
+    thumbLoadQueue = [];
+}
+
 function queueThumbLoad(img) {
+    if (!img || !img.dataset.src) return;
+    if (img.dataset.thumbQueued === '1') return;
+    img.dataset.thumbQueued = '1';
     thumbLoadQueue.push(img);
     processThumbQueue();
 }
 
 function processThumbQueue() {
+    if (thumbLoadPaused) return;
     while (thumbLoadActive < THUMB_CONCURRENCY && thumbLoadQueue.length) {
         const img = thumbLoadQueue.shift();
+        if (!img) continue;
+        img.dataset.thumbQueued = '0';
+        if (!document.contains(img)) continue;
         const src = img.dataset.src;
         if (!src) continue;
+        if (img.getAttribute('src') === src) continue;
         thumbLoadActive++;
-        img.onload = img.onerror = () => { thumbLoadActive--; processThumbQueue(); };
+        img.onload = () => {
+            thumbLoadActive--;
+            const ph = img.parentElement?.querySelector('.thumbnail-placeholder');
+            if (ph) ph.style.display = 'none';
+            processThumbQueue();
+        };
+        img.onerror = () => {
+            thumbLoadActive--;
+            img.removeAttribute('data-src');
+            img.style.display = 'none';
+            const ph = img.parentElement?.querySelector('.thumbnail-placeholder');
+            if (ph) ph.style.display = 'flex';
+            processThumbQueue();
+        };
         img.src = src;
-        img.removeAttribute('data-src');
     }
+}
+
+function unloadFarThumb(img) {
+    if (!img || img.tagName !== 'IMG') return;
+    if (!img.dataset.src) return;
+    if (!img.getAttribute('src')) return;
+    img.onload = null;
+    img.onerror = null;
+    img.removeAttribute('src');
+    img.dataset.thumbQueued = '0';
+    const ph = img.parentElement?.querySelector('.thumbnail-placeholder');
+    if (ph) ph.style.display = 'flex';
 }
 
 function initThumbObserver() {
@@ -595,17 +637,23 @@ function initThumbObserver() {
             if (!e.isIntersecting) return;
             const img = e.target;
             if (img.dataset.src) queueThumbLoad(img);
-            thumbObserver.unobserve(img);
         });
-    }, { rootMargin: '250px', threshold: 0.01 });
+    }, { rootMargin: THUMB_LOAD_MARGIN, threshold: 0.01 });
+
+    thumbUnloadObserver = new IntersectionObserver((entries) => {
+        entries.forEach(e => {
+            if (e.isIntersecting) return;
+            unloadFarThumb(e.target);
+        });
+    }, { rootMargin: THUMB_UNLOAD_MARGIN, threshold: 0 });
 }
 
 function observeThumbs(root) {
     initThumbObserver();
     const scope = root && root.querySelectorAll ? root : document;
-    scope.querySelectorAll('img.thumb-lazy[data-src]:not([data-observed])').forEach(img => {
-        img.dataset.observed = '1';
+    scope.querySelectorAll('img.thumb-lazy[data-src]').forEach(img => {
         thumbObserver.observe(img);
+        thumbUnloadObserver.observe(img);
     });
 }
 
@@ -625,6 +673,7 @@ function showScrollLoader(show) {
 }
 
 function renderGrid() {
+    clearThumbLoadQueue();
     const grid = document.getElementById('photoGrid'), stats = document.getElementById('stats');
     if (searchMode) {
         updateMonthPicker();
@@ -675,6 +724,7 @@ function appendPhotosToMonth(monthKey, photos) {
 }
 
 function renderGrouped() {
+    clearThumbLoadQueue();
     const grid = document.getElementById('photoGrid');
     let items = [];
     let loading = false;
@@ -757,6 +807,7 @@ function getLightboxPhotos() {
 
 function openLightbox(vid) {
     if (slideshowActive) stopSlideshow(false);
+    thumbLoadPaused = true;
     const photo = getPhotoByVid(vid); if (!photo) return;
     currentPhotoIndex = (window._visiblePhotos||filteredPhotos).indexOf(photo);
     document.getElementById('lightboxImg').src = getFullSrc(photo);
@@ -771,6 +822,8 @@ function closeLightbox() {
     document.getElementById('lightbox').classList.remove('active');
     document.body.style.overflow = '';
     hideInfo();
+    thumbLoadPaused = false;
+    processThumbQueue();
 }
 
 function navPhoto(dir) {
@@ -942,6 +995,7 @@ async function startSlideshow(random = false) {
     if (random) slideshowPlaylist = shufflePhotos(slideshowPlaylist);
     slideshowActive = true;
     slideshowPaused = false;
+    thumbLoadPaused = true;
     showSlideshowPhoto(0);
     document.getElementById('lightbox').classList.add('active');
     document.body.style.overflow = 'hidden';
@@ -958,6 +1012,8 @@ function stopSlideshow(closeBox) {
         document.getElementById('lightbox').classList.remove('active');
         document.body.style.overflow = '';
         hideInfo();
+        thumbLoadPaused = false;
+        processThumbQueue();
     }
 }
 

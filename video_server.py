@@ -261,8 +261,11 @@ def vthumb_available():
     return bool(_ffmpeg_path or _qlmanage_path)
 
 
-# Limit concurrent vthumb generation so video streaming isn't starved on Google Drive.
+# Limit concurrent thumb work so listing/streaming aren't starved (esp. on Render).
 _vthumb_semaphore = threading.Semaphore(3)
+_drive_thumb_semaphore = threading.Semaphore(3)
+_photo_thumb_semaphore = threading.Semaphore(2)
+DRIVE_GRID_THUMB_SIZE = 220
 _active_streams = 0
 _active_streams_lock = threading.Lock()
 _faststart_jobs = set()
@@ -1107,9 +1110,10 @@ def serve_drive_media(handler, rel_path):
 
 def serve_drive_thumb(handler, rel_path):
     """Serve Drive's generated thumbnail; never downloads the source file."""
-    found = get_drive_storage().fetch_thumbnail(rel_path, size=400)
+    with _drive_thumb_semaphore:
+        found = get_drive_storage().fetch_thumbnail(rel_path, size=DRIVE_GRID_THUMB_SIZE)
     if not found:
-        handler.send_error(404)
+        send_http_empty(handler, 404)
         return
     data, mime = found
     handler.send_response(200)
@@ -1458,10 +1462,8 @@ class VideoHandler(SimpleHTTPRequestHandler):
         if path.startswith('/thumb/'):
             rel = unquote(path[7:])
             if STORAGE_MODE == 'drive':
-                if media_exists(rel):
-                    serve_drive_thumb(self, rel)
-                    return
-                send_http_empty(self, 404)
+                # fetch_thumbnail looks up meta itself — avoid a second Drive round-trip.
+                serve_drive_thumb(self, rel)
                 return
             filepath = resolve_media_path(rel)
             if filepath and filepath.is_file():
@@ -1494,19 +1496,26 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     if found:
                         data, mime = found
                     else:
-                        img = Image.open(filepath)
-                        img.thumbnail(PHOTO_THUMB_SIZE, Image.LANCZOS)
-                        buf = io.BytesIO()
-                        try:
-                            img.save(buf, format='WEBP', quality=75)
-                            mime, ext = 'image/webp', '.webp'
-                        except Exception:
-                            if img.mode in ('RGBA', 'P'):
-                                img = img.convert('RGB')
+                        with _photo_thumb_semaphore:
+                            img = Image.open(filepath)
+                            if getattr(img, 'format', None) == 'JPEG' and hasattr(img, 'draft'):
+                                try:
+                                    img.draft('RGB', PHOTO_THUMB_SIZE)
+                                except Exception:
+                                    pass
+                            # BILINEAR is much cheaper than LANCZOS for grid previews.
+                            img.thumbnail(PHOTO_THUMB_SIZE, Image.BILINEAR)
                             buf = io.BytesIO()
-                            img.save(buf, format='JPEG', quality=70)
-                            mime, ext = 'image/jpeg', '.jpg'
-                        data, mime = _store_thumb(cache_key, ext, buf.getvalue(), mime)
+                            try:
+                                img.save(buf, format='WEBP', quality=72)
+                                mime, ext = 'image/webp', '.webp'
+                            except Exception:
+                                if img.mode in ('RGBA', 'P'):
+                                    img = img.convert('RGB')
+                                buf = io.BytesIO()
+                                img.save(buf, format='JPEG', quality=70)
+                                mime, ext = 'image/jpeg', '.jpg'
+                            data, mime = _store_thumb(cache_key, ext, buf.getvalue(), mime)
 
                     self.send_response(200)
                     self.send_header('Content-Type', mime)
@@ -1529,10 +1538,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
         if path.startswith('/vthumb/'):
             rel = unquote(path[8:])
             if STORAGE_MODE == 'drive':
-                if media_exists(rel):
-                    serve_drive_thumb(self, rel)
-                    return
-                send_http_empty(self, 404)
+                serve_drive_thumb(self, rel)
                 return
             filepath = resolve_media_path(rel)
             if filepath and filepath.is_file():

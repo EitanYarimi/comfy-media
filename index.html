@@ -1049,8 +1049,12 @@ let allVideos = [];
 let filteredVideos = [];
 let currentVideoIndex = -1;
 const VIDEO_EXTENSIONS = ['.mp4', '.webm', '.ogg', '.mov', '.mkv', '.avi', '.m4v', '.3gp', '.flv', '.wmv'];
-const THUMB_CONCURRENCY = 6;
-const THUMB_RETRY_MAX = 3;
+const THUMB_CONCURRENCY = (navigator.connection && navigator.connection.saveData)
+    ? 2
+    : (window.matchMedia('(max-width: 768px)').matches ? 3 : 4);
+const THUMB_RETRY_MAX = 2;
+const THUMB_LOAD_MARGIN = '100px';
+const THUMB_UNLOAD_MARGIN = '900px';
 const VIDEOS_PER_LOAD = 40;
 let pageLoading = false;
 let scrollTicking = false;
@@ -1069,6 +1073,7 @@ let slideshowActive = false;
 let slideshowPaused = false;
 let slideshowRandom = false;
 let thumbObserver = null;
+let thumbUnloadObserver = null;
 let thumbLoadQueue = [], thumbLoadActive = 0;
 let serverHasFfmpeg = false;
 let serverHasVthumb = false;
@@ -1389,7 +1394,14 @@ async function selectMonth(key) {
     await loadFeed(false);
 }
 
+function clearThumbLoadQueue() {
+    thumbLoadQueue = [];
+}
+
 function queueThumbLoad(img) {
+    if (!img || !img.dataset.src) return;
+    if (img.dataset.thumbQueued === '1') return;
+    img.dataset.thumbQueued = '1';
     thumbLoadQueue.push(img);
     processThumbLoadQueue();
 }
@@ -1398,22 +1410,26 @@ function processThumbLoadQueue() {
     if (thumbLoadPaused) return;
     while (thumbLoadActive < THUMB_CONCURRENCY && thumbLoadQueue.length) {
         const img = thumbLoadQueue.shift();
+        if (!img) continue;
+        img.dataset.thumbQueued = '0';
+        if (!document.contains(img)) continue;
         const src = img.dataset.src;
         if (!src) continue;
+        if (img.getAttribute('src') === src) continue;
         thumbLoadActive++;
         const retries = parseInt(img.dataset.thumbRetries || '0', 10);
         img.onload = () => {
             thumbLoadActive--;
-            img.removeAttribute('data-src');
             img.removeAttribute('data-thumb-retries');
             onThumbLoaded(img);
             processThumbLoadQueue();
         };
         img.onerror = () => {
             thumbLoadActive--;
-            if (retries < THUMB_RETRY_MAX) {
+            if (retries < THUMB_RETRY_MAX && document.contains(img)) {
                 img.dataset.thumbRetries = String(retries + 1);
-                setTimeout(() => queueThumbLoad(img), 1500 + retries * 1500);
+                img.removeAttribute('src');
+                setTimeout(() => queueThumbLoad(img), 1200 + retries * 1200);
             } else {
                 img.removeAttribute('data-src');
                 fallbackThumbnail(img);
@@ -1424,6 +1440,18 @@ function processThumbLoadQueue() {
     }
 }
 
+function unloadFarThumb(img) {
+    if (!img || img.tagName !== 'IMG') return;
+    if (!img.dataset.src) return;
+    if (!img.getAttribute('src')) return;
+    img.onload = null;
+    img.onerror = null;
+    img.removeAttribute('src');
+    img.dataset.thumbQueued = '0';
+    const ph = img.parentElement?.querySelector('.thumbnail-placeholder');
+    if (ph) ph.style.display = 'flex';
+}
+
 function initThumbObserver() {
     if (thumbObserver) return;
     thumbObserver = new IntersectionObserver((entries) => {
@@ -1432,26 +1460,30 @@ function initThumbObserver() {
             const el = e.target;
             if (el.dataset.needsThumb) {
                 queueThumbnail(el.dataset.vid);
-                thumbObserver.unobserve(el);
                 return;
             }
             if (el.dataset.src) queueThumbLoad(el);
-            thumbObserver.unobserve(el);
         });
-    }, { rootMargin: '250px', threshold: 0.01 });
+    }, { rootMargin: THUMB_LOAD_MARGIN, threshold: 0.01 });
+
+    thumbUnloadObserver = new IntersectionObserver((entries) => {
+        entries.forEach(e => {
+            if (e.isIntersecting) return;
+            unloadFarThumb(e.target);
+        });
+    }, { rootMargin: THUMB_UNLOAD_MARGIN, threshold: 0 });
 }
 
 function observeThumbs(root) {
     initThumbObserver();
     const scope = root && root.querySelectorAll ? root : document;
     if (useServerVthumb()) {
-        scope.querySelectorAll('img.thumb-lazy[data-src]:not([data-observed])').forEach(img => {
-            img.dataset.observed = '1';
+        scope.querySelectorAll('img.thumb-lazy[data-src]').forEach(img => {
             thumbObserver.observe(img);
+            thumbUnloadObserver.observe(img);
         });
     } else if (useClientVideoThumbs()) {
-        scope.querySelectorAll('.thumbnail-container[data-needs-thumb]:not([data-observed])').forEach(el => {
-            el.dataset.observed = '1';
+        scope.querySelectorAll('.thumbnail-container[data-needs-thumb]').forEach(el => {
             thumbObserver.observe(el);
         });
     }
@@ -1485,6 +1517,7 @@ function showScrollLoader(show) {
 }
 
 function renderGrid() {
+    clearThumbLoadQueue();
     const grid = document.getElementById('videoGrid');
     const stats = document.getElementById('stats');
     if (searchMode) {
@@ -1537,6 +1570,7 @@ function appendVideosToMonth(monthKey, videos) {
 }
 
 function renderGroupedGrid() {
+    clearThumbLoadQueue();
     const grid = document.getElementById('videoGrid');
     let items = [];
     let loading = false;

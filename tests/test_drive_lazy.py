@@ -304,6 +304,35 @@ class LazyDriveListTests(unittest.TestCase):
         self.assertEqual(result['photos'][0]['name'], 'oldp.png')
         self.assertTrue(result.get('indexing'))
 
+    def test_fetch_thumbnail_uses_short_timeout(self):
+        storage = _blank_drive()
+        storage.thumb_cache = storage.index_dir / 'thumbs'
+        storage.thumb_cache.mkdir(parents=True, exist_ok=True)
+        storage._files['clip.mp4'] = {
+            'id': 'vid1',
+            'name': 'clip.mp4',
+            'path': 'clip.mp4',
+            'thumbnailLink': 'https://example.com/t=s400',
+            'hasThumbnail': True,
+        }
+        timeouts = []
+
+        class FakeResp:
+            status_code = 200
+            content = b'\xff\xd8\xff'
+            headers = {'Content-Type': 'image/jpeg'}
+
+        class FakeSession:
+            def get(self, url, timeout=None):
+                timeouts.append(timeout)
+                return FakeResp()
+
+        storage.session = FakeSession()
+        found = storage.fetch_thumbnail('clip.mp4', size=220)
+        self.assertIsNotNone(found)
+        self.assertTrue(timeouts)
+        self.assertEqual(timeouts[0], (3.05, 8))
+
 
 if __name__ == '__main__':
     unittest.main()
