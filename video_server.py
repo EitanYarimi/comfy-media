@@ -692,27 +692,29 @@ def _thumb_from_ffmpeg(filepath, cache_key):
         return None
 
     # Fixed seek avoids slow ffprobe on first thumbnail (Google Drive latency).
+    # Fall back to earlier seeks for short clips (<1s) that have no frame at 1.0s.
     scale = f'scale={VIDEO_THUMB_SIZE[0]}:{VIDEO_THUMB_SIZE[1]}:force_original_aspect_ratio=decrease'
     attempts = []
     if _ffmpeg_has_webp:
         attempts.append((['-f', 'webp', '-quality', '75'], '.webp', 'image/webp'))
     attempts.append((['-f', 'image2pipe', '-vcodec', 'mjpeg', '-q:v', '4'], '.jpg', 'image/jpeg'))
 
-    for encode_args, ext, mime in attempts:
-        try:
-            result = subprocess.run(
-                [
-                    _ffmpeg_path, '-hide_banner', '-loglevel', 'error',
-                    '-ss', '1.0', '-i', str(filepath),
-                    '-an', '-sn', '-vframes', '1', '-vf', scale,
-                    *encode_args, 'pipe:1',
-                ],
-                capture_output=True, timeout=60, check=False,
-            )
-        except (OSError, subprocess.SubprocessError):
-            continue
-        if result.returncode == 0 and result.stdout:
-            return _store_thumb(cache_key, ext, result.stdout, mime)
+    for seek in ('1.0', '0.1', '0'):
+        for encode_args, ext, mime in attempts:
+            try:
+                result = subprocess.run(
+                    [
+                        _ffmpeg_path, '-hide_banner', '-loglevel', 'error',
+                        '-ss', seek, '-i', str(filepath),
+                        '-an', '-sn', '-vframes', '1', '-vf', scale,
+                        *encode_args, 'pipe:1',
+                    ],
+                    capture_output=True, timeout=60, check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if result.returncode == 0 and result.stdout:
+                return _store_thumb(cache_key, ext, result.stdout, mime)
     return None
 
 
