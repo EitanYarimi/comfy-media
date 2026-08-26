@@ -110,6 +110,15 @@ _PREWARM_DEFAULT = '0' if STORAGE_MODE == 'drive' else '1'
 PREWARM_ENABLED = os.environ.get('MEDIA_PREWARM', _PREWARM_DEFAULT).lower() not in ('0', 'false', 'no')
 THUMB_MEMORY_LIMIT = 64 * 1024 * 1024
 STREAM_CACHE_MAX_BYTES = int(os.environ.get('MEDIA_STREAM_CACHE_GB', '20')) * 1024 ** 3
+# Drive mode: keep the first N MB of recently played files so the next open starts from disk.
+DRIVE_PREFIX_CACHE_DIR = CACHE_ROOT / 'drive_prefix'
+DRIVE_PREFIX_BYTES = max(1, int(os.environ.get('DRIVE_PREFIX_CACHE_MB', '4'))) * 1024 * 1024
+DRIVE_PREFIX_CACHE_MAX_BYTES = max(
+    DRIVE_PREFIX_BYTES,
+    int(os.environ.get('DRIVE_PREFIX_CACHE_TOTAL_MB', '512')) * 1024 * 1024,
+)
+_drive_prefix_lock = threading.Lock()
+_drive_prefix_warming = set()
 
 _photo_cache = {'data': None, 'time': 0.0}
 _video_cache = {'data': None, 'time': 0.0}
@@ -513,6 +522,164 @@ def prune_stream_cache():
             total -= st.st_size
         except OSError:
             continue
+
+
+def _drive_prefix_paths(file_id):
+    safe = re.sub(r'[^A-Za-z0-9_-]', '_', str(file_id))[:120]
+    return (
+        DRIVE_PREFIX_CACHE_DIR / f'{safe}.bin',
+        DRIVE_PREFIX_CACHE_DIR / f'{safe}.json',
+    )
+
+
+def prune_drive_prefix_cache():
+    try:
+        files = [
+            (f, f.stat())
+            for f in DRIVE_PREFIX_CACHE_DIR.glob('*.bin')
+            if f.is_file()
+        ]
+    except OSError:
+        return
+    total = sum(st.st_size for _f, st in files)
+    if total <= DRIVE_PREFIX_CACHE_MAX_BYTES:
+        return
+    files.sort(key=lambda pair: pair[1].st_atime)
+    for path, st in files:
+        if total <= DRIVE_PREFIX_CACHE_MAX_BYTES:
+            break
+        try:
+            path.unlink(missing_ok=True)
+            path.with_suffix('.json').unlink(missing_ok=True)
+            total -= st.st_size
+        except OSError:
+            continue
+
+
+def get_drive_prefix_cache(file_id, file_size):
+    """Return (path, prefix_len) when a valid head cache exists for this Drive file."""
+    bin_path, meta_path = _drive_prefix_paths(file_id)
+    try:
+        if not bin_path.is_file():
+            return None
+        meta = {}
+        if meta_path.is_file():
+            meta = json.loads(meta_path.read_text(encoding='utf-8'))
+        if int(meta.get('file_size') or 0) != int(file_size):
+            return None
+        prefix_len = bin_path.stat().st_size
+        if prefix_len <= 0:
+            return None
+        # Bump atime for LRU pruning.
+        try:
+            os.utime(bin_path, None)
+        except OSError:
+            pass
+        return bin_path, prefix_len
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def save_drive_prefix_cache(file_id, file_size, data):
+    if not data:
+        return
+    try:
+        DRIVE_PREFIX_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        bin_path, meta_path = _drive_prefix_paths(file_id)
+        tmp = bin_path.with_suffix('.tmp')
+        tmp.write_bytes(data)
+        tmp.replace(bin_path)
+        meta_path.write_text(
+            json.dumps({'file_size': int(file_size), 'saved': time.time()}),
+            encoding='utf-8',
+        )
+        prune_drive_prefix_cache()
+    except OSError as exc:
+        print(f'   Drive prefix cache write failed: {exc}')
+
+
+def warm_drive_prefix_cache(file_id, file_size):
+    """Download the first DRIVE_PREFIX_BYTES of a Drive file into disk cache."""
+    file_size = int(file_size or 0)
+    if file_size <= 0:
+        return False
+    wanted = min(file_size, DRIVE_PREFIX_BYTES)
+    existing = get_drive_prefix_cache(file_id, file_size)
+    if existing and existing[1] >= wanted:
+        return True
+    with _drive_prefix_lock:
+        if file_id in _drive_prefix_warming:
+            return False
+        _drive_prefix_warming.add(file_id)
+    try:
+        existing = get_drive_prefix_cache(file_id, file_size)
+        if existing and existing[1] >= wanted:
+            return True
+        end = wanted - 1
+        drive = get_drive_storage()
+        resp = drive.open_media(file_id, f'bytes=0-{end}', timeout=60)
+        try:
+            if resp.status_code not in (200, 206):
+                return False
+            chunks = []
+            total = 0
+            for chunk in resp.iter_content(256 * 1024):
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total >= wanted:
+                    break
+            data = b''.join(chunks)[:wanted]
+            if not data:
+                return False
+            save_drive_prefix_cache(file_id, file_size, data)
+            return True
+        finally:
+            resp.close()
+    except Exception as exc:
+        print(f'   Drive prefix warm failed: {exc}')
+        return False
+    finally:
+        with _drive_prefix_lock:
+            _drive_prefix_warming.discard(file_id)
+
+
+def schedule_drive_prefix_warm(file_id, file_size):
+    wanted = min(int(file_size or 0), DRIVE_PREFIX_BYTES)
+    if wanted <= 0:
+        return
+    existing = get_drive_prefix_cache(file_id, file_size)
+    if existing and existing[1] >= wanted:
+        return
+    with _drive_prefix_lock:
+        if file_id in _drive_prefix_warming:
+            return
+    threading.Thread(
+        target=warm_drive_prefix_cache,
+        args=(file_id, file_size),
+        daemon=True,
+    ).start()
+
+
+def _serve_drive_prefix_range(handler, prefix_path, file_size, content_type, start, end):
+    length = end - start + 1
+    handler.send_response(206)
+    handler.send_header('Content-Type', content_type)
+    handler.send_header('Content-Length', str(length))
+    handler.send_header('Content-Range', f'bytes {start}-{end}/{file_size}')
+    handler.send_header('Accept-Ranges', 'bytes')
+    handler.send_header('Cache-Control', 'public, max-age=3600')
+    handler.send_header('X-Cache', 'HIT')
+    handler.end_headers()
+    with open(prefix_path, 'rb') as f:
+        f.seek(start)
+        remaining = length
+        while remaining > 0:
+            chunk = f.read(min(256 * 1024, remaining))
+            if not chunk or not safe_write(handler.wfile, chunk):
+                break
+            remaining -= len(chunk)
 
 
 def _faststart_worker():
@@ -1064,6 +1231,20 @@ def serve_drive_media(handler, rel_path):
         send_http_empty(handler, 416, extra_headers={'Content-Range': f'bytes */{file_size}'})
         return
 
+    cached = get_drive_prefix_cache(meta['id'], file_size) if file_size else None
+    if parsed and cached:
+        prefix_path, prefix_len = cached
+        start, end = parsed
+        if end < prefix_len:
+            _serve_drive_prefix_range(
+                handler, prefix_path, file_size, content_type, start, end
+            )
+            return
+
+    # Warm / top-up the head so later opens can start from disk.
+    if file_size:
+        schedule_drive_prefix_warm(meta['id'], file_size)
+
     outgoing_range = None
     if parsed:
         start, end = parsed
@@ -1092,10 +1273,28 @@ def serve_drive_media(handler, rel_path):
             handler.send_header('Content-Range', f'bytes {start}-{end}/{file_size}')
         handler.send_header('Accept-Ranges', 'bytes')
         handler.send_header('Cache-Control', 'public, max-age=3600')
+        handler.send_header('X-Cache', 'MISS')
         handler.end_headers()
+
+        # Capture the start of the file while streaming so later opens hit disk.
+        capture = bytearray()
+        should_capture = (
+            file_size > 0
+            and not cached
+            and (parsed is None or (isinstance(parsed, tuple) and parsed[0] == 0))
+        )
+        capture_limit = min(file_size, DRIVE_PREFIX_BYTES) if should_capture else 0
+
         for chunk in resp.iter_content(256 * 1024):
-            if not chunk or not safe_write(handler.wfile, chunk):
+            if not chunk:
                 break
+            if capture_limit and len(capture) < capture_limit:
+                need = capture_limit - len(capture)
+                capture.extend(chunk[:need])
+            if not safe_write(handler.wfile, chunk):
+                break
+        if capture_limit and len(capture) >= min(file_size, 64 * 1024):
+            save_drive_prefix_cache(meta['id'], file_size, bytes(capture))
     except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
         pass
     except Exception:
@@ -1291,6 +1490,42 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 return
 
         path = bare_path if bare_path != path else path
+
+        # Warm Drive prefix cache for the next video (no body returned to the client).
+        if path.split('?', 1)[0] == '/api/prefetch':
+            query = parse_qs(urlparse(self.path).query)
+            rel = unquote((query.get('path') or [''])[0]).lstrip('/')
+            if not rel or '..' in rel:
+                send_http_json(self, 400, {'ok': False, 'error': 'path required'})
+                return
+            if STORAGE_MODE != 'drive':
+                # Local files are already on disk; nothing to warm.
+                respond_json(self, {'ok': True, 'cached': True, 'mode': 'local'})
+                return
+            drive = get_drive_storage()
+            meta = drive.get_meta(rel)
+            if not meta:
+                send_http_json(self, 404, {'ok': False, 'error': 'not found'})
+                return
+            file_size = int(meta.get('size') or 0)
+            cached = get_drive_prefix_cache(meta['id'], file_size)
+            if cached:
+                respond_json(self, {
+                    'ok': True,
+                    'cached': True,
+                    'bytes': cached[1],
+                    'fileSize': file_size,
+                })
+                return
+            ok = warm_drive_prefix_cache(meta['id'], file_size)
+            cached = get_drive_prefix_cache(meta['id'], file_size)
+            respond_json(self, {
+                'ok': bool(ok and cached),
+                'cached': bool(cached),
+                'bytes': cached[1] if cached else 0,
+                'fileSize': file_size,
+            })
+            return
 
         # API endpoint: returns JSON list of videos sorted by date
         if path.split('?', 1)[0] == '/api/videos':
@@ -1666,6 +1901,11 @@ if __name__ == '__main__':
     else:
         print('   Video thumbnails: unavailable (install ffmpeg: brew install ffmpeg)')
     print(f'   Cache (local disk): {CACHE_ROOT}')
+    if STORAGE_MODE == 'drive':
+        print(
+            f'   Drive prefix cache: {DRIVE_PREFIX_BYTES // (1024 * 1024)}MB/file, '
+            f'max {DRIVE_PREFIX_CACHE_MAX_BYTES // (1024 * 1024)}MB'
+        )
     if STORAGE_MODE != 'drive':
         def _load_index_background():
             print('   Loading video index...')

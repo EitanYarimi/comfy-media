@@ -1038,6 +1038,8 @@
     <div class="modal-video-wrap" id="modalVideoWrap">
         <div class="modal-video-loading" id="modalVideoLoading"><div class="loading-spinner"></div></div>
         <video id="modalVideo" controls controlsList="nofullscreen nodownload" playsinline webkit-playsinline muted preload="metadata" onended="onVideoEnded()" ontimeupdate="updateSlideshowProgress()"></video>
+        <!-- Hidden player warms the next clip while the current one plays. -->
+        <video id="prefetchVideo" muted playsinline webkit-playsinline preload="auto" style="display:none" aria-hidden="true"></video>
     </div>
     <div class="modal-title" id="modalTitle"></div>
 </div>
@@ -1072,6 +1074,10 @@ let modalPlaylist = [];
 let slideshowActive = false;
 let slideshowPaused = false;
 let slideshowRandom = false;
+let slideshowNextIndex = null;
+let prefetchUrl = null;
+let prefetchController = null;
+const VIDEO_PREFETCH_ENABLED = !(navigator.connection && navigator.connection.saveData);
 let thumbObserver = null;
 let thumbUnloadObserver = null;
 let thumbLoadQueue = [], thumbLoadActive = 0;
@@ -1819,21 +1825,80 @@ function updateSlideshowProgress() {
     bar.style.width = Math.min(100, (player.currentTime / player.duration) * 100) + '%';
 }
 
+function pickNextPlaylistIndex(fromIndex = currentVideoIndex) {
+    if (!modalPlaylist.length) return null;
+    if (slideshowActive && slideshowRandom) {
+        if (modalPlaylist.length <= 1) return 0;
+        let next;
+        do {
+            next = Math.floor(Math.random() * modalPlaylist.length);
+        } while (next === fromIndex);
+        return next;
+    }
+    let next = fromIndex + 1;
+    if (next >= modalPlaylist.length) next = 0;
+    return next;
+}
+
+function clearVideoPrefetch() {
+    prefetchUrl = null;
+    slideshowNextIndex = null;
+    if (prefetchController) {
+        try { prefetchController.abort(); } catch (_) {}
+        prefetchController = null;
+    }
+    const pre = document.getElementById('prefetchVideo');
+    if (pre) {
+        try { pre.pause(); } catch (_) {}
+        pre.removeAttribute('src');
+        try { pre.load(); } catch (_) {}
+    }
+}
+
+function prefetchNextVideo() {
+    if (!VIDEO_PREFETCH_ENABLED || !modalPlaylist.length) return;
+    if (document.getElementById('modalOverlay')?.classList.contains('active') !== true) return;
+
+    let nextIndex = slideshowNextIndex;
+    if (nextIndex == null || nextIndex < 0 || nextIndex >= modalPlaylist.length) {
+        nextIndex = pickNextPlaylistIndex(currentVideoIndex);
+        slideshowNextIndex = nextIndex;
+    }
+    if (nextIndex == null) return;
+    const next = modalPlaylist[nextIndex];
+    if (!next || next.url === prefetchUrl) return;
+    if (modalPlaylist[currentVideoIndex] && next.path === modalPlaylist[currentVideoIndex].path) return;
+
+    prefetchUrl = next.url;
+
+    // Warm server-side Drive prefix cache (no-op in local mode).
+    if (prefetchController) {
+        try { prefetchController.abort(); } catch (_) {}
+    }
+    prefetchController = new AbortController();
+    const qs = `path=${encodeURIComponent(next.path)}`;
+    fetch(`${serverBaseUrl}/api/prefetch?${qs}`, {
+        signal: prefetchController.signal,
+        cache: 'no-store',
+    }).catch(() => {});
+
+    // Warm browser media buffer for a faster next open.
+    const pre = document.getElementById('prefetchVideo');
+    if (pre) {
+        if (pre.src !== next.url && pre.currentSrc !== next.url) {
+            pre.src = next.url;
+            pre.load();
+        }
+    }
+}
+
 function advanceSlideshow() {
     if (!slideshowActive || slideshowPaused || !modalPlaylist.length) return;
-    let next;
-    if (slideshowRandom) {
-        if (modalPlaylist.length <= 1) {
-            next = 0;
-        } else {
-            do {
-                next = Math.floor(Math.random() * modalPlaylist.length);
-            } while (next === currentVideoIndex);
-        }
-    } else {
-        next = currentVideoIndex + 1;
-        if (next >= modalPlaylist.length) next = 0;
+    let next = slideshowNextIndex;
+    if (next == null || next < 0 || next >= modalPlaylist.length || next === currentVideoIndex) {
+        next = pickNextPlaylistIndex(currentVideoIndex);
     }
+    slideshowNextIndex = null;
     currentVideoIndex = next;
     openModal(modalPlaylist[next], true);
 }
@@ -1920,6 +1985,7 @@ function stopSlideshow(closeBox) {
     slideshowActive = false;
     slideshowPaused = false;
     slideshowRandom = false;
+    slideshowNextIndex = null;
     updateSlideshowUI();
     if (closeBox) closeModal();
 }
@@ -1957,9 +2023,18 @@ function playVideo(vid) {
 
 function navigateVideo(dir) {
     if (!modalPlaylist.length) return;
-    let i = currentVideoIndex + dir;
-    if (i < 0) i = modalPlaylist.length - 1;
-    if (i >= modalPlaylist.length) i = 0;
+    let i;
+    if (dir > 0 && slideshowNextIndex != null
+        && slideshowNextIndex >= 0
+        && slideshowNextIndex < modalPlaylist.length
+        && slideshowNextIndex !== currentVideoIndex) {
+        i = slideshowNextIndex;
+    } else {
+        i = currentVideoIndex + dir;
+        if (i < 0) i = modalPlaylist.length - 1;
+        if (i >= modalPlaylist.length) i = 0;
+    }
+    slideshowNextIndex = null;
     currentVideoIndex = i;
     openModal(modalPlaylist[i], true);
 }
@@ -1974,6 +2049,7 @@ function openModal(video, keepZoom = false) {
         setFitScreen(false);
     }
     const player = document.getElementById('modalVideo');
+    const prefetchEl = document.getElementById('prefetchVideo');
     player.removeAttribute('poster');
     player.preload = 'auto';
     // First open starts muted so autoplay is allowed; next/prev keeps user choice.
@@ -1989,11 +2065,21 @@ function openModal(video, keepZoom = false) {
     })();
     const needsLoad = player.currentSrc !== absUrl && player.src !== absUrl;
 
+    // If the hidden prefetcher already buffered this clip, reuse its element buffer
+    // by swapping src from an already-loading URL (HTTP cache + media pipeline).
+    const prefetchReady = prefetchEl
+        && (prefetchEl.currentSrc === absUrl || prefetchEl.src === absUrl)
+        && prefetchEl.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+
     const attemptPlay = () => {
         if (token !== modalLoadToken) return;
         setModalLoading(false);
         const p = player.play();
         if (p && p.catch) p.catch(() => {});
+        // Start warming the following clip once playback is underway.
+        setTimeout(() => {
+            if (token === modalLoadToken) prefetchNextVideo();
+        }, 300);
     };
 
     const scheduleRetry = () => {
@@ -2022,7 +2108,7 @@ function openModal(video, keepZoom = false) {
         try { player.currentTime = 0; } catch (_) {}
     }
 
-    if (player.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
+    if (prefetchReady || player.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
         attemptPlay();
     } else {
         player.addEventListener('canplay', attemptPlay, { once: true });
@@ -2049,6 +2135,7 @@ function closeModal() {
     thumbLoadPaused = false;
     const wasSlideshow = slideshowActive;
     if (slideshowActive) stopSlideshow(false);
+    clearVideoPrefetch();
     const player = document.getElementById('modalVideo');
     player.pause(); player.src = ''; player.removeAttribute('poster');
     document.getElementById('modalOverlay').classList.remove('active');
