@@ -566,11 +566,9 @@
         }
         .modal-close--active:hover { background: #cc001f; color: #fff; }
 
-        /* Fit to screen — video fills max area (object-fit: cover) */
+        /* Fit to screen — orientation-aware sizing (see updateVideoFitLayout) */
         .modal-overlay.fit-screen .modal-video-wrap {
-            width: 95vw;
             max-width: 95vw;
-            height: 80vh;
             max-height: 80vh;
         }
 
@@ -579,22 +577,21 @@
             height: 100%;
             max-width: 100%;
             max-height: 100%;
-            object-fit: cover;
+            object-fit: contain;
+            background: #000;
         }
 
         .modal-overlay.fit-screen.is-fs .modal-video-wrap,
         .modal-overlay.fit-screen:fullscreen .modal-video-wrap,
         .modal-overlay.fit-screen:-webkit-full-screen .modal-video-wrap {
-            width: 100vw;
             max-width: 100vw;
-            height: 100vh;
             max-height: 100vh;
         }
 
         .modal-overlay.fit-screen.is-fs #modalVideo,
         .modal-overlay.fit-screen:fullscreen #modalVideo,
         .modal-overlay.fit-screen:-webkit-full-screen #modalVideo {
-            object-fit: cover;
+            object-fit: contain;
         }
         .modal-overlay.is-fs,
         .modal-overlay:fullscreen,
@@ -884,9 +881,7 @@
             .modal-close--fs { left: 10px; right: auto; }
             .modal-close--fit { left: 48px; right: auto; }
             .modal-overlay.fit-screen .modal-video-wrap {
-                width: 100vw;
                 max-width: 100vw;
-                height: 72vh;
                 max-height: 72vh;
             }
             .modal-overlay.is-fs .modal-nav,
@@ -2076,6 +2071,7 @@ function openModal(video, keepZoom = false) {
         setModalLoading(false);
         const p = player.play();
         if (p && p.catch) p.catch(() => {});
+        if (videoFitScreen) updateVideoFitLayout();
         // Start warming the following clip once playback is underway.
         setTimeout(() => {
             if (token === modalLoadToken) prefetchNextVideo();
@@ -2111,6 +2107,9 @@ function openModal(video, keepZoom = false) {
     if (prefetchReady || player.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
         attemptPlay();
     } else {
+        player.addEventListener('loadedmetadata', () => {
+            if (token === modalLoadToken && videoFitScreen) updateVideoFitLayout();
+        }, { once: true });
         player.addEventListener('canplay', attemptPlay, { once: true });
         player.addEventListener('error', scheduleRetry, { once: true });
         player.addEventListener('playing', () => setModalLoading(false), { once: true });
@@ -2184,10 +2183,95 @@ function togglePanic() {
 
 let videoFitScreen = false;
 
+function getVideoOrientation(player) {
+    const w = player?.videoWidth || 0;
+    const h = player?.videoHeight || 0;
+    if (!w || !h) return null;
+    const ratio = w / h;
+    if (ratio > 1.12) return 'landscape';
+    if (ratio < 0.88) return 'portrait';
+    return 'square';
+}
+
+function fitScreenBounds() {
+    const fs = isModalFullscreen();
+    const mobile = window.matchMedia('(max-width: 768px)').matches;
+    return {
+        maxW: fs ? window.innerWidth : window.innerWidth * 0.95,
+        maxH: fs ? window.innerHeight : window.innerHeight * (mobile ? 0.72 : 0.80),
+    };
+}
+
+function clearVideoFitLayout() {
+    const overlay = document.getElementById('modalOverlay');
+    const wrap = document.getElementById('modalVideoWrap');
+    overlay?.classList.remove('fit-landscape', 'fit-portrait', 'fit-square');
+    if (wrap) {
+        wrap.style.removeProperty('width');
+        wrap.style.removeProperty('height');
+    }
+}
+
+function updateVideoFitLayout() {
+    const overlay = document.getElementById('modalOverlay');
+    const wrap = document.getElementById('modalVideoWrap');
+    const player = document.getElementById('modalVideo');
+    if (!overlay || !wrap || !player || !videoFitScreen) {
+        clearVideoFitLayout();
+        return;
+    }
+
+    const vw = player.videoWidth;
+    const vh = player.videoHeight;
+    if (!vw || !vh) return;
+
+    const orientation = getVideoOrientation(player);
+    overlay.classList.remove('fit-landscape', 'fit-portrait', 'fit-square');
+    overlay.classList.add('fit-' + orientation);
+
+    const { maxW, maxH } = fitScreenBounds();
+    let w;
+    let h;
+    if (orientation === 'portrait') {
+        // Tall clips: fill height first so the full frame is visible.
+        h = maxH;
+        w = h * (vw / vh);
+        if (w > maxW) {
+            w = maxW;
+            h = w * (vh / vw);
+        }
+    } else {
+        // Wide / square: fill width first.
+        w = maxW;
+        h = w * (vh / vw);
+        if (h > maxH) {
+            h = maxH;
+            w = h * (vw / vh);
+        }
+    }
+    wrap.style.width = Math.round(w) + 'px';
+    wrap.style.height = Math.round(h) + 'px';
+}
+
+const debouncedFitLayout = debounce(updateVideoFitLayout, 100);
+
+function bindVideoFitLayout(player) {
+    if (!player || player.dataset.fitLayoutBound === '1') return;
+    player.dataset.fitLayoutBound = '1';
+    const refresh = () => { if (videoFitScreen) updateVideoFitLayout(); };
+    player.addEventListener('loadedmetadata', refresh);
+    player.addEventListener('resize', refresh);
+}
+
 function setFitScreen(on) {
     videoFitScreen = !!on;
     document.getElementById('modalOverlay').classList.toggle('fit-screen', videoFitScreen);
-    if (videoFitScreen) resetVideoZoom();
+    if (videoFitScreen) {
+        resetVideoZoom();
+        updateVideoFitLayout();
+    } else {
+        clearVideoFitLayout();
+    }
     updateFitScreenBtn();
 }
 
@@ -2242,8 +2326,16 @@ function toggleModalFullscreen() {
     else enterModalFullscreen();
 }
 
-document.getElementById('modalOverlay').addEventListener('fullscreenchange', updateFullscreenBtn);
-document.getElementById('modalOverlay').addEventListener('webkitfullscreenchange', updateFullscreenBtn);
+document.getElementById('modalOverlay').addEventListener('fullscreenchange', () => {
+    updateFullscreenBtn();
+    updateVideoFitLayout();
+});
+document.getElementById('modalOverlay').addEventListener('webkitfullscreenchange', () => {
+    updateFullscreenBtn();
+    updateVideoFitLayout();
+});
+window.addEventListener('resize', debouncedFitLayout);
+bindVideoFitLayout(document.getElementById('modalVideo'));
 
 // Pinch-to-zoom on video (2 fingers) + pan when zoomed
 let videoZoom = { scale: 1, x: 0, y: 0 };
