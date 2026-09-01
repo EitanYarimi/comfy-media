@@ -83,6 +83,43 @@ def resolve_media_root():
     return script_dir
 
 
+def _count_videos_under(directory):
+    root = Path(directory)
+    if not root.is_dir():
+        return 0
+    return sum(
+        1 for path in root.rglob('*')
+        if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
+    )
+
+
+def _warn_local_media_root(script_dir, media_root):
+    """Warn when MEDIA_ROOT is the repo clone instead of Google Drive My Drive."""
+    script_dir = Path(script_dir).resolve()
+    media_root = Path(media_root).resolve()
+    if media_root != script_dir:
+        return
+    if not (script_dir / 'video_server.py').is_file():
+        return
+
+    video_here = media_root / VIDEO_DIR
+    drive_root = media_root.parent
+    video_on_drive = drive_root / 'ComfyUI' / 'output' / 'video'
+
+    here_count = _count_videos_under(video_here)
+    drive_count = _count_videos_under(video_on_drive) if video_on_drive.is_dir() else 0
+
+    if drive_count > here_count or not video_here.is_dir():
+        print('   ⚠️  MEDIA_ROOT is the comfy-media repo folder — videos usually live under My Drive.')
+        if video_on_drive.is_dir():
+            print(f'      ComfyUI videos on Drive: {video_on_drive} ({drive_count} files)')
+        print(f'      Currently scanning:       {video_here} ({here_count} files)')
+        print('      Fix — either run:')
+        print('         ./start.sh')
+        print('      or set My Drive as MEDIA_ROOT, then restart:')
+        print(f'         export MEDIA_ROOT="{drive_root}"')
+
+
 CACHE_ROOT = _default_cache_root()
 THUMB_CACHE_DIR = CACHE_ROOT / 'thumbs'
 STREAM_CACHE_DIR = CACHE_ROOT / 'streams'
@@ -1927,6 +1964,7 @@ if __name__ == '__main__':
         print(f'   MEDIA_ROOT: {os.getcwd()}')
         print(f'   Videos: {os.path.abspath(VIDEO_DIR)}')
         print(f'   Photos: {[os.path.abspath(d) if not Path(d).is_absolute() else d for d in PHOTO_DIRS]}')
+        _warn_local_media_root(script_dir, media_root)
     if _ffmpeg_path:
         codec = 'webp' if _ffmpeg_has_webp else 'jpeg (no libwebp in this ffmpeg)'
         print(f'   Video thumbnails: ffmpeg -> {codec}')
