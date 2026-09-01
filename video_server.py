@@ -166,15 +166,41 @@ def resolve_media_path(rel_path):
     """Return a local Path for serving (local mode only)."""
     rel_path = str(rel_path).replace('\\', '/').lstrip('/')
     filepath = Path(rel_path)
-    return filepath if filepath.is_file() else None
+    if filepath.is_file():
+        return filepath
+    # Index may be stale or VIDEO_DIR changed — try unique basename under video dir.
+    name = Path(rel_path).name
+    if name:
+        scan_path = Path(VIDEO_DIR)
+        if scan_path.is_dir():
+            matches = [
+                p for p in scan_path.rglob(name)
+                if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS
+            ]
+            if len(matches) == 1:
+                return matches[0]
+    return None
+
+
+def local_media_exists(rel_path):
+    if STORAGE_MODE == 'drive':
+        return get_drive_storage().exists(rel_path)
+    return resolve_media_path(rel_path) is not None
 
 
 def media_exists(rel_path):
-    rel_path = str(rel_path).replace('\\', '/').lstrip('/')
-    if STORAGE_MODE == 'drive':
-        return get_drive_storage().exists(rel_path)
-    filepath = Path(rel_path)
-    return filepath.is_file()
+    return local_media_exists(rel_path)
+
+
+def _filter_local_items(items):
+    """Drop index entries whose files disappeared (common with Drive sync / stale cache)."""
+    if STORAGE_MODE == 'drive' or not items:
+        return items
+    kept = [item for item in items if local_media_exists(item.get('path') or '')]
+    dropped = len(items) - len(kept)
+    if dropped:
+        print(f'   Skipped {dropped} missing file(s) from local index')
+    return kept
 
 
 def auth_cookie_value():
@@ -360,6 +386,7 @@ def get_photos_cached(force=False):
     if not force and _photo_cache['data'] is None:
         items, months, saved = _load_disk_index(PHOTO_INDEX_PATH, LEGACY_PHOTO_INDEX_PATH)
         if items:
+            items = _filter_local_items(items)
             _photo_cache['data'] = items
             _photo_cache['time'] = now
             _media_by_month['photos'] = _build_month_index(items)
@@ -401,6 +428,7 @@ def get_videos_cached(force=False):
     if not force and _video_cache['data'] is None:
         items, months, saved = _load_disk_index(VIDEO_INDEX_PATH, LEGACY_VIDEO_INDEX_PATH)
         if items:
+            items = _filter_local_items(items)
             _video_cache['data'] = items
             _video_cache['time'] = now
             _media_by_month['videos'] = _build_month_index(items)
@@ -1824,6 +1852,12 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 if media_exists(rel_path):
                     serve_media(self, rel_path)
                     return
+                if STORAGE_MODE != 'drive':
+                    tried = Path(rel_path)
+                    print(
+                        f'   404 local media: {tried} '
+                        f'(abs={tried.resolve() if tried.exists() else Path.cwd() / tried})'
+                    )
 
         # Serve other static files (HTML, images) normally
         try:
