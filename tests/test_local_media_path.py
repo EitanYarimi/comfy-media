@@ -61,6 +61,27 @@ class LocalMediaPathTests(unittest.TestCase):
                 video_server.STORAGE_MODE = old_mode
                 video_server.VIDEO_DIR = old_video_dir
 
+    def test_resolve_media_root_auto_my_drive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / 'comfy-media'
+            repo.mkdir()
+            (repo / 'video_server.py').write_text('# app')
+            videos = root / 'ComfyUI' / 'output' / 'video'
+            videos.mkdir(parents=True)
+            (videos / 'clip.mp4').write_bytes(b'x')
+
+            old_env = os.environ.pop('MEDIA_ROOT', None)
+            old_file = video_server.__file__
+            try:
+                video_server.__file__ = str(repo / 'video_server.py')
+                resolved = video_server.resolve_media_root()
+                self.assertEqual(resolved, root.resolve())
+            finally:
+                if old_env is not None:
+                    os.environ['MEDIA_ROOT'] = old_env
+                video_server.__file__ = old_file
+
 
 if __name__ == '__main__':
     unittest.main()

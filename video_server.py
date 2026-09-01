@@ -64,6 +64,10 @@ PHOTO_DIRS = [
     if p.strip()
 ]
 
+VIDEO_EXTENSIONS = {'.mp4', '.webm', '.ogg', '.mov', '.mkv', '.avi', '.m4v', '.3gp', '.flv', '.wmv'}
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.avif', '.heic'}
+
+
 def _default_cache_root():
     """Keep caches off Google Drive: local disk is faster and avoids sync churn."""
     override = os.environ.get('MEDIA_CACHE_DIR')
@@ -80,17 +84,36 @@ def resolve_media_root():
     override = os.environ.get('MEDIA_ROOT')
     if override:
         return Path(override).expanduser().resolve()
+
+    # Repo often lives at My Drive/comfy-media while ComfyUI output is My Drive/ComfyUI/...
+    drive_root = script_dir.parent
+    video_on_drive = drive_root / 'ComfyUI' / 'output' / 'video'
+    video_in_repo = script_dir / _VIDEO_DIR_DEFAULT
+    if (
+        (script_dir / 'video_server.py').is_file()
+        and video_on_drive.is_dir()
+        and _has_videos_under(video_on_drive)
+        and not _has_videos_under(video_in_repo)
+    ):
+        print(f'   Auto MEDIA_ROOT: {drive_root}')
+        print('   (ComfyUI videos are under My Drive, not inside the repo folder)')
+        return drive_root.resolve()
+
     return script_dir
 
 
-def _count_videos_under(directory):
+def _has_videos_under(directory):
+    """True if directory tree contains at least one video file."""
     root = Path(directory)
     if not root.is_dir():
-        return 0
-    return sum(
-        1 for path in root.rglob('*')
-        if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS
-    )
+        return False
+    try:
+        for path in root.rglob('*'):
+            if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS:
+                return True
+    except OSError:
+        return False
+    return False
 
 
 def _warn_local_media_root(script_dir, media_root):
@@ -106,14 +129,14 @@ def _warn_local_media_root(script_dir, media_root):
     drive_root = media_root.parent
     video_on_drive = drive_root / 'ComfyUI' / 'output' / 'video'
 
-    here_count = _count_videos_under(video_here)
-    drive_count = _count_videos_under(video_on_drive) if video_on_drive.is_dir() else 0
+    here_has = _has_videos_under(video_here)
+    drive_has = _has_videos_under(video_on_drive) if video_on_drive.is_dir() else False
 
-    if drive_count > here_count or not video_here.is_dir():
-        print('   ⚠️  MEDIA_ROOT is the comfy-media repo folder — videos usually live under My Drive.')
+    if drive_has and not here_has:
+        print('   ⚠️  MEDIA_ROOT is still the comfy-media repo folder — no videos found there.')
         if video_on_drive.is_dir():
-            print(f'      ComfyUI videos on Drive: {video_on_drive} ({drive_count} files)')
-        print(f'      Currently scanning:       {video_here} ({here_count} files)')
+            print(f'      ComfyUI videos on Drive: {video_on_drive}')
+        print(f'      Currently scanning:       {video_here}')
         print('      Fix — either run:')
         print('         ./start.sh')
         print('      or set My Drive as MEDIA_ROOT, then restart:')
@@ -1083,10 +1106,6 @@ def extract_image_metadata(filepath):
         meta['error'] = str(e)
 
     return meta
-
-
-VIDEO_EXTENSIONS = {'.mp4', '.webm', '.ogg', '.mov', '.mkv', '.avi', '.m4v', '.3gp', '.flv', '.wmv'}
-IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.avif', '.heic'}
 
 
 def scan_videos(root_dir):
