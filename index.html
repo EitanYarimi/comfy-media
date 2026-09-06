@@ -816,24 +816,14 @@
             .video-overlay {
                 opacity: 1;
                 padding: 5px;
-                background: linear-gradient(180deg, rgba(0,0,0,0.35) 0%, transparent 30%, transparent 62%, rgba(0,0,0,0.8) 100%);
+                background: linear-gradient(180deg, transparent 55%, rgba(0,0,0,0.75) 100%);
                 pointer-events: none;
             }
-            .video-overlay .video-actions,
             .video-overlay .video-title-overlay {
                 pointer-events: none;
             }
+            /* Hide delete/info chips on small screens — tap opens the video instead */
             .video-actions {
-                pointer-events: auto;
-                gap: 4px;
-            }
-            .action-btn {
-                width: 24px;
-                height: 24px;
-                font-size: 0.6rem;
-                box-shadow: 0 1px 4px rgba(0,0,0,0.35);
-            }
-            .action-btn--play {
                 display: none;
             }
             .video-title-overlay {
@@ -1289,6 +1279,7 @@ async function loadFeed(append = false) {
         } else {
             renderGrid();
         }
+        if (!append) await fillViewportIfNeeded();
     } catch (err) {
         feedCache.loading = false;
         renderGrid();
@@ -1328,6 +1319,7 @@ async function loadSearchVideos(append = false) {
             const stats = document.getElementById('stats');
             if (stats) stats.textContent = `${searchResults.items.length} of ${searchResults.total} results`;
         }
+        if (!append) await fillViewportIfNeeded();
     } catch (err) {
         searchResults.loading = false;
         renderGrid();
@@ -1364,6 +1356,11 @@ function syncHeaderOffset() {
     if (!header) return;
     document.documentElement.style.setProperty('--header-h', `${header.offsetHeight}px`);
 }
+
+const onResizeFill = debounce(() => {
+    syncHeaderOffset();
+    fillViewportIfNeeded();
+}, 150);
 
 function updateMonthPicker() {
     const picker = document.getElementById('monthPicker');
@@ -1602,25 +1599,53 @@ function renderGroupedGrid() {
     observeThumbs(grid);
 }
 
-async function maybeLoadMore() {
-    if (pageLoading) return;
-    const remain = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
-    if (remain > 500) return;
+function feedHasMore() {
+    if (searchMode) {
+        return searchResults.hasMore !== false &&
+            (searchResults.hasMore || searchResults.items.length < (searchResults.total || 0));
+    }
+    return feedCache.hasMore !== false &&
+        (feedCache.hasMore || feedCache.items.length < (feedCache.total || 0));
+}
 
+function viewportNeedsMore() {
+    const remain = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
+    return remain <= 500;
+}
+
+async function maybeLoadMore() {
+    if (pageLoading) return false;
+    if (!viewportNeedsMore()) return false;
+    if (!feedHasMore()) return false;
+
+    const before = searchMode ? searchResults.items.length : feedCache.items.length;
     pageLoading = true;
     try {
-        if (searchMode) {
-            if (searchResults.hasMore !== false && (searchResults.hasMore || searchResults.items.length < (searchResults.total || 0))) {
-                await loadSearchVideos(true);
-            }
-            return;
-        }
-        if (feedCache.hasMore !== false && (feedCache.hasMore || feedCache.items.length < (feedCache.total || 0))) {
-            await loadFeed(true);
-        }
+        if (searchMode) await loadSearchVideos(true);
+        else await loadFeed(true);
     } finally {
         pageLoading = false;
         showScrollLoader(false);
+    }
+    const after = searchMode ? searchResults.items.length : feedCache.items.length;
+    return after > before;
+}
+
+/** Keep fetching until the page can scroll (or nothing left). Needed on tall screens. */
+let fillViewportRunning = false;
+async function fillViewportIfNeeded() {
+    if (fillViewportRunning) return;
+    fillViewportRunning = true;
+    try {
+        for (let i = 0; i < 25; i++) {
+            if (!viewportNeedsMore() || !feedHasMore()) break;
+            const loaded = await maybeLoadMore();
+            if (!loaded) break;
+            // Let layout settle so scrollHeight updates before the next check
+            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        }
+    } finally {
+        fillViewportRunning = false;
     }
 }
 
@@ -1629,7 +1654,9 @@ function onScrollPage() {
     scrollTicking = true;
     requestAnimationFrame(() => {
         scrollTicking = false;
-        maybeLoadMore();
+        maybeLoadMore().then(loaded => {
+            if (loaded) fillViewportIfNeeded();
+        });
     });
 }
 
@@ -2492,7 +2519,7 @@ async function deleteVideoByPath(event, pathEnc) {
 
 // ========== AUTO LOAD ==========
 window.addEventListener('scroll', onScrollPage, { passive: true });
-window.addEventListener('resize', syncHeaderOffset);
+window.addEventListener('resize', onResizeFill);
 syncHeaderOffset();
 loadFromServer();
 

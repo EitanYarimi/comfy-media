@@ -250,6 +250,8 @@
             .photo-card { border-radius: 12px; }
             .photo-card:hover { transform: none; }
             .photo-overlay { opacity: 1; background: linear-gradient(180deg, transparent 60%, rgba(0,0,0,0.6) 100%); }
+            /* Hide delete/info chips on small screens — tap opens the photo instead */
+            .photo-actions { display: none; }
             header { padding: 8px 12px; }
             #searchInput { width: 100%; order: -1; }
             .controls { width: 100%; }
@@ -477,6 +479,7 @@ async function loadFeed(append = false) {
         } else {
             renderGrid();
         }
+        if (!append) await fillViewportIfNeeded();
     } catch (err) {
         feedCache.loading = false;
         renderGrid();
@@ -516,6 +519,7 @@ async function loadSearchPhotos(append = false) {
             const stats = document.getElementById('stats');
             if (stats) stats.textContent = `${searchResults.items.length} of ${searchResults.total} results`;
         }
+        if (!append) await fillViewportIfNeeded();
     } catch (err) {
         searchResults.loading = false;
         renderGrid();
@@ -546,6 +550,11 @@ function syncHeaderOffset() {
     if (!header) return;
     document.documentElement.style.setProperty('--header-h', `${header.offsetHeight}px`);
 }
+
+const onResizeFill = debounce(() => {
+    syncHeaderOffset();
+    fillViewportIfNeeded();
+}, 150);
 
 function updateMonthPicker() {
     const picker = document.getElementById('monthPicker');
@@ -755,25 +764,52 @@ function renderGrouped() {
     observeThumbs(grid);
 }
 
-async function maybeLoadMore() {
-    if (pageLoading) return;
-    const remain = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
-    if (remain > 500) return;
+function feedHasMore() {
+    if (searchMode) {
+        return searchResults.hasMore !== false &&
+            (searchResults.hasMore || searchResults.items.length < (searchResults.total || 0));
+    }
+    return feedCache.hasMore !== false &&
+        (feedCache.hasMore || feedCache.items.length < (feedCache.total || 0));
+}
 
+function viewportNeedsMore() {
+    const remain = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
+    return remain <= 500;
+}
+
+async function maybeLoadMore() {
+    if (pageLoading) return false;
+    if (!viewportNeedsMore()) return false;
+    if (!feedHasMore()) return false;
+
+    const before = searchMode ? searchResults.items.length : feedCache.items.length;
     pageLoading = true;
     try {
-        if (searchMode) {
-            if (searchResults.hasMore !== false && (searchResults.hasMore || searchResults.items.length < (searchResults.total || 0))) {
-                await loadSearchPhotos(true);
-            }
-            return;
-        }
-        if (feedCache.hasMore !== false && (feedCache.hasMore || feedCache.items.length < (feedCache.total || 0))) {
-            await loadFeed(true);
-        }
+        if (searchMode) await loadSearchPhotos(true);
+        else await loadFeed(true);
     } finally {
         pageLoading = false;
         showScrollLoader(false);
+    }
+    const after = searchMode ? searchResults.items.length : feedCache.items.length;
+    return after > before;
+}
+
+/** Keep fetching until the page can scroll (or nothing left). Needed on tall screens. */
+let fillViewportRunning = false;
+async function fillViewportIfNeeded() {
+    if (fillViewportRunning) return;
+    fillViewportRunning = true;
+    try {
+        for (let i = 0; i < 25; i++) {
+            if (!viewportNeedsMore() || !feedHasMore()) break;
+            const loaded = await maybeLoadMore();
+            if (!loaded) break;
+            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        }
+    } finally {
+        fillViewportRunning = false;
     }
 }
 
@@ -782,7 +818,9 @@ function onScrollPage() {
     scrollTicking = true;
     requestAnimationFrame(() => {
         scrollTicking = false;
-        maybeLoadMore();
+        maybeLoadMore().then(loaded => {
+            if (loaded) fillViewportIfNeeded();
+        });
     });
 }
 
@@ -1191,7 +1229,7 @@ document.getElementById('lightbox').addEventListener('click',(e)=>{if(e.target==
 })();
 loadFromServer();
 window.addEventListener('scroll', onScrollPage, { passive: true });
-window.addEventListener('resize', syncHeaderOffset);
+window.addEventListener('resize', onResizeFill);
 syncHeaderOffset();
 </script>
 </body>
