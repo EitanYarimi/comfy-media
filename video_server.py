@@ -32,6 +32,7 @@ import mimetypes
 import io
 import tempfile
 import re
+import random
 import threading
 from collections import OrderedDict, deque
 from datetime import datetime
@@ -1167,6 +1168,95 @@ def media_month_summary(items):
     return [{'month': k, 'count': counts[k]} for k in sorted(counts.keys(), reverse=True)]
 
 
+def filter_media_items(items, month=None, q=None, kind='videos'):
+    """Return all items matching month/q filters (no pagination)."""
+    filtered = items
+    if month and not q:
+        index = _media_by_month.get(kind)
+        if index is None:
+            index = _build_month_index(items)
+            _media_by_month[kind] = index
+        filtered = index.get(month, [])
+    else:
+        if month:
+            filtered = [i for i in filtered if item_month_key(i['modified']) == month]
+        if q:
+            ql = q.lower()
+            filtered = [i for i in filtered if ql in i['name'].lower()]
+    return filtered
+
+
+def pick_random_item(items, exclude_path=None):
+    """Pick one random media item, preferring not to repeat exclude_path."""
+    if not items:
+        return None
+    pool = items
+    if exclude_path:
+        filtered = [i for i in items if i.get('path') != exclude_path]
+        if filtered:
+            pool = filtered
+    return random.choice(pool)
+
+
+def get_random_video(exclude_path=None, month=None, q=None):
+    """Server-side random pick for All/month/search without shipping the full list."""
+    if STORAGE_MODE == 'drive':
+        drive = get_drive_storage()
+        result = drive._videos_from_memory(
+            month=month or None,
+            q=q or None,
+            offset=0,
+            limit=10**9,
+        )
+        items = result.get('loaded') or []
+        total = result.get('total', len(items))
+        indexing = bool(result.get('indexing'))
+        error = result.get('error')
+    else:
+        videos = get_videos_cached()
+        items = filter_media_items(videos, month=month or None, q=q or None, kind='videos')
+        total = len(items)
+        indexing = False
+        error = None
+    picked = pick_random_item(items, exclude_path=exclude_path)
+    return {
+        'video': picked,
+        'total': total,
+        'indexing': indexing,
+        'error': error,
+        'ffmpeg': bool(_ffmpeg_path),
+        'vthumb': vthumb_available(),
+    }
+
+
+def get_random_photo(exclude_path=None, month=None, q=None):
+    if STORAGE_MODE == 'drive':
+        drive = get_drive_storage()
+        result = drive._photos_from_memory(
+            month=month or None,
+            q=q or None,
+            offset=0,
+            limit=10**9,
+        )
+        items = result.get('loaded') or []
+        total = result.get('total', len(items))
+        indexing = bool(result.get('indexing'))
+        error = result.get('error')
+    else:
+        photos = get_photos_cached()
+        items = filter_media_items(photos, month=month or None, q=q or None, kind='photos')
+        total = len(items)
+        indexing = False
+        error = None
+    picked = pick_random_item(items, exclude_path=exclude_path)
+    return {
+        'photo': picked,
+        'total': total,
+        'indexing': indexing,
+        'error': error,
+    }
+
+
 def paginate_media(items, month=None, q=None, offset=0, limit=40, kind='videos'):
     filtered = items
     if month and not q:
@@ -1739,6 +1829,41 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 'hasMore': (offset + limit) < total,
                 'error': None,
             })
+            return
+
+        # One random video from the library (All / optional month / search)
+        if path.split('?', 1)[0] == '/api/random/video':
+            query = parse_qs(urlparse(self.path).query)
+            exclude = query.get('exclude', [''])[0] or None
+            month = query.get('month', [''])[0] or None
+            q = query.get('q', [''])[0] or None
+            result = get_random_video(exclude_path=exclude, month=month, q=q)
+            if not result.get('video'):
+                result = {
+                    'video': None,
+                    'total': result.get('total', 0),
+                    'indexing': result.get('indexing', False),
+                    'error': result.get('error') or 'No videos available',
+                    'ffmpeg': result.get('ffmpeg'),
+                    'vthumb': result.get('vthumb'),
+                }
+            respond_json(self, result)
+            return
+
+        if path.split('?', 1)[0] == '/api/random/photo':
+            query = parse_qs(urlparse(self.path).query)
+            exclude = query.get('exclude', [''])[0] or None
+            month = query.get('month', [''])[0] or None
+            q = query.get('q', [''])[0] or None
+            result = get_random_photo(exclude_path=exclude, month=month, q=q)
+            if not result.get('photo'):
+                result = {
+                    'photo': None,
+                    'total': result.get('total', 0),
+                    'indexing': result.get('indexing', False),
+                    'error': result.get('error') or 'No photos available',
+                }
+            respond_json(self, result)
             return
 
         # API endpoint: returns metadata from PNG/WebP (ComfyUI prompt, workflow, etc.)

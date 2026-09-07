@@ -1059,7 +1059,10 @@ let modalPlaylist = [];
 let slideshowActive = false;
 let slideshowPaused = false;
 let slideshowRandom = false;
+let slideshowServerRandom = false; // All + Random: ask server for each next clip
 let slideshowNextIndex = null;
+let slideshowRandomPending = null;
+let slideshowRandomTotal = 0;
 let prefetchUrl = null;
 let prefetchController = null;
 const VIDEO_PREFETCH_ENABLED = !(navigator.connection && navigator.connection.saveData);
@@ -1818,7 +1821,13 @@ function updateSlideshowUI() {
     const randomBtn = document.getElementById('slideshowRandomBtn');
     const overlay = document.getElementById('modalOverlay');
     if (slideshowActive) {
-        counter.textContent = `${slideshowRandom ? '🎲 ' : ''}${currentVideoIndex + 1} / ${modalPlaylist.length}`;
+        if (slideshowServerRandom) {
+            const n = currentVideoIndex + 1;
+            const total = slideshowRandomTotal || totalVideoCount || '?';
+            counter.textContent = `🎲 ${n} · pool ${total}`;
+        } else {
+            counter.textContent = `${slideshowRandom ? '🎲 ' : ''}${currentVideoIndex + 1} / ${modalPlaylist.length}`;
+        }
         pauseBtn.style.display = 'flex';
         pauseBtn.textContent = slideshowPaused ? '▶' : '⏸';
         seqBtn.textContent = slideshowRandom ? '▶ Slideshow' : '⏹ Stop';
@@ -1879,7 +1888,57 @@ function clearVideoPrefetch() {
     }
 }
 
+async function fetchServerRandomVideo(excludePath = null) {
+    const params = new URLSearchParams();
+    if (excludePath) params.set('exclude', excludePath);
+    const resp = await fetch(`${serverBaseUrl}/api/random/video?${params}`, { cache: 'no-store' });
+    if (!resp.ok) throw new Error('Random request failed');
+    const data = await resp.json();
+    applyFfmpegFlag(data);
+    if (data.total != null) slideshowRandomTotal = data.total;
+    if (!data.video) throw new Error(data.error || 'No videos available');
+    const video = mapVideo(data.video);
+    registerVideos([video]);
+    return video;
+}
+
+function prefetchVideoObject(video) {
+    if (!VIDEO_PREFETCH_ENABLED || !video) return;
+    prefetchUrl = video.url;
+    if (prefetchController) {
+        try { prefetchController.abort(); } catch (_) {}
+    }
+    prefetchController = new AbortController();
+    fetch(`${serverBaseUrl}/api/prefetch?path=${encodeURIComponent(video.path)}`, {
+        signal: prefetchController.signal,
+        cache: 'no-store',
+    }).catch(() => {});
+    const pre = document.getElementById('prefetchVideo');
+    if (pre) {
+        if (pre.src !== video.url && pre.currentSrc !== video.url) {
+            pre.src = video.url;
+            pre.load();
+        }
+    }
+}
+
+async function prefetchServerRandom() {
+    if (!slideshowServerRandom || !slideshowActive) return;
+    if (slideshowRandomPending) return;
+    const cur = modalPlaylist[currentVideoIndex];
+    try {
+        const next = await fetchServerRandomVideo(cur?.path || null);
+        if (!slideshowActive || !slideshowServerRandom) return;
+        slideshowRandomPending = next;
+        prefetchVideoObject(next);
+    } catch (_) {}
+}
+
 function prefetchNextVideo() {
+    if (slideshowServerRandom) {
+        prefetchServerRandom();
+        return;
+    }
     if (!VIDEO_PREFETCH_ENABLED || !modalPlaylist.length) return;
     if (document.getElementById('modalOverlay')?.classList.contains('active') !== true) return;
 
@@ -1893,31 +1952,35 @@ function prefetchNextVideo() {
     if (!next || next.url === prefetchUrl) return;
     if (modalPlaylist[currentVideoIndex] && next.path === modalPlaylist[currentVideoIndex].path) return;
 
-    prefetchUrl = next.url;
+    prefetchVideoObject(next);
+}
 
-    // Warm server-side Drive prefix cache (no-op in local mode).
-    if (prefetchController) {
-        try { prefetchController.abort(); } catch (_) {}
-    }
-    prefetchController = new AbortController();
-    const qs = `path=${encodeURIComponent(next.path)}`;
-    fetch(`${serverBaseUrl}/api/prefetch?${qs}`, {
-        signal: prefetchController.signal,
-        cache: 'no-store',
-    }).catch(() => {});
-
-    // Warm browser media buffer for a faster next open.
-    const pre = document.getElementById('prefetchVideo');
-    if (pre) {
-        if (pre.src !== next.url && pre.currentSrc !== next.url) {
-            pre.src = next.url;
-            pre.load();
+async function advanceServerRandom() {
+    if (!slideshowActive || slideshowPaused) return;
+    let next = slideshowRandomPending;
+    slideshowRandomPending = null;
+    if (!next) {
+        const cur = modalPlaylist[currentVideoIndex];
+        try {
+            next = await fetchServerRandomVideo(cur?.path || null);
+        } catch (err) {
+            console.warn('Random next failed', err);
+            return;
         }
     }
+    modalPlaylist.push(next);
+    currentVideoIndex = modalPlaylist.length - 1;
+    openModal(next, true);
+    updateSlideshowUI();
+    prefetchServerRandom();
 }
 
 function advanceSlideshow() {
     if (!slideshowActive || slideshowPaused || !modalPlaylist.length) return;
+    if (slideshowServerRandom) {
+        advanceServerRandom();
+        return;
+    }
     let next = slideshowNextIndex;
     if (next == null || next < 0 || next >= modalPlaylist.length || next === currentVideoIndex) {
         next = pickNextPlaylistIndex(currentVideoIndex);
@@ -1956,6 +2019,11 @@ async function fetchMonthPlaylist(monthKey) {
 async function startMonthRandom(monthKey, event) {
     if (event) event.stopPropagation();
     if (slideshowActive) stopSlideshow(false);
+    // All → ask the server for each clip instead of downloading the whole library.
+    if (!monthKey || monthKey === 'all') {
+        await startSlideshow(true);
+        return;
+    }
     let items;
     try {
         items = await fetchMonthPlaylist(monthKey);
@@ -1967,6 +2035,8 @@ async function startMonthRandom(monthKey, event) {
         alert('No videos available yet. Wait for the library to load, then try again.');
         return;
     }
+    slideshowServerRandom = false;
+    slideshowRandomPending = null;
     modalPlaylist = shuffleVideos(items);
     slideshowRandom = true;
     slideshowActive = true;
@@ -1984,6 +2054,31 @@ async function startSlideshow(random = false) {
     slideshowRandom = random;
     const stats = document.getElementById('stats');
     const prevStats = stats ? stats.textContent : '';
+
+    // All + Random: each next clip is a server pick — no full-library download.
+    const useServerRandom = random && !searchMode && !activeMonth;
+    if (useServerRandom) {
+        if (stats) stats.textContent = 'Picking a random video…';
+        try {
+            const video = await fetchServerRandomVideo();
+            slideshowServerRandom = true;
+            slideshowRandomPending = null;
+            modalPlaylist = [video];
+            slideshowActive = true;
+            slideshowPaused = false;
+            currentVideoIndex = 0;
+            openModal(video);
+            updateSlideshowUI();
+            prefetchServerRandom();
+        } catch (err) {
+            if (stats) stats.textContent = prevStats;
+            alert('Random failed: ' + err.message);
+        }
+        return;
+    }
+
+    slideshowServerRandom = false;
+    slideshowRandomPending = null;
     if (stats) stats.textContent = random ? 'Loading random playlist…' : 'Loading slideshow…';
     try {
         modalPlaylist = await fetchSlideshowVideos();
@@ -2009,6 +2104,8 @@ function stopSlideshow(closeBox) {
     slideshowActive = false;
     slideshowPaused = false;
     slideshowRandom = false;
+    slideshowServerRandom = false;
+    slideshowRandomPending = null;
     slideshowNextIndex = null;
     updateSlideshowUI();
     if (closeBox) closeModal();
@@ -2047,6 +2144,16 @@ function playVideo(vid) {
 
 function navigateVideo(dir) {
     if (!modalPlaylist.length) return;
+    if (slideshowServerRandom && dir > 0) {
+        if (currentVideoIndex < modalPlaylist.length - 1) {
+            currentVideoIndex += 1;
+            openModal(modalPlaylist[currentVideoIndex], true);
+            updateSlideshowUI();
+            return;
+        }
+        advanceServerRandom();
+        return;
+    }
     let i;
     if (dir > 0 && slideshowNextIndex != null
         && slideshowNextIndex >= 0
@@ -2055,12 +2162,18 @@ function navigateVideo(dir) {
         i = slideshowNextIndex;
     } else {
         i = currentVideoIndex + dir;
-        if (i < 0) i = modalPlaylist.length - 1;
-        if (i >= modalPlaylist.length) i = 0;
+        if (slideshowServerRandom) {
+            if (i < 0) i = 0;
+            if (i >= modalPlaylist.length) i = modalPlaylist.length - 1;
+        } else {
+            if (i < 0) i = modalPlaylist.length - 1;
+            if (i >= modalPlaylist.length) i = 0;
+        }
     }
     slideshowNextIndex = null;
     currentVideoIndex = i;
     openModal(modalPlaylist[i], true);
+    if (slideshowActive) updateSlideshowUI();
 }
 
 function openModal(video, keepZoom = false) {

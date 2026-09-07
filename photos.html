@@ -324,6 +324,9 @@ let slideshowProgressTimer = null;
 let slideshowPlaylist = [];
 let slideshowStartedAt = 0;
 let slideshowRandom = false;
+let slideshowServerRandom = false;
+let slideshowRandomPending = null;
+let slideshowRandomTotal = 0;
 
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 document.getElementById('searchInput').addEventListener('input', debounce(filterPhotos, 300));
@@ -961,7 +964,13 @@ function updateSlideshowUI() {
     const seqBtn = document.getElementById('slideshowSeqBtn');
     const randomBtn = document.getElementById('slideshowRandomBtn');
     if (slideshowActive) {
-        counter.textContent = `${slideshowRandom ? '🎲 ' : ''}${currentPhotoIndex + 1} / ${slideshowPlaylist.length}`;
+        if (slideshowServerRandom) {
+            const n = currentPhotoIndex + 1;
+            const total = slideshowRandomTotal || totalPhotoCount || '?';
+            counter.textContent = `🎲 ${n} · pool ${total}`;
+        } else {
+            counter.textContent = `${slideshowRandom ? '🎲 ' : ''}${currentPhotoIndex + 1} / ${slideshowPlaylist.length}`;
+        }
         pauseBtn.style.display = 'flex';
         pauseBtn.textContent = slideshowPaused ? '▶' : '⏸';
         seqBtn.textContent = slideshowRandom ? '▶ Slideshow' : '⏹ Stop';
@@ -1009,8 +1018,47 @@ function scheduleSlideshowAdvance() {
     slideshowTimer = setTimeout(() => advanceSlideshow(), SLIDESHOW_INTERVAL);
 }
 
+async function fetchServerRandomPhoto(excludePath = null) {
+    const params = new URLSearchParams();
+    if (excludePath) params.set('exclude', excludePath);
+    const resp = await fetch(`${serverBaseUrl}/api/random/photo?${params}`, { cache: 'no-store' });
+    if (!resp.ok) throw new Error('Random request failed');
+    const data = await resp.json();
+    if (data.total != null) slideshowRandomTotal = data.total;
+    if (!data.photo) throw new Error(data.error || 'No photos available');
+    const photo = mapPhoto(data.photo);
+    registerPhotos([photo]);
+    return photo;
+}
+
+async function advanceServerRandomPhoto() {
+    if (!slideshowActive || slideshowPaused) return;
+    let next = slideshowRandomPending;
+    slideshowRandomPending = null;
+    if (!next) {
+        const cur = slideshowPlaylist[currentPhotoIndex];
+        try {
+            next = await fetchServerRandomPhoto(cur?.path || null);
+        } catch (err) {
+            console.warn('Random next failed', err);
+            scheduleSlideshowAdvance();
+            return;
+        }
+    }
+    slideshowPlaylist.push(next);
+    showSlideshowPhoto(slideshowPlaylist.length - 1);
+    fetchServerRandomPhoto(next.path).then(p => {
+        if (slideshowActive && slideshowServerRandom) slideshowRandomPending = p;
+    }).catch(() => {});
+    scheduleSlideshowAdvance();
+}
+
 function advanceSlideshow() {
     if (!slideshowActive || slideshowPaused) return;
+    if (slideshowServerRandom) {
+        advanceServerRandomPhoto();
+        return;
+    }
     let next;
     if (slideshowRandom) {
         if (slideshowPlaylist.length <= 1) {
@@ -1036,6 +1084,34 @@ async function startSlideshow(random = false) {
     slideshowRandom = random;
     const stats = document.getElementById('stats');
     const prevStats = stats ? stats.textContent : '';
+
+    const useServerRandom = random && !searchMode && !activeMonth;
+    if (useServerRandom) {
+        if (stats) stats.textContent = 'Picking a random photo…';
+        try {
+            const photo = await fetchServerRandomPhoto();
+            slideshowServerRandom = true;
+            slideshowRandomPending = null;
+            slideshowPlaylist = [photo];
+            slideshowActive = true;
+            slideshowPaused = false;
+            thumbLoadPaused = true;
+            showSlideshowPhoto(0);
+            document.getElementById('lightbox').classList.add('active');
+            document.body.style.overflow = 'hidden';
+            fetchServerRandomPhoto(photo.path).then(p => {
+                if (slideshowActive && slideshowServerRandom) slideshowRandomPending = p;
+            }).catch(() => {});
+            scheduleSlideshowAdvance();
+        } catch (err) {
+            if (stats) stats.textContent = prevStats;
+            alert('Random failed: ' + err.message);
+        }
+        return;
+    }
+
+    slideshowServerRandom = false;
+    slideshowRandomPending = null;
     if (stats) stats.textContent = random ? 'Loading random playlist…' : 'Loading slideshow…';
     try {
         slideshowPlaylist = await fetchSlideshowPool();
@@ -1063,6 +1139,8 @@ function stopSlideshow(closeBox) {
     slideshowActive = false;
     slideshowPaused = false;
     slideshowRandom = false;
+    slideshowServerRandom = false;
+    slideshowRandomPending = null;
     clearSlideshowTimers();
     updateSlideshowUI();
     if (closeBox) {
