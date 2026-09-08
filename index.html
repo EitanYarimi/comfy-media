@@ -893,7 +893,19 @@
                 border-radius: 4px;
             }
 
-            /* Full-bleed mobile preview */
+            .stats {
+                padding: 6px 12px;
+                font-size: 0.7rem;
+            }
+            .load-more-btn {
+                padding: 10px 16px;
+                font-size: 0.8rem;
+                margin-bottom: 16px;
+            }
+        }
+
+        /* Phone portrait and landscape (short viewport) preview */
+        @media (max-width: 768px), (max-height: 520px) {
             .modal-overlay {
                 padding: 0;
                 background: #000;
@@ -960,9 +972,10 @@
             }
             .modal-title {
                 position: absolute;
+                top: calc(58px + env(safe-area-inset-top, 0px));
+                bottom: auto;
                 left: 12px;
                 right: 12px;
-                bottom: calc(52px + env(safe-area-inset-bottom, 0px));
                 margin: 0;
                 z-index: 125;
                 font-size: 0.78rem;
@@ -989,19 +1002,10 @@
                 max-width: none !important;
                 width: auto !important;
             }
-            .stats {
-                padding: 6px 12px;
-                font-size: 0.7rem;
-            }
-            .load-more-btn {
-                padding: 10px 16px;
-                font-size: 0.8rem;
-                margin-bottom: 16px;
-            }
         }
 
-        @media (max-width: 768px) and (max-height: 500px) {
-            .modal-title { bottom: calc(40px + env(safe-area-inset-bottom, 0px)); font-size: 0.7rem; }
+        @media (max-height: 520px) {
+            .modal-title { top: calc(50px + env(safe-area-inset-top, 0px)); font-size: 0.7rem; }
             .modal-nav { height: 52px; }
             .modal-chrome { padding-bottom: 16px; }
         }
@@ -2297,7 +2301,7 @@ function getVideoOrientation(player) {
 
 function fitScreenBounds() {
     const fs = isModalFullscreen();
-    const mobile = window.matchMedia('(max-width: 768px)').matches;
+    const mobile = window.matchMedia('(max-width: 768px), (max-height: 520px)').matches;
     return {
         maxW: fs ? window.innerWidth : window.innerWidth * 0.95,
         maxH: fs ? window.innerHeight : window.innerHeight * (mobile ? 0.72 : 0.80),
@@ -2439,7 +2443,7 @@ document.getElementById('modalOverlay').addEventListener('webkitfullscreenchange
 window.addEventListener('resize', debouncedFitLayout);
 bindVideoFitLayout(document.getElementById('modalVideo'));
 
-const MOBILE_PREVIEW_MQ = window.matchMedia('(max-width: 768px)');
+const MOBILE_PREVIEW_MQ = window.matchMedia('(max-width: 768px), (max-height: 520px)');
 
 function isMobilePreview() {
     return MOBILE_PREVIEW_MQ.matches;
