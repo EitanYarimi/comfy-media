@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta http-equiv="Cache-Control" content="no-cache">
     <title>Photos</title>
     <style>
@@ -193,31 +193,37 @@
             font-size: 0.8rem;
         }
 
-        .lightbox { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.92); z-index: 1000; justify-content: center; align-items: center; flex-direction: column; padding: 40px; }
+        .lightbox { display: none; position: fixed; inset: 0; width: 100%; height: 100%; height: 100dvh; background: rgba(0,0,0,0.92); z-index: 1000; justify-content: center; align-items: center; flex-direction: column; padding: 40px; overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
         .lightbox.active { display: flex; }
+        .lightbox-stage { display: flex; align-items: center; justify-content: center; max-width: 85vw; max-height: 80vh; }
         .lightbox img { max-width: 85vw; max-height: 80vh; border-radius: 12px; object-fit: contain; box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
-        .lb-btn { position: absolute; top: 16px; font-size: 1.2rem; color: #888; cursor: pointer; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: #1a1a1a; border: 1px solid #2a2a2a; }
+        .lb-chrome { position: absolute; top: 0; left: 0; right: 0; z-index: 130; display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 16px 20px 20px; pointer-events: none; background: none; transition: opacity 0.25s ease, transform 0.25s ease; }
+        .lb-chrome-cluster { display: flex; align-items: center; gap: 8px; pointer-events: auto; min-width: 0; }
+        .lb-btn { position: relative; top: auto; font-size: 1.2rem; color: #888; cursor: pointer; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: #1a1a1a; border: 1px solid #2a2a2a; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
         .lb-btn:hover { background: #333; color: #fff; }
-        .lightbox-nav { position: absolute; top: 50%; transform: translateY(-50%); font-size: 1.5rem; color: #888; cursor: pointer; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 50%; }
+        .lb-btn--delete { background: #dc2626; border-color: #dc2626; color: #fff; }
+        .lightbox-nav { position: absolute; top: 50%; transform: translateY(-50%); font-size: 1.5rem; color: #888; cursor: pointer; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 50%; z-index: 120; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
         .lightbox-nav:hover { background: #333; color: #fff; }
         .lightbox-nav.prev { left: 16px; }
         .lightbox-nav.next { right: 16px; }
-        .lightbox-title { color: #888; margin-top: 12px; font-size: 0.85rem; }
+        .lightbox-title { color: #888; margin-top: 12px; font-size: 0.85rem; text-align: center; transition: opacity 0.25s ease; }
         .lightbox.slideshow-mode .lightbox-title { color: #ccc; }
+        .lightbox.chrome-hidden .lb-chrome,
+        .lightbox.chrome-hidden .lightbox-nav,
+        .lightbox.chrome-hidden .lightbox-title { opacity: 0; pointer-events: none; }
+        .lightbox.chrome-hidden .lb-chrome { transform: translateY(-8px); }
 
         #slideshowCounter {
-            position: absolute;
-            top: 20px;
-            left: 20px;
             font-size: 0.75rem;
             color: #aaa;
             background: rgba(0,0,0,0.5);
             padding: 6px 12px;
             border-radius: 20px;
             display: none;
+            white-space: nowrap;
         }
 
-        .lightbox.slideshow-mode #slideshowCounter { display: block; }
+        .lightbox.slideshow-mode #slideshowCounter { display: inline-flex; align-items: center; }
 
         .slideshow-progress {
             position: absolute;
@@ -228,6 +234,7 @@
             width: 0%;
             transition: width 0.1s linear;
             display: none;
+            z-index: 140;
         }
 
         .lightbox.slideshow-mode .slideshow-progress { display: block; }
@@ -253,7 +260,80 @@
             header { padding: 8px 12px; }
             #searchInput { width: 100%; order: -1; }
             .controls { width: 100%; }
-            .lightbox img { max-width: 95vw; }
+            .lightbox {
+                padding: 0;
+                background: #000;
+                justify-content: stretch;
+                align-items: stretch;
+            }
+            .lightbox-stage {
+                flex: 1;
+                width: 100%;
+                min-height: 0;
+                max-width: none;
+                max-height: none;
+            }
+            .lightbox img {
+                max-width: 100%;
+                max-height: 100%;
+                width: auto;
+                height: auto;
+                object-fit: contain;
+                border-radius: 0;
+                box-shadow: none;
+            }
+            .lb-chrome {
+                padding: calc(8px + env(safe-area-inset-top, 0px)) 10px 28px;
+                background: linear-gradient(180deg, rgba(0,0,0,0.72) 0%, transparent 100%);
+            }
+            .lb-btn {
+                width: 44px;
+                height: 44px;
+                font-size: 1.05rem;
+                background: rgba(20, 20, 20, 0.78);
+                border-color: rgba(255, 255, 255, 0.18);
+                color: #f2f2f2;
+            }
+            .lightbox-nav {
+                width: 44px;
+                height: 64px;
+                font-size: 1.6rem;
+                background: rgba(0, 0, 0, 0.28);
+                border: none;
+                color: rgba(255, 255, 255, 0.88);
+            }
+            .lightbox-nav.prev { left: max(4px, env(safe-area-inset-left, 0px)); }
+            .lightbox-nav.next { right: max(4px, env(safe-area-inset-right, 0px)); }
+            .lightbox-title {
+                position: absolute;
+                left: 12px;
+                right: 12px;
+                bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+                margin: 0;
+                z-index: 125;
+                font-size: 0.78rem;
+                color: #eee;
+                text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
+                pointer-events: none;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .slideshow-progress {
+                bottom: env(safe-area-inset-bottom, 0px);
+            }
+            #infoPanel {
+                bottom: calc(64px + env(safe-area-inset-bottom, 0px)) !important;
+                left: 12px !important;
+                right: 12px !important;
+                transform: none !important;
+                max-width: none !important;
+                width: auto !important;
+            }
+        }
+        @media (max-width: 768px) and (max-height: 500px) {
+            .lightbox-title { font-size: 0.7rem; }
+            .lightbox-nav { height: 52px; }
         }
         @media (max-width: 480px) {
             .month-grid { grid-template-columns: repeat(3, 1fr); gap: 6px; }
@@ -282,14 +362,22 @@
 
 <div class="lightbox" id="lightbox">
     <div class="slideshow-progress" id="slideshowProgress"></div>
-    <span id="slideshowCounter"></span>
-    <button class="lb-btn" style="right:20px" onclick="closeLightbox()">✕</button>
-    <button class="lb-btn" id="slideshowPauseBtn" style="right:70px;display:none" onclick="toggleSlideshowPause()">⏸</button>
-    <button class="lb-btn" style="right:120px;background:#dc2626;border-color:#dc2626" onclick="deleteFromLightbox()">🗑</button>
-    <button class="lb-btn" style="right:170px" onclick="toggleInfo()">ⓘ</button>
-    <button class="lightbox-nav prev" onclick="navPhoto(-1)">‹</button>
-    <button class="lightbox-nav next" onclick="navPhoto(1)">›</button>
-    <img id="lightboxImg" src="" alt="">
+    <div class="lb-chrome">
+        <div class="lb-chrome-cluster">
+            <span id="slideshowCounter"></span>
+        </div>
+        <div class="lb-chrome-cluster">
+            <button type="button" class="lb-btn" id="slideshowPauseBtn" style="display:none" onclick="toggleSlideshowPause()" title="Pause slideshow" aria-label="Pause slideshow">⏸</button>
+            <button type="button" class="lb-btn" onclick="toggleInfo()" title="Info" aria-label="Photo info">ⓘ</button>
+            <button type="button" class="lb-btn lb-btn--delete" onclick="deleteFromLightbox()" title="Delete" aria-label="Delete">🗑</button>
+            <button type="button" class="lb-btn" onclick="closeLightbox()" title="Close" aria-label="Close">✕</button>
+        </div>
+    </div>
+    <button type="button" class="lightbox-nav prev" onclick="navPhoto(-1)" title="Previous" aria-label="Previous photo">‹</button>
+    <button type="button" class="lightbox-nav next" onclick="navPhoto(1)" title="Next" aria-label="Next photo">›</button>
+    <div class="lightbox-stage">
+        <img id="lightboxImg" src="" alt="">
+    </div>
     <div class="lightbox-title" id="lightboxTitle"></div>
 </div>
 <div id="infoPanel"></div>
@@ -317,6 +405,7 @@ let thumbLoadQueue = [], thumbLoadActive = 0;
 let thumbLoadPaused = false;
 let slideshowActive = false;
 let slideshowPaused = false;
+let lbChromeHideTimer = null;
 let slideshowTimer = null;
 let slideshowProgressTimer = null;
 let slideshowPlaylist = [];
@@ -814,12 +903,14 @@ function openLightbox(vid) {
     document.getElementById('lightboxTitle').textContent = photo.name;
     document.getElementById('lightbox').classList.add('active');
     document.body.style.overflow = 'hidden';
+    showLightboxChrome(true);
     hideInfo();
 }
 
 function closeLightbox() {
     if (slideshowActive) stopSlideshow(false);
-    document.getElementById('lightbox').classList.remove('active');
+    document.getElementById('lightbox').classList.remove('active', 'chrome-hidden');
+    clearTimeout(lbChromeHideTimer);
     document.body.style.overflow = '';
     hideInfo();
     thumbLoadPaused = false;
@@ -833,6 +924,7 @@ function navPhoto(dir) {
     currentPhotoIndex = i;
     document.getElementById('lightboxImg').src = getFullSrc(photos[i]);
     document.getElementById('lightboxTitle').textContent = photos[i].name;
+    showLightboxChrome(true);
     hideInfo();
     if (slideshowActive && !slideshowPaused) {
         clearSlideshowTimers();
@@ -930,6 +1022,7 @@ function showSlideshowPhoto(index) {
     document.getElementById('lightboxImg').src = getFullSrc(photo);
     document.getElementById('lightboxTitle').textContent = photo.name;
     updateSlideshowUI();
+    showLightboxChrome(true);
     hideInfo();
 }
 
@@ -999,6 +1092,7 @@ async function startSlideshow(random = false) {
     showSlideshowPhoto(0);
     document.getElementById('lightbox').classList.add('active');
     document.body.style.overflow = 'hidden';
+    showLightboxChrome(true);
     scheduleSlideshowAdvance();
 }
 
@@ -1009,7 +1103,8 @@ function stopSlideshow(closeBox) {
     clearSlideshowTimers();
     updateSlideshowUI();
     if (closeBox) {
-        document.getElementById('lightbox').classList.remove('active');
+        document.getElementById('lightbox').classList.remove('active', 'chrome-hidden');
+        clearTimeout(lbChromeHideTimer);
         document.body.style.overflow = '';
         hideInfo();
         thumbLoadPaused = false;
@@ -1023,8 +1118,10 @@ function toggleSlideshowPause() {
     updateSlideshowUI();
     if (slideshowPaused) {
         clearSlideshowTimers();
+        showLightboxChrome(false);
     } else {
         scheduleSlideshowAdvance();
+        showLightboxChrome(true);
     }
 }
 
@@ -1178,6 +1275,82 @@ document.addEventListener('keydown', (e) => {
     }
 });
 document.getElementById('lightbox').addEventListener('click',(e)=>{if(e.target===e.currentTarget)closeLightbox();});
+
+const MOBILE_PREVIEW_MQ = window.matchMedia('(max-width: 768px)');
+
+function isMobilePreview() {
+    return MOBILE_PREVIEW_MQ.matches;
+}
+
+function showLightboxChrome(autoHide = true) {
+    const box = document.getElementById('lightbox');
+    if (!box) return;
+    box.classList.remove('chrome-hidden');
+    clearTimeout(lbChromeHideTimer);
+    if (!autoHide || !isMobilePreview() || !box.classList.contains('active')) return;
+    if (slideshowActive && slideshowPaused) return;
+    lbChromeHideTimer = setTimeout(() => {
+        if (box.classList.contains('active')) box.classList.add('chrome-hidden');
+    }, 2800);
+}
+
+function toggleLightboxChrome() {
+    const box = document.getElementById('lightbox');
+    if (!box) return;
+    if (box.classList.contains('chrome-hidden')) showLightboxChrome(true);
+    else {
+        box.classList.add('chrome-hidden');
+        clearTimeout(lbChromeHideTimer);
+    }
+}
+
+(function initLightboxGestures() {
+    const box = document.getElementById('lightbox');
+    if (!box) return;
+    let startX = 0, startY = 0, startT = 0, tracking = false, moved = false;
+
+    box.addEventListener('touchstart', (e) => {
+        if (!box.classList.contains('active')) return;
+        if (e.touches.length !== 1) { tracking = false; return; }
+        if (e.target.closest('button')) { tracking = false; return; }
+        const t = e.touches[0];
+        startX = t.clientX;
+        startY = t.clientY;
+        startT = Date.now();
+        tracking = true;
+        moved = false;
+    }, { passive: true });
+
+    box.addEventListener('touchmove', (e) => {
+        if (!tracking) return;
+        const t = e.touches[0];
+        if (Math.abs(t.clientX - startX) > 12 || Math.abs(t.clientY - startY) > 12) moved = true;
+    }, { passive: true });
+
+    box.addEventListener('touchend', (e) => {
+        if (!tracking) return;
+        tracking = false;
+        const t = e.changedTouches[0];
+        const dx = t.clientX - startX;
+        const dy = t.clientY - startY;
+        const dt = Date.now() - startT;
+        const absX = Math.abs(dx);
+        const absY = Math.abs(dy);
+        if (absX > 56 && absX > absY * 1.25) {
+            navPhoto(dx < 0 ? 1 : -1);
+            showLightboxChrome(true);
+            return;
+        }
+        if (isMobilePreview() && dy > 90 && absY > absX * 1.35) {
+            closeLightbox();
+            return;
+        }
+        if (!moved && dt < 280 && isMobilePreview()) {
+            if (e.target.closest('button')) return;
+            toggleLightboxChrome();
+        }
+    });
+})();
 
 // ========== INIT ==========
 (function showNetworkHint() {

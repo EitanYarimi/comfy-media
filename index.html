@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta http-equiv="Cache-Control" content="no-cache">
     <title>Code Check</title>
     <style>
@@ -492,24 +492,52 @@
         .modal-overlay {
             display: none;
             position: fixed;
-            top: 0;
-            left: 0;
+            inset: 0;
             width: 100%;
             height: 100%;
+            height: 100dvh;
             background: rgba(0,0,0,0.85);
             z-index: 1000;
             justify-content: center;
             align-items: center;
             flex-direction: column;
             padding: 40px;
+            overscroll-behavior: none;
+            -webkit-tap-highlight-color: transparent;
         }
 
         .modal-overlay.active { display: flex; }
 
-        .modal-close {
+        .modal-chrome {
             position: absolute;
-            top: 16px;
-            right: 20px;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 130;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            padding: 16px 20px 20px;
+            pointer-events: none;
+            background: none;
+            transition: opacity 0.25s ease, transform 0.25s ease;
+        }
+
+        .modal-chrome-cluster {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            pointer-events: auto;
+            min-width: 0;
+        }
+
+        .modal-close {
+            position: relative;
+            top: auto;
+            right: auto;
+            left: auto;
+            flex: 0 0 auto;
             font-size: 1.2rem;
             color: #888;
             cursor: pointer;
@@ -522,18 +550,18 @@
             background: #1a1a1a;
             border: 1px solid #2a2a2a;
             transition: background 0.2s;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
         }
 
         .modal-close:hover { background: #333; color: #fff; }
 
         .modal-close--delete {
-            right: 70px;
             background: #dc2626;
             border-color: #dc2626;
         }
         .modal-close--delete:hover { background: #b91c1c; color: #fff; }
-        .modal-close--info { right: 120px; }
-        .modal-close--pause { right: 170px; display: none; }
+        .modal-close--pause { display: none; }
 
         .modal-nav {
             position: absolute;
@@ -550,15 +578,16 @@
             background: #1a1a1a;
             border: 1px solid #2a2a2a;
             border-radius: 50%;
-            transition: background 0.2s;
+            transition: background 0.2s, opacity 0.25s ease;
+            z-index: 120;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
         }
 
         .modal-nav:hover { background: #333; color: #fff; }
         .modal-nav.prev { left: 16px; }
         .modal-nav.next { right: 16px; }
-
-        .modal-close--fs { left: 16px; right: auto; }
-        .modal-close--fit { left: 62px; right: auto; font-size: 1rem; }
+        .modal-close--fit { font-size: 1rem; }
         .modal-close--active {
             background: #e60023;
             border-color: #e60023;
@@ -664,7 +693,19 @@
             text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
         }
 
+        .modal-overlay.chrome-hidden .modal-chrome,
+        .modal-overlay.chrome-hidden .modal-nav,
+        .modal-overlay.chrome-hidden .modal-title {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .modal-overlay.chrome-hidden .modal-chrome {
+            transform: translateY(-8px);
+        }
+
         .modal-video-wrap {
+            position: relative;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -708,18 +749,16 @@
         .modal-overlay.slideshow-mode .modal-title { color: #ccc; }
 
         #slideshowCounter {
-            position: absolute;
-            top: 20px;
-            left: 20px;
             font-size: 0.75rem;
             color: #aaa;
             background: rgba(0,0,0,0.5);
             padding: 6px 12px;
             border-radius: 20px;
             display: none;
+            white-space: nowrap;
         }
 
-        .modal-overlay.slideshow-mode #slideshowCounter { display: block; }
+        .modal-overlay.slideshow-mode #slideshowCounter { display: inline-flex; align-items: center; }
 
         .slideshow-progress {
             position: absolute;
@@ -730,6 +769,7 @@
             width: 0%;
             transition: width 0.1s linear;
             display: none;
+            z-index: 140;
         }
 
         .modal-overlay.slideshow-mode .slideshow-progress { display: block; }
@@ -853,56 +893,101 @@
                 border-radius: 4px;
             }
 
-            #modalVideoWrap {
-                max-width: 95vw;
-                max-height: 70vh;
+            /* Full-bleed mobile preview */
+            .modal-overlay {
+                padding: 0;
+                background: #000;
+                justify-content: stretch;
+                align-items: stretch;
+            }
+            .modal-chrome {
+                padding: calc(8px + env(safe-area-inset-top, 0px)) 10px 28px;
+                background: linear-gradient(180deg, rgba(0,0,0,0.72) 0%, transparent 100%);
+            }
+            .modal-chrome-cluster { gap: 6px; }
+            .modal-close {
+                width: 44px;
+                height: 44px;
+                font-size: 1.05rem;
+                background: rgba(20, 20, 20, 0.78);
+                border-color: rgba(255, 255, 255, 0.18);
+                color: #f2f2f2;
+            }
+            .modal-close--fs,
+            .modal-close--fit {
+                display: none;
+            }
+            #modalVideoWrap,
+            .modal-video-wrap #modalVideo,
+            .modal-overlay.fit-screen .modal-video-wrap {
+                max-width: none;
+                max-height: none;
+            }
+            .modal-video-wrap {
+                flex: 1;
+                width: 100%;
+                min-height: 0;
             }
             .modal-video-wrap #modalVideo {
-                max-width: 95vw;
-                max-height: 70vh;
+                width: 100%;
+                height: 100%;
+                max-width: 100%;
+                max-height: 100%;
+                object-fit: contain;
+                border-radius: 0;
+                box-shadow: none;
+                background: #000;
+                color-scheme: dark;
             }
             .modal-nav {
-                width: 36px;
-                height: 36px;
-                font-size: 1.2rem;
+                width: 44px;
+                height: 64px;
+                font-size: 1.6rem;
+                background: rgba(0, 0, 0, 0.28);
+                border: none;
+                color: rgba(255, 255, 255, 0.88);
+                top: 50%;
+                transform: translateY(-50%);
             }
-            .modal-nav.prev { left: 4px; }
-            .modal-nav.next { right: 4px; }
-            .modal-close {
-                top: 10px;
-                width: 30px;
-                height: 30px;
-                font-size: 0.9rem;
-            }
-            .modal-close--close { right: 10px; }
-            .modal-close--delete { right: 46px; }
-            .modal-close--info { right: 82px; }
-            .modal-close--pause { right: 118px; }
-            .modal-close--fs { left: 10px; right: auto; }
-            .modal-close--fit { left: 48px; right: auto; }
-            .modal-overlay.fit-screen .modal-video-wrap {
-                max-width: 100vw;
-                max-height: 72vh;
-            }
+            .modal-nav.prev { left: max(4px, env(safe-area-inset-left, 0px)); }
+            .modal-nav.next { right: max(4px, env(safe-area-inset-right, 0px)); }
             .modal-overlay.is-fs .modal-nav,
             .modal-overlay:fullscreen .modal-nav,
             .modal-overlay:-webkit-full-screen .modal-nav {
                 width: 44px;
-                height: 44px;
-                font-size: 1.4rem;
-            }
-            .modal-overlay {
-                padding: 12px 6px;
+                height: 64px;
+                font-size: 1.6rem;
             }
             .modal-title {
-                font-size: 0.75rem;
-                padding: 0 8px;
+                position: absolute;
+                left: 12px;
+                right: 12px;
+                bottom: calc(52px + env(safe-area-inset-bottom, 0px));
+                margin: 0;
+                z-index: 125;
+                font-size: 0.78rem;
+                color: #eee;
+                text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
+                pointer-events: none;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                transition: opacity 0.25s ease;
             }
             #slideshowCounter {
-                top: 12px;
-                left: 12px;
-                font-size: 0.65rem;
-                padding: 4px 8px;
+                font-size: 0.72rem;
+                padding: 7px 10px;
+            }
+            .slideshow-progress {
+                bottom: env(safe-area-inset-bottom, 0px);
+            }
+            #videoInfoPanel {
+                bottom: calc(96px + env(safe-area-inset-bottom, 0px)) !important;
+                left: 12px !important;
+                right: 12px !important;
+                transform: none !important;
+                max-width: none !important;
+                width: auto !important;
             }
             .stats {
                 padding: 6px 12px;
@@ -913,6 +998,12 @@
                 font-size: 0.8rem;
                 margin-bottom: 16px;
             }
+        }
+
+        @media (max-width: 768px) and (max-height: 500px) {
+            .modal-title { bottom: calc(40px + env(safe-area-inset-bottom, 0px)); font-size: 0.7rem; }
+            .modal-nav { height: 52px; }
+            .modal-chrome { padding-bottom: 16px; }
         }
 
         @media (max-width: 480px) {
@@ -1021,15 +1112,21 @@
 
 <div class="modal-overlay" id="modalOverlay">
     <div class="slideshow-progress" id="slideshowProgress"></div>
-    <span id="slideshowCounter"></span>
-    <button type="button" class="modal-close modal-close--fs" id="modalFsBtn" onclick="toggleModalFullscreen()" title="Fullscreen">⛶</button>
-    <button type="button" class="modal-close modal-close--fit" id="modalFitBtn" onclick="toggleFitScreen()" title="Fit to screen">⊞</button>
-    <button type="button" class="modal-close modal-close--close" onclick="closeModal()">✕</button>
-    <button type="button" class="modal-close modal-close--delete" onclick="deleteFromModal()">🗑</button>
-    <button type="button" class="modal-close modal-close--info" onclick="toggleVideoInfo()">ⓘ</button>
-    <button type="button" class="modal-close modal-close--pause" id="slideshowPauseBtn" style="display:none" onclick="toggleSlideshowPause()">⏸</button>
-    <button type="button" class="modal-nav prev" onclick="navigateVideo(-1)" title="Previous">‹</button>
-    <button type="button" class="modal-nav next" onclick="navigateVideo(1)" title="Next">›</button>
+    <div class="modal-chrome modal-chrome--top">
+        <div class="modal-chrome-cluster">
+            <button type="button" class="modal-close modal-close--fs" id="modalFsBtn" onclick="toggleModalFullscreen()" title="Fullscreen" aria-label="Fullscreen">⛶</button>
+            <button type="button" class="modal-close modal-close--fit" id="modalFitBtn" onclick="toggleFitScreen()" title="Fit to screen" aria-label="Fit to screen">⊞</button>
+            <span id="slideshowCounter"></span>
+        </div>
+        <div class="modal-chrome-cluster">
+            <button type="button" class="modal-close modal-close--pause" id="slideshowPauseBtn" style="display:none" onclick="toggleSlideshowPause()" title="Pause slideshow" aria-label="Pause slideshow">⏸</button>
+            <button type="button" class="modal-close modal-close--info" onclick="toggleVideoInfo()" title="Info" aria-label="Video info">ⓘ</button>
+            <button type="button" class="modal-close modal-close--delete" onclick="deleteFromModal()" title="Delete" aria-label="Delete">🗑</button>
+            <button type="button" class="modal-close modal-close--close" onclick="closeModal()" title="Close" aria-label="Close">✕</button>
+        </div>
+    </div>
+    <button type="button" class="modal-nav prev" onclick="navigateVideo(-1)" title="Previous" aria-label="Previous video">‹</button>
+    <button type="button" class="modal-nav next" onclick="navigateVideo(1)" title="Next" aria-label="Next video">›</button>
     <div class="modal-video-wrap" id="modalVideoWrap">
         <div class="modal-video-loading" id="modalVideoLoading"><div class="loading-spinner"></div></div>
         <video id="modalVideo" controls controlsList="nofullscreen nodownload" playsinline webkit-playsinline muted preload="metadata" onended="onVideoEnded()" ontimeupdate="updateSlideshowProgress()"></video>
@@ -1058,6 +1155,7 @@ let scrollTicking = false;
 let thumbLoadPaused = false;
 let modalLoadToken = 0;
 let modalRetryCount = 0;
+let chromeHideTimer = null;
 let thumbQueue = [];
 let thumbActive = 0;
 let activeMonth = null; // null = All (continuous chronological feed)
@@ -1992,6 +2090,7 @@ function toggleSlideshowPause() {
     if (slideshowPaused) player.pause();
     else player.play();
     updateSlideshowUI();
+    showModalChrome(!slideshowPaused);
 }
 
 function setModalLoading(on) {
@@ -2053,6 +2152,7 @@ function openModal(video, keepZoom = false) {
     document.getElementById('modalOverlay').classList.add('active');
     document.getElementById('slideshowProgress').style.width = '0%';
     document.body.style.overflow = 'hidden';
+    showModalChrome(true);
     setModalLoading(true);
 
     const absUrl = (() => {
@@ -2137,7 +2237,9 @@ function closeModal() {
     clearVideoPrefetch();
     const player = document.getElementById('modalVideo');
     player.pause(); player.src = ''; player.removeAttribute('poster');
-    document.getElementById('modalOverlay').classList.remove('active');
+    const overlay = document.getElementById('modalOverlay');
+    overlay.classList.remove('active', 'chrome-hidden');
+    clearTimeout(chromeHideTimer);
     document.body.style.overflow = '';
     document.getElementById('videoInfoPanel').style.display = 'none';
     if (wasSlideshow) updateSlideshowUI();
@@ -2336,6 +2438,94 @@ document.getElementById('modalOverlay').addEventListener('webkitfullscreenchange
 });
 window.addEventListener('resize', debouncedFitLayout);
 bindVideoFitLayout(document.getElementById('modalVideo'));
+
+const MOBILE_PREVIEW_MQ = window.matchMedia('(max-width: 768px)');
+
+function isMobilePreview() {
+    return MOBILE_PREVIEW_MQ.matches;
+}
+
+function showModalChrome(autoHide = true) {
+    const overlay = document.getElementById('modalOverlay');
+    if (!overlay) return;
+    overlay.classList.remove('chrome-hidden');
+    clearTimeout(chromeHideTimer);
+    if (!autoHide || !isMobilePreview() || !overlay.classList.contains('active')) return;
+    const player = document.getElementById('modalVideo');
+    if (player && player.paused) return;
+    chromeHideTimer = setTimeout(() => {
+        if (overlay.classList.contains('active') && player && !player.paused) {
+            overlay.classList.add('chrome-hidden');
+        }
+    }, 2800);
+}
+
+function toggleModalChrome() {
+    const overlay = document.getElementById('modalOverlay');
+    if (!overlay) return;
+    if (overlay.classList.contains('chrome-hidden')) showModalChrome(true);
+    else {
+        overlay.classList.add('chrome-hidden');
+        clearTimeout(chromeHideTimer);
+    }
+}
+
+(function bindModalChromeEvents() {
+    const player = document.getElementById('modalVideo');
+    if (!player || player.dataset.chromeBound === '1') return;
+    player.dataset.chromeBound = '1';
+    player.addEventListener('play', () => showModalChrome(true));
+    player.addEventListener('pause', () => showModalChrome(false));
+})();
+
+(function initPreviewGestures() {
+    const overlay = document.getElementById('modalOverlay');
+    if (!overlay) return;
+    let startX = 0, startY = 0, startT = 0, tracking = false, moved = false;
+
+    overlay.addEventListener('touchstart', (e) => {
+        if (!overlay.classList.contains('active')) return;
+        if (e.touches.length !== 1) { tracking = false; return; }
+        if (videoZoom.scale > 1) { tracking = false; return; }
+        if (e.target.closest('button')) { tracking = false; return; }
+        const t = e.touches[0];
+        startX = t.clientX;
+        startY = t.clientY;
+        startT = Date.now();
+        tracking = true;
+        moved = false;
+    }, { passive: true });
+
+    overlay.addEventListener('touchmove', (e) => {
+        if (!tracking) return;
+        const t = e.touches[0];
+        if (Math.abs(t.clientX - startX) > 12 || Math.abs(t.clientY - startY) > 12) moved = true;
+    }, { passive: true });
+
+    overlay.addEventListener('touchend', (e) => {
+        if (!tracking) return;
+        tracking = false;
+        const t = e.changedTouches[0];
+        const dx = t.clientX - startX;
+        const dy = t.clientY - startY;
+        const dt = Date.now() - startT;
+        const absX = Math.abs(dx);
+        const absY = Math.abs(dy);
+        if (absX > 56 && absX > absY * 1.25) {
+            navigateVideo(dx < 0 ? 1 : -1);
+            showModalChrome(true);
+            return;
+        }
+        if (isMobilePreview() && dy > 90 && absY > absX * 1.35) {
+            closeModal();
+            return;
+        }
+        if (!moved && dt < 280 && isMobilePreview()) {
+            if (e.target.closest('button, video')) return;
+            toggleModalChrome();
+        }
+    });
+})();
 
 // Pinch-to-zoom on video (2 fingers) + pan when zoomed
 let videoZoom = { scale: 1, x: 0, y: 0 };
