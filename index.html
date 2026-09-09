@@ -334,6 +334,10 @@
         .thumbnail-container img.thumb-lazy {
             min-height: 48px;
             background: linear-gradient(135deg, #141414 0%, #1c1c1c 100%);
+            opacity: 0;
+        }
+        .thumbnail-container img.thumb-lazy.is-loaded {
+            opacity: 1;
         }
 
         .thumbnail-placeholder {
@@ -1593,12 +1597,20 @@ function observeThumbs(root) {
 }
 
 function onThumbLoaded(img) {
+    // Ignore broken / 1×1 garbage that still fires onload in some browsers.
+    if (!img.naturalWidth || img.naturalWidth < 8 || img.naturalHeight < 8) {
+        fallbackThumbnail(img);
+        return;
+    }
+    img.classList.add('is-loaded');
     const ph = img.parentElement.querySelector('.thumbnail-placeholder');
     if (ph) ph.style.display = 'none';
 }
 
 function fallbackThumbnail(img) {
     img.onerror = null;
+    img.onload = null;
+    img.classList.remove('is-loaded');
     img.style.display = 'none';
     const ph = img.parentElement?.querySelector('.thumbnail-placeholder');
     if (ph) ph.style.display = 'flex';

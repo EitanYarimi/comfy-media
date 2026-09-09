@@ -871,12 +871,57 @@ def _thumb_memory_put(cache_key, data, mime):
             _thumb_memory_bytes -= len(old_data)
 
 
+def _thumb_magic_ok(data):
+    """True if bytes look like a real image container (not JSON/HTML/empty)."""
+    if not data or len(data) < 64:
+        return False
+    if data[:2] == b'\xff\xd8':
+        return True  # JPEG
+    if data[:8] == b'\x89PNG\r\n\x1a\n':
+        return True  # PNG
+    if len(data) >= 12 and data[:4] == b'RIFF' and data[8:12] == b'WEBP':
+        return True
+    return False
+
+
+def _thumb_has_visual_content(data):
+    """Reject solid-color garbage frames (common with incomplete Drive cloud files)."""
+    if not _thumb_magic_ok(data):
+        return False
+    try:
+        from PIL import Image
+        import statistics
+        img = Image.open(io.BytesIO(data)).convert('RGB')
+        # Tiny / failed decode
+        if img.width < 8 or img.height < 8:
+            return False
+        sample = img.resize((24, 24), getattr(Image, 'Resampling', Image).BILINEAR)
+        pixels = [sample.getpixel((x, y)) for y in range(sample.height) for x in range(sample.width)]
+        # Per-channel stddev — flat red/pink/black decode junk is near-zero.
+        for channel in range(3):
+            values = [p[channel] for p in pixels]
+            if statistics.pstdev(values) >= 6.0:
+                return True
+        return False
+    except Exception:
+        # If Pillow is missing/broken, keep the thumb (better than empty grid).
+        return True
+
+
+def _thumb_is_usable(data):
+    return bool(data) and _thumb_magic_ok(data) and _thumb_has_visual_content(data)
+
+
 def get_cached_video_thumbnail(filepath):
     """Return cached thumbnail bytes from memory, local cache, or legacy cache."""
     cache_key = _video_cache_key(filepath)
     cached = _thumb_memory_get(cache_key)
     if cached is not None:
-        return cached
+        data, mime = cached
+        if _thumb_is_usable(data):
+            return cached
+        with _thumb_memory_lock:
+            _thumb_memory.pop(cache_key, None)
 
     try:
         src_mtime = filepath.stat().st_mtime
@@ -889,8 +934,14 @@ def get_cached_video_thumbnail(filepath):
             try:
                 if cache_path.stat().st_mtime >= src_mtime:
                     data = cache_path.read_bytes()
-                    _thumb_memory_put(cache_key, data, mime)
-                    return data, mime
+                    if _thumb_is_usable(data):
+                        _thumb_memory_put(cache_key, data, mime)
+                        return data, mime
+                    # Drop solid-color / corrupt cache so we can regenerate.
+                    try:
+                        cache_path.unlink()
+                    except OSError:
+                        pass
             except OSError:
                 continue
     return None
@@ -928,6 +979,8 @@ def get_video_duration(filepath):
 
 
 def _store_thumb(cache_key, ext, data, mime):
+    if not _thumb_is_usable(data):
+        return None
     try:
         THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         (THUMB_CACHE_DIR / (cache_key + ext)).write_bytes(data)
@@ -968,6 +1021,13 @@ def _thumb_from_ffmpeg(filepath, cache_key):
     if not _ffmpeg_path:
         return None
 
+    # Skip obvious cloud stubs / empty files — ffmpeg often yields solid-color junk.
+    try:
+        if filepath.stat().st_size < 8192:
+            return None
+    except OSError:
+        return None
+
     # Fixed seek avoids slow ffprobe on first thumbnail (Google Drive latency).
     # Fall back to earlier seeks for short clips (<1s) that have no frame at 1.0s.
     scale = f'scale={VIDEO_THUMB_SIZE[0]}:{VIDEO_THUMB_SIZE[1]}:force_original_aspect_ratio=decrease'
@@ -991,7 +1051,9 @@ def _thumb_from_ffmpeg(filepath, cache_key):
             except (OSError, subprocess.SubprocessError):
                 continue
             if result.returncode == 0 and result.stdout:
-                return _store_thumb(cache_key, ext, result.stdout, mime)
+                stored = _store_thumb(cache_key, ext, result.stdout, mime)
+                if stored:
+                    return stored
     return None
 
 
@@ -1982,7 +2044,11 @@ class VideoHandler(SimpleHTTPRequestHandler):
                                 buf = io.BytesIO()
                                 img.save(buf, format='JPEG', quality=70)
                                 mime, ext = 'image/jpeg', '.jpg'
-                            data, mime = _store_thumb(cache_key, ext, buf.getvalue(), mime)
+                            stored = _store_thumb(cache_key, ext, buf.getvalue(), mime)
+                            if not stored:
+                                send_http_empty(self, 500)
+                                return
+                            data, mime = stored
 
                     self.send_response(200)
                     self.send_header('Content-Type', mime)
@@ -2155,6 +2221,10 @@ if __name__ == '__main__':
                     print(f'      • MEDIA_ROOT should be your Google Drive "My Drive" (run ./start.sh)')
                     print(f'      • Videos expected under: {os.path.abspath(VIDEO_DIR)}')
                     print('      • Hard-refresh the browser (Cmd+Shift+R)')
+                else:
+                    print('   If the grid shows solid red/pink squares, clear bad thumbs and restart:')
+                    print(f'      rm -rf "{CACHE_ROOT / "thumbs"}"')
+                    print('      MEDIA_PREWARM=0 ./start.sh')
             except Exception as exc:
                 print(f'   Video index failed: {exc}')
 
