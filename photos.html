@@ -257,6 +257,8 @@
             .photo-card { border-radius: 12px; }
             .photo-card:hover { transform: none; }
             .photo-overlay { opacity: 1; background: linear-gradient(180deg, transparent 60%, rgba(0,0,0,0.6) 100%); }
+            /* Hide delete/info chips on small screens — tap opens the photo instead */
+            .photo-actions { display: none; }
             header { padding: 8px 12px; }
             #searchInput { width: 100%; order: -1; }
             .controls { width: 100%; }
@@ -413,6 +415,9 @@ let slideshowProgressTimer = null;
 let slideshowPlaylist = [];
 let slideshowStartedAt = 0;
 let slideshowRandom = false;
+let slideshowServerRandom = false;
+let slideshowRandomPending = null;
+let slideshowRandomTotal = 0;
 
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 document.getElementById('searchInput').addEventListener('input', debounce(filterPhotos, 300));
@@ -568,6 +573,7 @@ async function loadFeed(append = false) {
         } else {
             renderGrid();
         }
+        if (!append) await fillViewportIfNeeded();
     } catch (err) {
         feedCache.loading = false;
         renderGrid();
@@ -607,6 +613,7 @@ async function loadSearchPhotos(append = false) {
             const stats = document.getElementById('stats');
             if (stats) stats.textContent = `${searchResults.items.length} of ${searchResults.total} results`;
         }
+        if (!append) await fillViewportIfNeeded();
     } catch (err) {
         searchResults.loading = false;
         renderGrid();
@@ -637,6 +644,11 @@ function syncHeaderOffset() {
     if (!header) return;
     document.documentElement.style.setProperty('--header-h', `${header.offsetHeight}px`);
 }
+
+const onResizeFill = debounce(() => {
+    syncHeaderOffset();
+    fillViewportIfNeeded();
+}, 150);
 
 function updateMonthPicker() {
     const picker = document.getElementById('monthPicker');
@@ -846,25 +858,52 @@ function renderGrouped() {
     observeThumbs(grid);
 }
 
-async function maybeLoadMore() {
-    if (pageLoading) return;
-    const remain = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
-    if (remain > 500) return;
+function feedHasMore() {
+    if (searchMode) {
+        return searchResults.hasMore !== false &&
+            (searchResults.hasMore || searchResults.items.length < (searchResults.total || 0));
+    }
+    return feedCache.hasMore !== false &&
+        (feedCache.hasMore || feedCache.items.length < (feedCache.total || 0));
+}
 
+function viewportNeedsMore() {
+    const remain = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
+    return remain <= 500;
+}
+
+async function maybeLoadMore() {
+    if (pageLoading) return false;
+    if (!viewportNeedsMore()) return false;
+    if (!feedHasMore()) return false;
+
+    const before = searchMode ? searchResults.items.length : feedCache.items.length;
     pageLoading = true;
     try {
-        if (searchMode) {
-            if (searchResults.hasMore !== false && (searchResults.hasMore || searchResults.items.length < (searchResults.total || 0))) {
-                await loadSearchPhotos(true);
-            }
-            return;
-        }
-        if (feedCache.hasMore !== false && (feedCache.hasMore || feedCache.items.length < (feedCache.total || 0))) {
-            await loadFeed(true);
-        }
+        if (searchMode) await loadSearchPhotos(true);
+        else await loadFeed(true);
     } finally {
         pageLoading = false;
         showScrollLoader(false);
+    }
+    const after = searchMode ? searchResults.items.length : feedCache.items.length;
+    return after > before;
+}
+
+/** Keep fetching until the page can scroll (or nothing left). Needed on tall screens. */
+let fillViewportRunning = false;
+async function fillViewportIfNeeded() {
+    if (fillViewportRunning) return;
+    fillViewportRunning = true;
+    try {
+        for (let i = 0; i < 25; i++) {
+            if (!viewportNeedsMore() || !feedHasMore()) break;
+            const loaded = await maybeLoadMore();
+            if (!loaded) break;
+            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        }
+    } finally {
+        fillViewportRunning = false;
     }
 }
 
@@ -873,7 +912,9 @@ function onScrollPage() {
     scrollTicking = true;
     requestAnimationFrame(() => {
         scrollTicking = false;
-        maybeLoadMore();
+        maybeLoadMore().then(loaded => {
+            if (loaded) fillViewportIfNeeded();
+        });
     });
 }
 
@@ -967,19 +1008,38 @@ async function fetchPagedPhotos(baseParams, maxItems = 2000) {
     return collected.sort((a, b) => b.date - a.date);
 }
 
-async function fetchSlideshowPool() {
-    // Prefer already-loaded feed/search so Random/Slideshow start immediately.
-    if (searchMode && searchResults.items?.length) {
-        return searchResults.items.slice();
+async function fetchMonthPlaylist(monthKey) {
+    if (monthKey === 'search') return searchResults.items.slice();
+    if ((monthKey === 'all' || !monthKey) && !activeMonth && feedCache.items.length) {
+        const haveAll = feedCache.hasMore === false
+            || (feedCache.total > 0 && feedCache.items.length >= feedCache.total);
+        if (haveAll) return feedCache.items.slice();
     }
-    if (!searchMode && feedCache.items?.length) {
-        return feedCache.items.slice();
+    if (monthKey === activeMonth && feedCache.items.length) {
+        const summary = monthSummaries.find(s => s.month === monthKey);
+        if (summary && feedCache.items.length >= summary.count) return feedCache.items.slice();
+        if (feedCache.hasMore === false) return feedCache.items.slice();
     }
     const params = {};
-    const q = document.getElementById('searchInput').value.trim();
-    if (q) params.q = q;
-    else if (activeMonth) params.month = activeMonth;
+    if (monthKey && monthKey !== 'all') params.month = monthKey;
     return fetchPagedPhotos(params);
+}
+
+async function fetchSlideshowPool() {
+    // Random/Slideshow must use the full selected scope:
+    // search query, selected month, or All — not just the first loaded page.
+    if (searchMode) {
+        const q = document.getElementById('searchInput').value.trim();
+        if (!q) return [];
+        if (searchResults.items?.length && (
+            searchResults.hasMore === false
+            || (searchResults.total > 0 && searchResults.items.length >= searchResults.total)
+        )) {
+            return searchResults.items.slice();
+        }
+        return fetchPagedPhotos({ q });
+    }
+    return fetchMonthPlaylist(activeMonth || 'all');
 }
 
 function getSlideshowPool() {
@@ -998,7 +1058,13 @@ function updateSlideshowUI() {
     const seqBtn = document.getElementById('slideshowSeqBtn');
     const randomBtn = document.getElementById('slideshowRandomBtn');
     if (slideshowActive) {
-        counter.textContent = `${slideshowRandom ? '🎲 ' : ''}${currentPhotoIndex + 1} / ${slideshowPlaylist.length}`;
+        if (slideshowServerRandom) {
+            const n = currentPhotoIndex + 1;
+            const total = slideshowRandomTotal || totalPhotoCount || '?';
+            counter.textContent = `🎲 ${n} · pool ${total}`;
+        } else {
+            counter.textContent = `${slideshowRandom ? '🎲 ' : ''}${currentPhotoIndex + 1} / ${slideshowPlaylist.length}`;
+        }
         pauseBtn.style.display = 'flex';
         pauseBtn.textContent = slideshowPaused ? '▶' : '⏸';
         seqBtn.textContent = slideshowRandom ? '▶ Slideshow' : '⏹ Stop';
@@ -1047,8 +1113,47 @@ function scheduleSlideshowAdvance() {
     slideshowTimer = setTimeout(() => advanceSlideshow(), SLIDESHOW_INTERVAL);
 }
 
+async function fetchServerRandomPhoto(excludePath = null) {
+    const params = new URLSearchParams();
+    if (excludePath) params.set('exclude', excludePath);
+    const resp = await fetch(`${serverBaseUrl}/api/random/photo?${params}`, { cache: 'no-store' });
+    if (!resp.ok) throw new Error('Random request failed');
+    const data = await resp.json();
+    if (data.total != null) slideshowRandomTotal = data.total;
+    if (!data.photo) throw new Error(data.error || 'No photos available');
+    const photo = mapPhoto(data.photo);
+    registerPhotos([photo]);
+    return photo;
+}
+
+async function advanceServerRandomPhoto() {
+    if (!slideshowActive || slideshowPaused) return;
+    let next = slideshowRandomPending;
+    slideshowRandomPending = null;
+    if (!next) {
+        const cur = slideshowPlaylist[currentPhotoIndex];
+        try {
+            next = await fetchServerRandomPhoto(cur?.path || null);
+        } catch (err) {
+            console.warn('Random next failed', err);
+            scheduleSlideshowAdvance();
+            return;
+        }
+    }
+    slideshowPlaylist.push(next);
+    showSlideshowPhoto(slideshowPlaylist.length - 1);
+    fetchServerRandomPhoto(next.path).then(p => {
+        if (slideshowActive && slideshowServerRandom) slideshowRandomPending = p;
+    }).catch(() => {});
+    scheduleSlideshowAdvance();
+}
+
 function advanceSlideshow() {
     if (!slideshowActive || slideshowPaused) return;
+    if (slideshowServerRandom) {
+        advanceServerRandomPhoto();
+        return;
+    }
     let next;
     if (slideshowRandom) {
         if (slideshowPlaylist.length <= 1) {
@@ -1074,6 +1179,34 @@ async function startSlideshow(random = false) {
     slideshowRandom = random;
     const stats = document.getElementById('stats');
     const prevStats = stats ? stats.textContent : '';
+
+    const useServerRandom = random && !searchMode && !activeMonth;
+    if (useServerRandom) {
+        if (stats) stats.textContent = 'Picking a random photo…';
+        try {
+            const photo = await fetchServerRandomPhoto();
+            slideshowServerRandom = true;
+            slideshowRandomPending = null;
+            slideshowPlaylist = [photo];
+            slideshowActive = true;
+            slideshowPaused = false;
+            thumbLoadPaused = true;
+            showSlideshowPhoto(0);
+            document.getElementById('lightbox').classList.add('active');
+            document.body.style.overflow = 'hidden';
+            fetchServerRandomPhoto(photo.path).then(p => {
+                if (slideshowActive && slideshowServerRandom) slideshowRandomPending = p;
+            }).catch(() => {});
+            scheduleSlideshowAdvance();
+        } catch (err) {
+            if (stats) stats.textContent = prevStats;
+            alert('Random failed: ' + err.message);
+        }
+        return;
+    }
+
+    slideshowServerRandom = false;
+    slideshowRandomPending = null;
     if (stats) stats.textContent = random ? 'Loading random playlist…' : 'Loading slideshow…';
     try {
         slideshowPlaylist = await fetchSlideshowPool();
@@ -1102,6 +1235,8 @@ function stopSlideshow(closeBox) {
     slideshowActive = false;
     slideshowPaused = false;
     slideshowRandom = false;
+    slideshowServerRandom = false;
+    slideshowRandomPending = null;
     clearSlideshowTimers();
     updateSlideshowUI();
     if (closeBox) {
@@ -1366,7 +1501,7 @@ function toggleLightboxChrome() {
 })();
 loadFromServer();
 window.addEventListener('scroll', onScrollPage, { passive: true });
-window.addEventListener('resize', syncHeaderOffset);
+window.addEventListener('resize', onResizeFill);
 syncHeaderOffset();
 </script>
 </body>
