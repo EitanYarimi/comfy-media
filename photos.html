@@ -1489,15 +1489,6 @@ function toggleLightboxChrome() {
 })();
 
 // ========== INIT ==========
-(function showNetworkHint() {
-    const h = location.hostname;
-    const hint = document.getElementById('networkHint');
-    if (!hint) return;
-    if (h === 'localhost' || h.startsWith('127.')) {
-        hint.style.display = 'block';
-        hint.innerHTML = 'On your phone, use your Mac\'s LAN address — not 127.x. Example: <strong>http://192.168.0.118:8080/photos.html</strong> (see the server terminal for the exact URL).';
-    }
-})();
 loadFromServer();
 window.addEventListener('scroll', onScrollPage, { passive: true });
 window.addEventListener('resize', onResizeFill);
