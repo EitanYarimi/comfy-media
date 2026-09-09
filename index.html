@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta http-equiv="Cache-Control" content="no-cache">
-    <title>Code Check</title>
+    <title>Comfy Media</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -1053,6 +1053,7 @@
 </header>
 
 <div class="stats" id="stats"></div>
+<div id="appBuild" style="padding:0 20px 8px;font-size:0.65rem;color:#444;letter-spacing:0.02em"></div>
 <div class="month-picker" id="monthPicker" aria-label="Choose month"></div>
 
 <div class="video-grid" id="videoGrid">
@@ -1187,6 +1188,7 @@ function applyVthumbFlag(data) {
 }
 
 function useServerVthumb() {
+    if (DISABLE_THUMBS) return false;
     return serverHasVthumb;
 }
 
@@ -1215,6 +1217,8 @@ function getVideoByVid(vid) {
     return allVideos.find(v => v.name === name);
 }
 const THUMB_URL_VERSION = '4'; // bump when thumb pipeline changes (busts browser cache)
+const APP_BUILD = '2026-09-09-r4';
+const DISABLE_THUMBS = new URLSearchParams(location.search).has('nothumbs');
 function getVThumbSrc(video) {
     const base = serverBaseUrl + '/vthumb/' + encodeURIComponent(video.path).replace(/%2F/g, '/');
     const m = video.date instanceof Date ? video.date.getTime() : 0;
@@ -2842,6 +2846,13 @@ async function deleteVideoByPath(event, pathEnc) {
 }
 
 // ========== AUTO LOAD ==========
+(function showAppBuild() {
+    document.title = 'Comfy Media · ' + APP_BUILD;
+    const el = document.getElementById('appBuild');
+    if (el) {
+        el.textContent = APP_BUILD + (DISABLE_THUMBS ? ' · thumbs off (?nothumbs)' : '');
+    }
+})();
 window.addEventListener('scroll', onScrollPage, { passive: true });
 window.addEventListener('resize', onResizeFill);
 syncHeaderOffset();

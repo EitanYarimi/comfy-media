@@ -1739,21 +1739,22 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 send_http_bytes(self, 401, UNAUTHORIZED_JSON, 'application/json')
             return
 
-        # HTML apps — always no-cache so phones pick up updates
+        # HTML apps — always from the app folder (never MEDIA_ROOT).
+        # MEDIA_ROOT is cwd and may contain an old index.html that would hide updates.
         if bare_path in ('/', '/index.html', '/photos.html'):
             html_name = 'photos.html' if bare_path == '/photos.html' else 'index.html'
-            script_dir = Path(__file__).parent
-            for search_dir in [Path('.'), script_dir]:
-                html_path = search_dir / html_name
-                if html_path.exists():
-                    data = html_path.read_bytes()
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'text/html; charset=utf-8')
-                    self.send_header('Content-Length', str(len(data)))
-                    self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
-                    self.end_headers()
-                    safe_write(self.wfile, data)
-                    return
+            script_dir = Path(__file__).resolve().parent
+            html_path = script_dir / html_name
+            if html_path.is_file():
+                data = html_path.read_bytes()
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', str(len(data)))
+                self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
+                self.send_header('X-Comfy-App-Dir', str(script_dir))
+                self.end_headers()
+                safe_write(self.wfile, data)
+                return
             if bare_path == '/':
                 super().do_GET()
                 return
@@ -2208,6 +2209,12 @@ if __name__ == '__main__':
         print(f'   Videos: {os.path.abspath(VIDEO_DIR)}')
         print(f'   Photos: {[os.path.abspath(d) if not Path(d).is_absolute() else d for d in PHOTO_DIRS]}')
         _warn_local_media_root(script_dir, media_root)
+        cwd_index = Path(os.getcwd()) / 'index.html'
+        app_index = Path(script_dir) / 'index.html'
+        if cwd_index.is_file() and cwd_index.resolve() != app_index.resolve():
+            print('   ⚠️  Found index.html inside MEDIA_ROOT — it is ignored; app HTML comes from App files.')
+            print(f'      Ignored: {cwd_index}')
+            print(f'      Serving: {app_index}')
     if _ffmpeg_path:
         codec = 'webp' if _ffmpeg_has_webp else 'jpeg (no libwebp in this ffmpeg)'
         print(f'   Video thumbnails: ffmpeg -> {codec}')
