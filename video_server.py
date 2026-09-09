@@ -371,6 +371,7 @@ _moov_end_cache = {}
 
 
 def _load_disk_index(path, legacy_path=None):
+    cwd = Path(os.getcwd()).resolve()
     for candidate in (path, legacy_path):
         if candidate is None:
             continue
@@ -379,17 +380,32 @@ def _load_disk_index(path, legacy_path=None):
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             continue
         items = data.get('items')
-        if isinstance(items, list):
-            saved = float(data.get('saved', 0))
-            # Legacy copies are treated as stale so they refresh in background.
-            return items, data.get('months'), (saved if candidate is path else 0.0)
+        if not isinstance(items, list):
+            continue
+        # Skip indexes built for a different MEDIA_ROOT (shared cache dir).
+        saved_root = data.get('media_root')
+        if saved_root:
+            try:
+                if Path(saved_root).expanduser().resolve() != cwd:
+                    print(f'   Ignoring index from other MEDIA_ROOT: {saved_root}')
+                    continue
+            except OSError:
+                continue
+        saved = float(data.get('saved', 0))
+        # Legacy copies are treated as stale so they refresh in background.
+        return items, data.get('months'), (saved if candidate is path else 0.0)
     return None, None, 0.0
 
 
 def _save_disk_index(path, items, months):
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({'items': items, 'months': months, 'saved': time.time()}))
+        path.write_text(json.dumps({
+            'items': items,
+            'months': months,
+            'saved': time.time(),
+            'media_root': str(Path(os.getcwd()).resolve()),
+        }))
     except OSError:
         pass
 
@@ -447,13 +463,15 @@ def get_photos_cached(force=False):
     if not force and _photo_cache['data'] is None:
         items, months, saved = _load_disk_index(PHOTO_INDEX_PATH, LEGACY_PHOTO_INDEX_PATH)
         if items:
-            items = _filter_local_items(items)
-            _photo_cache['data'] = items
-            _photo_cache['time'] = now
-            _media_by_month['photos'] = _build_month_index(items)
-            if saved and (now - saved) > PHOTO_CACHE_TTL:
-                threading.Thread(target=_refresh_photos_background, daemon=True).start()
-            return items
+            kept = _filter_local_items(items)
+            if kept:
+                _photo_cache['data'] = kept
+                _photo_cache['time'] = now
+                _media_by_month['photos'] = _build_month_index(kept)
+                if saved and (now - saved) > PHOTO_CACHE_TTL:
+                    threading.Thread(target=_refresh_photos_background, daemon=True).start()
+                return kept
+            print('   Photo index entries missing on disk — rescanning…')
 
     photos = scan_photos('.')
     months = media_month_summary(photos)
@@ -489,13 +507,16 @@ def get_videos_cached(force=False):
     if not force and _video_cache['data'] is None:
         items, months, saved = _load_disk_index(VIDEO_INDEX_PATH, LEGACY_VIDEO_INDEX_PATH)
         if items:
-            items = _filter_local_items(items)
-            _video_cache['data'] = items
-            _video_cache['time'] = now
-            _media_by_month['videos'] = _build_month_index(items)
-            if saved and (now - saved) > VIDEO_CACHE_TTL:
-                threading.Thread(target=_refresh_videos_background, daemon=True).start()
-            return items
+            kept = _filter_local_items(items)
+            if kept:
+                _video_cache['data'] = kept
+                _video_cache['time'] = now
+                _media_by_month['videos'] = _build_month_index(kept)
+                if saved and (now - saved) > VIDEO_CACHE_TTL:
+                    threading.Thread(target=_refresh_videos_background, daemon=True).start()
+                return kept
+            # Stale index from another folder / moved Drive path → never stick on [].
+            print('   Video index entries missing on disk — rescanning…')
 
     videos = scan_videos('.')
     months = media_month_summary(videos)
@@ -2129,6 +2150,11 @@ if __name__ == '__main__':
             try:
                 video_count = len(get_videos_cached())
                 print(f'   Ready: {video_count} videos ({(time.time() - t0) * 1000:.0f} ms)')
+                if video_count == 0:
+                    print('   ⚠️  0 videos found. Open http://localhost:%s/ and check:' % PORT)
+                    print(f'      • MEDIA_ROOT should be your Google Drive "My Drive" (run ./start.sh)')
+                    print(f'      • Videos expected under: {os.path.abspath(VIDEO_DIR)}')
+                    print('      • Hard-refresh the browser (Cmd+Shift+R)')
             except Exception as exc:
                 print(f'   Video index failed: {exc}')
 
