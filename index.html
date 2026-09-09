@@ -1214,8 +1214,11 @@ function getVideoByVid(vid) {
     const name = decodeURIComponent(String(vid));
     return allVideos.find(v => v.name === name);
 }
+const THUMB_URL_VERSION = '4'; // bump when thumb pipeline changes (busts browser cache)
 function getVThumbSrc(video) {
-    return serverBaseUrl + '/vthumb/' + encodeURIComponent(video.path).replace(/%2F/g, '/');
+    const base = serverBaseUrl + '/vthumb/' + encodeURIComponent(video.path).replace(/%2F/g, '/');
+    const m = video.date instanceof Date ? video.date.getTime() : 0;
+    return `${base}?v=${THUMB_URL_VERSION}&m=${m}`;
 }
 
 function mapVideo(v) {

@@ -884,28 +884,26 @@ def _thumb_magic_ok(data):
     return False
 
 
-def _thumb_has_visual_content(data):
-    """Reject solid-color garbage frames (common with incomplete Drive cloud files)."""
-    if not _thumb_magic_ok(data):
-        return False
+def _thumb_detail_score(data):
+    """Higher = more visual detail. Solid color frames score near 0."""
     try:
         from PIL import Image
         import statistics
         img = Image.open(io.BytesIO(data)).convert('RGB')
-        # Tiny / failed decode
         if img.width < 8 or img.height < 8:
-            return False
+            return 0.0
         sample = img.resize((24, 24), getattr(Image, 'Resampling', Image).BILINEAR)
         pixels = [sample.getpixel((x, y)) for y in range(sample.height) for x in range(sample.width)]
-        # Per-channel stddev — flat red/pink/black decode junk is near-zero.
-        for channel in range(3):
-            values = [p[channel] for p in pixels]
-            if statistics.pstdev(values) >= 6.0:
-                return True
-        return False
+        return max(statistics.pstdev([p[c] for p in pixels]) for c in range(3))
     except Exception:
-        # If Pillow is missing/broken, keep the thumb (better than empty grid).
-        return True
+        return 10.0  # assume ok if we can't score
+
+
+def _thumb_has_visual_content(data):
+    """Reject solid-color garbage frames (common with incomplete Drive cloud files)."""
+    if not _thumb_magic_ok(data):
+        return False
+    return _thumb_detail_score(data) >= 6.0
 
 
 def _thumb_is_usable(data):
@@ -1029,15 +1027,17 @@ def _thumb_from_ffmpeg(filepath, cache_key):
         return None
 
     # Fixed seek avoids slow ffprobe on first thumbnail (Google Drive latency).
-    # Fall back to earlier seeks for short clips (<1s) that have no frame at 1.0s.
+    # Prefer the seek that yields the most visual detail (skips solid red/black intros).
     scale = f'scale={VIDEO_THUMB_SIZE[0]}:{VIDEO_THUMB_SIZE[1]}:force_original_aspect_ratio=decrease'
-    attempts = []
+    encode_attempts = []
     if _ffmpeg_has_webp:
-        attempts.append((['-f', 'webp', '-quality', '75'], '.webp', 'image/webp'))
-    attempts.append((['-f', 'image2pipe', '-vcodec', 'mjpeg', '-q:v', '4'], '.jpg', 'image/jpeg'))
+        encode_attempts.append((['-f', 'webp', '-quality', '75'], '.webp', 'image/webp'))
+    encode_attempts.append((['-f', 'image2pipe', '-vcodec', 'mjpeg', '-q:v', '4'], '.jpg', 'image/jpeg'))
 
-    for seek in ('1.0', '0.1', '0'):
-        for encode_args, ext, mime in attempts:
+    best = None
+    best_score = -1.0
+    for seek in ('0.5', '1.0', '2.0', '0.1', '0'):
+        for encode_args, ext, mime in encode_attempts:
             try:
                 result = subprocess.run(
                     [
@@ -1050,11 +1050,23 @@ def _thumb_from_ffmpeg(filepath, cache_key):
                 )
             except (OSError, subprocess.SubprocessError):
                 continue
-            if result.returncode == 0 and result.stdout:
-                stored = _store_thumb(cache_key, ext, result.stdout, mime)
-                if stored:
-                    return stored
-    return None
+            data = result.stdout if result.returncode == 0 else None
+            if not data or not _thumb_magic_ok(data):
+                continue
+            score = _thumb_detail_score(data)
+            if score > best_score:
+                best_score = score
+                best = (ext, data, mime)
+            # Good enough — stop early
+            if score >= 18.0:
+                break
+        if best_score >= 18.0:
+            break
+
+    if not best or best_score < 6.0:
+        return None
+    ext, data, mime = best
+    return _store_thumb(cache_key, ext, data, mime)
 
 
 def generate_video_thumbnail(filepath):
@@ -1577,7 +1589,7 @@ def serve_drive_thumb(handler, rel_path):
     handler.send_response(200)
     handler.send_header('Content-Type', mime)
     handler.send_header('Content-Length', str(len(data)))
-    handler.send_header('Cache-Control', 'public, max-age=86400')
+    handler.send_header('Cache-Control', 'public, max-age=300, must-revalidate')
     handler.end_headers()
     safe_write(handler.wfile, data)
 
@@ -2053,7 +2065,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     self.send_response(200)
                     self.send_header('Content-Type', mime)
                     self.send_header('Content-Length', str(len(data)))
-                    self.send_header('Cache-Control', 'public, max-age=86400')
+                    self.send_header('Cache-Control', 'public, max-age=300, must-revalidate')
                     self.end_headers()
                     safe_write(self.wfile, data)
                 except ImportError:
@@ -2104,7 +2116,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-Type', mime)
                 self.send_header('Content-Length', str(len(data)))
-                self.send_header('Cache-Control', 'public, max-age=86400')
+                self.send_header('Cache-Control', 'public, max-age=300, must-revalidate')
                 self.end_headers()
                 safe_write(self.wfile, data)
                 return

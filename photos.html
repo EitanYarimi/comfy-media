@@ -426,7 +426,11 @@ function formatDate(d) { return d.toLocaleDateString('en-US', { month:'short', d
 function formatSize(b) { if (!b) return '0B'; const k=1024, s=['B','KB','MB','GB'], i=Math.floor(Math.log(b)/Math.log(k)); return (b/Math.pow(k,i)).toFixed(1)+s[i]; }
 function getPhotoByVid(vid) { return allPhotos.find(p => p.name === decodeURIComponent(vid)); }
 function showLoading() { document.getElementById('photoGrid').innerHTML = '<div class="loading-spinner"></div>'; }
-function getThumbSrc(photo) { return photo.url.replace(serverBaseUrl + '/', serverBaseUrl + '/thumb/'); }
+function getThumbSrc(photo) {
+    const base = photo.url.replace(serverBaseUrl + '/', serverBaseUrl + '/thumb/');
+    const m = photo.date instanceof Date ? photo.date.getTime() : 0;
+    return `${base}?v=4&m=${m}`;
+}
 function getFullSrc(photo) { return photo.url; }
 
 function mapPhoto(p) {
