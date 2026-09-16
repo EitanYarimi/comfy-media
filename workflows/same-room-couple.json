@@ -1,0 +1,2073 @@
+{
+  "id": "same-room-couple-three-scenes",
+  "revision": 0,
+  "last_node_id": 34,
+  "last_link_id": 55,
+  "nodes": [
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "CheckpointLoaderSimple",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 1,
+      "type": "CheckpointLoaderSimple",
+      "pos": [
+        40,
+        80
+      ],
+      "size": [
+        420,
+        100
+      ],
+      "order": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            1
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "slot_index": 1
+        },
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            11,
+            12,
+            13,
+            14
+          ],
+          "slot_index": 2
+        }
+      ],
+      "widgets_values": [
+        "Copy of Copy of Copy of cyberrealisticPony_v127Alt.safetensors"
+      ]
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "id": 2,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+        40,
+        230
+      ],
+      "size": [
+        420,
+        82
+      ],
+      "order": 1,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            2,
+            3
+          ],
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        "Pony Realism Slider.safetensors",
+        1.8
+      ]
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "EmptyLatentImage",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 3,
+      "type": "EmptyLatentImage",
+      "pos": [
+        40,
+        360
+      ],
+      "size": [
+        270,
+        110
+      ],
+      "order": 2,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            15
+          ],
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        1216,
+        832,
+        1
+      ]
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "IPAdapterUnifiedLoader",
+        "cnr_id": "ComfyUI_IPAdapter_plus"
+      },
+      "id": 19,
+      "type": "IPAdapterUnifiedLoader",
+      "pos": [
+        40,
+        520
+      ],
+      "size": [
+        420,
+        80
+      ],
+      "order": 3,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 3
+        },
+        {
+          "name": "ipadapter",
+          "type": "IPADAPTER",
+          "link": null,
+          "shape": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            34
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "ipadapter",
+          "type": "IPADAPTER",
+          "links": [
+            35
+          ],
+          "slot_index": 1
+        }
+      ],
+      "widgets_values": [
+        "PLUS (high strength)"
+      ],
+      "title": "IPAdapter Unified Loader"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "ControlNetLoader",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 22,
+      "type": "ControlNetLoader",
+      "pos": [
+        40,
+        650
+      ],
+      "size": [
+        420,
+        60
+      ],
+      "order": 4,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CONTROL_NET",
+          "type": "CONTROL_NET",
+          "links": [
+            38,
+            42
+          ],
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        "diffusers_xl_depth_full.safetensors"
+      ],
+      "title": "Load ControlNet (SDXL Depth)"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 4,
+      "type": "CLIPTextEncode",
+      "pos": [
+        520,
+        40
+      ],
+      "size": [
+        400,
+        150
+      ],
+      "order": 5,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 4
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            16
+          ],
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        "photo-realistic, pretty detailed face, pale white skin, sweating glistening skin, detailed skin pores and texture, eyeliner, moist skin, high detailed sweat and skin shine, shadows, vibrant colors, bokeh"
+      ],
+      "title": "LOOK (frozen)"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 5,
+      "type": "CLIPTextEncode",
+      "pos": [
+        520,
+        230
+      ],
+      "size": [
+        400,
+        170
+      ],
+      "order": 6,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 5
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            17
+          ],
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        "inside dark bar background, at night, bar counter, liquor bottles on shelves, dim warm practical lights, neon accents, lounge sofa against the wall in the same bar, indoor, same room, same lighting"
+      ],
+      "title": "ROOM (frozen)"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 6,
+      "type": "CLIPTextEncode",
+      "pos": [
+        520,
+        440
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "order": 7,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 6
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            19
+          ],
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        "(young sexy chubby woman), ((club dress with gigantic cleavage)), (very busty:1.3), pale white skin, eyeliner, and a sexy old man wearing a suit, the same two adults, same faces"
+      ],
+      "title": "PEOPLE (frozen)"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 7,
+      "type": "CLIPTextEncode",
+      "pos": [
+        980,
+        40
+      ],
+      "size": [
+        400,
+        140
+      ],
+      "order": 8,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            21
+          ],
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        "the woman hugging the man, both standing at the bar counter, embracing, side view three-quarter, full body in frame"
+      ],
+      "title": "ACTION 1 \u2014 hug at the bar"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 8,
+      "type": "CLIPTextEncode",
+      "pos": [
+        980,
+        230
+      ],
+      "size": [
+        400,
+        160
+      ],
+      "order": 9,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 8
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            23
+          ],
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        "the same couple sitting together on the lounge sofa in this bar, both sitting on a sofa, bodies visible, still inside the same dark bar, not a different room, not an apartment"
+      ],
+      "title": "ACTION 2 \u2014 sitting on sofa"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 9,
+      "type": "CLIPTextEncode",
+      "pos": [
+        980,
+        440
+      ],
+      "size": [
+        400,
+        180
+      ],
+      "order": 10,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 9
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            25
+          ],
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        "POV from the man looking down at her, she kneeling on the bar floor in front of him, he looks at her, over his shoulder point of view, first person perspective, same faces, same dark bar background behind them"
+      ],
+      "title": "ACTION 3 \u2014 kneeling POV"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 10,
+      "type": "CLIPTextEncode",
+      "pos": [
+        980,
+        660
+      ],
+      "size": [
+        400,
+        180
+      ],
+      "order": 11,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 10
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            27,
+            37,
+            41
+          ],
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        "extra limb, missing limbs, fingers, hands, missing, watermarks, text, simple background, water on body, bad anatomy, bad hands, signature, imperfect eyes, skewed eyes, unnatural face, unnatural body, error, extra limb, extra people, different room, outdoor, child, cartoon, anime"
+      ],
+      "title": "NEGATIVE (shared)"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "ConditioningConcat",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 11,
+      "type": "ConditioningConcat",
+      "pos": [
+        1440,
+        80
+      ],
+      "size": [
+        240,
+        50
+      ],
+      "order": 12,
+      "inputs": [
+        {
+          "name": "conditioning_to",
+          "type": "CONDITIONING",
+          "link": 16
+        },
+        {
+          "name": "conditioning_from",
+          "type": "CONDITIONING",
+          "link": 17
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            18
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Concat look+room"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "ConditioningConcat",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 12,
+      "type": "ConditioningConcat",
+      "pos": [
+        1440,
+        180
+      ],
+      "size": [
+        240,
+        50
+      ],
+      "order": 13,
+      "inputs": [
+        {
+          "name": "conditioning_to",
+          "type": "CONDITIONING",
+          "link": 18
+        },
+        {
+          "name": "conditioning_from",
+          "type": "CONDITIONING",
+          "link": 19
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            20,
+            22,
+            24
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Concat + people (BASE)"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "ConditioningConcat",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 13,
+      "type": "ConditioningConcat",
+      "pos": [
+        1440,
+        280
+      ],
+      "size": [
+        240,
+        50
+      ],
+      "order": 14,
+      "inputs": [
+        {
+          "name": "conditioning_to",
+          "type": "CONDITIONING",
+          "link": 20
+        },
+        {
+          "name": "conditioning_from",
+          "type": "CONDITIONING",
+          "link": 21
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            26
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "BASE + hug"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "ConditioningConcat",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 14,
+      "type": "ConditioningConcat",
+      "pos": [
+        1440,
+        380
+      ],
+      "size": [
+        240,
+        50
+      ],
+      "order": 15,
+      "inputs": [
+        {
+          "name": "conditioning_to",
+          "type": "CONDITIONING",
+          "link": 22
+        },
+        {
+          "name": "conditioning_from",
+          "type": "CONDITIONING",
+          "link": 23
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            36
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "BASE + sofa"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "ConditioningConcat",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 15,
+      "type": "ConditioningConcat",
+      "pos": [
+        1440,
+        480
+      ],
+      "size": [
+        240,
+        50
+      ],
+      "order": 16,
+      "inputs": [
+        {
+          "name": "conditioning_to",
+          "type": "CONDITIONING",
+          "link": 24
+        },
+        {
+          "name": "conditioning_from",
+          "type": "CONDITIONING",
+          "link": 25
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            40
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "BASE + POV"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "KSampler",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 16,
+      "type": "KSampler",
+      "pos": [
+        1760,
+        40
+      ],
+      "size": [
+        300,
+        262
+      ],
+      "order": 17,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 2
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 26
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 27
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 15
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            28
+          ],
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        945502012161406,
+        "randomize",
+        20,
+        2.5,
+        "dpmpp_2m",
+        "karras",
+        1
+      ],
+      "title": "Scene 1 KSampler (txt2img denoise 1)"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "VAEDecode",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 17,
+      "type": "VAEDecode",
+      "pos": [
+        2120,
+        80
+      ],
+      "size": [
+        200,
+        60
+      ],
+      "order": 18,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 28
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 11
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            29,
+            30,
+            31,
+            32,
+            33
+          ],
+          "slot_index": 0
+        }
+      ]
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {},
+      "id": 18,
+      "type": "SaveImage",
+      "pos": [
+        2380,
+        40
+      ],
+      "size": [
+        320,
+        280
+      ],
+      "order": 19,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 29
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": null,
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        "scene1_hug_bar"
+      ],
+      "title": "Save scene 1 hug"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "PreviewImage",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 33,
+      "type": "PreviewImage",
+      "pos": [
+        2380,
+        360
+      ],
+      "size": [
+        320,
+        280
+      ],
+      "order": 20,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 30
+        }
+      ],
+      "outputs": [],
+      "title": "Preview master"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "LoadImage",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 34,
+      "type": "LoadImage",
+      "pos": [
+        1760,
+        360
+      ],
+      "size": [
+        320,
+        320
+      ],
+      "order": 21,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [],
+          "slot_index": 0
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null,
+          "slot_index": 1
+        }
+      ],
+      "widgets_values": [
+        "example.png",
+        "image"
+      ],
+      "title": "OPTIONAL: load frozen master PNG (then reconnect IMAGE to IPAdapter + Depth + VAEEncode)"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "IPAdapterAdvanced",
+        "cnr_id": "ComfyUI_IPAdapter_plus"
+      },
+      "id": 20,
+      "type": "IPAdapterAdvanced",
+      "pos": [
+        1760,
+        740
+      ],
+      "size": [
+        340,
+        280
+      ],
+      "order": 22,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 34
+        },
+        {
+          "name": "ipadapter",
+          "type": "IPADAPTER",
+          "link": 35
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 31
+        },
+        {
+          "name": "image_negative",
+          "type": "IMAGE",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "attn_mask",
+          "type": "MASK",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "clip_vision",
+          "type": "CLIP_VISION",
+          "link": null,
+          "shape": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            44,
+            50
+          ],
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        0.75,
+        "linear",
+        "concat",
+        0.0,
+        1.0,
+        "V only"
+      ],
+      "title": "IPAdapter from master (identity)"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "AIO_Preprocessor",
+        "cnr_id": "comfyui_controlnet_aux"
+      },
+      "id": 23,
+      "type": "AIO_Preprocessor",
+      "pos": [
+        1760,
+        1080
+      ],
+      "size": [
+        300,
+        80
+      ],
+      "order": 23,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 32
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            39,
+            43
+          ],
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        "DepthAnythingV2Preprocessor"
+      ],
+      "title": "Depth preprocessor"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "VAEEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 21,
+      "type": "VAEEncode",
+      "pos": [
+        2120,
+        740
+      ],
+      "size": [
+        200,
+        50
+      ],
+      "order": 24,
+      "inputs": [
+        {
+          "name": "pixels",
+          "type": "IMAGE",
+          "link": 33
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 12
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            47,
+            53
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Encode master for img2img"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "ControlNetApplyAdvanced",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 24,
+      "type": "ControlNetApplyAdvanced",
+      "pos": [
+        2120,
+        860
+      ],
+      "size": [
+        300,
+        166
+      ],
+      "order": 25,
+      "inputs": [
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 36
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 37
+        },
+        {
+          "name": "control_net",
+          "type": "CONTROL_NET",
+          "link": 38
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 39
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": null,
+          "shape": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "links": [
+            45
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "links": [
+            46
+          ],
+          "slot_index": 1
+        }
+      ],
+      "widgets_values": [
+        0.65,
+        0.0,
+        1.0
+      ],
+      "title": "Depth strong (sofa 0.65)"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "ControlNetApplyAdvanced",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 25,
+      "type": "ControlNetApplyAdvanced",
+      "pos": [
+        2120,
+        1080
+      ],
+      "size": [
+        300,
+        166
+      ],
+      "order": 26,
+      "inputs": [
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 40
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 41
+        },
+        {
+          "name": "control_net",
+          "type": "CONTROL_NET",
+          "link": 42
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 43
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": null,
+          "shape": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "links": [
+            51
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "links": [
+            52
+          ],
+          "slot_index": 1
+        }
+      ],
+      "widgets_values": [
+        0.2,
+        0.0,
+        0.65
+      ],
+      "title": "Depth weak (POV 0.20)"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "KSampler",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 26,
+      "type": "KSampler",
+      "pos": [
+        2500,
+        740
+      ],
+      "size": [
+        300,
+        262
+      ],
+      "order": 27,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 44
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 45
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 46
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 47
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            48
+          ],
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        1,
+        "randomize",
+        20,
+        2.5,
+        "dpmpp_2m",
+        "karras",
+        0.5
+      ],
+      "title": "Scene 2 KSampler (sofa denoise 0.5)"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "VAEDecode",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 27,
+      "type": "VAEDecode",
+      "pos": [
+        2860,
+        780
+      ],
+      "size": [
+        200,
+        60
+      ],
+      "order": 28,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 48
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 13
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            49
+          ],
+          "slot_index": 0
+        }
+      ]
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {},
+      "id": 28,
+      "type": "SaveImage",
+      "pos": [
+        3120,
+        740
+      ],
+      "size": [
+        320,
+        280
+      ],
+      "order": 29,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 49
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": null,
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        "scene2_sofa"
+      ],
+      "title": "Save scene 2 sofa"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "KSampler",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 29,
+      "type": "KSampler",
+      "pos": [
+        2500,
+        1080
+      ],
+      "size": [
+        300,
+        262
+      ],
+      "order": 30,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 50
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 51
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 52
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 53
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            54
+          ],
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        2,
+        "randomize",
+        20,
+        2.5,
+        "dpmpp_2m",
+        "karras",
+        0.6
+      ],
+      "title": "Scene 3 KSampler (POV denoise 0.6)"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "VAEDecode",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 30,
+      "type": "VAEDecode",
+      "pos": [
+        2860,
+        1120
+      ],
+      "size": [
+        200,
+        60
+      ],
+      "order": 31,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 54
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 14
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            55
+          ],
+          "slot_index": 0
+        }
+      ]
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {},
+      "id": 31,
+      "type": "SaveImage",
+      "pos": [
+        3120,
+        1080
+      ],
+      "size": [
+        320,
+        280
+      ],
+      "order": 32,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 55
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": null,
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        "scene3_kneeling_pov"
+      ],
+      "title": "Save scene 3 kneeling POV"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "text": ""
+      },
+      "id": 32,
+      "type": "Note",
+      "pos": [
+        40,
+        780
+      ],
+      "size": [
+        480,
+        420
+      ],
+      "order": 33,
+      "inputs": [],
+      "outputs": [],
+      "widgets_values": [
+        "THREE SCENES \u2014 same bar, same couple\n\n1. Queue Prompt. Scene 1 (hug at the bar) is txt2img and is the master.\n   Scenes 2 and 3 img2img from that image (IPAdapter + Depth).\n\n2. When you like scene 1: set its seed to fixed (or Load Image the PNG),\n   mute scene 1 KSampler if you only want 2/3, keep room + people CLIP frozen.\n\n3. Edit only the three ACTION prompt boxes. Do not change Room or People.\n\nControlNet: pick your SDXL depth model in Load ControlNet.\nIPAdapter: Unified Loader preset PLUS (high strength) \u2014 needs IPAdapter plus pack.\n\nDepth strength: sofa 0.65 / POV 0.20 (POV needs a new camera).\nDenoise: hug 1.0 / sofa 0.50 / POV 0.60.\n"
+      ],
+      "color": "#432",
+      "bgcolor": "#000"
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      2,
+      0,
+      "MODEL"
+    ],
+    [
+      2,
+      2,
+      0,
+      16,
+      0,
+      "MODEL"
+    ],
+    [
+      3,
+      2,
+      0,
+      19,
+      0,
+      "MODEL"
+    ],
+    [
+      4,
+      1,
+      1,
+      4,
+      0,
+      "CLIP"
+    ],
+    [
+      5,
+      1,
+      1,
+      5,
+      0,
+      "CLIP"
+    ],
+    [
+      6,
+      1,
+      1,
+      6,
+      0,
+      "CLIP"
+    ],
+    [
+      7,
+      1,
+      1,
+      7,
+      0,
+      "CLIP"
+    ],
+    [
+      8,
+      1,
+      1,
+      8,
+      0,
+      "CLIP"
+    ],
+    [
+      9,
+      1,
+      1,
+      9,
+      0,
+      "CLIP"
+    ],
+    [
+      10,
+      1,
+      1,
+      10,
+      0,
+      "CLIP"
+    ],
+    [
+      11,
+      1,
+      2,
+      17,
+      1,
+      "VAE"
+    ],
+    [
+      12,
+      1,
+      2,
+      21,
+      1,
+      "VAE"
+    ],
+    [
+      13,
+      1,
+      2,
+      27,
+      1,
+      "VAE"
+    ],
+    [
+      14,
+      1,
+      2,
+      30,
+      1,
+      "VAE"
+    ],
+    [
+      15,
+      3,
+      0,
+      16,
+      3,
+      "LATENT"
+    ],
+    [
+      16,
+      4,
+      0,
+      11,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      17,
+      5,
+      0,
+      11,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      18,
+      11,
+      0,
+      12,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      19,
+      6,
+      0,
+      12,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      20,
+      12,
+      0,
+      13,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      21,
+      7,
+      0,
+      13,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      22,
+      12,
+      0,
+      14,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      23,
+      8,
+      0,
+      14,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      24,
+      12,
+      0,
+      15,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      25,
+      9,
+      0,
+      15,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      26,
+      13,
+      0,
+      16,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      27,
+      10,
+      0,
+      16,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      28,
+      16,
+      0,
+      17,
+      0,
+      "LATENT"
+    ],
+    [
+      29,
+      17,
+      0,
+      18,
+      0,
+      "IMAGE"
+    ],
+    [
+      30,
+      17,
+      0,
+      33,
+      0,
+      "IMAGE"
+    ],
+    [
+      31,
+      17,
+      0,
+      20,
+      2,
+      "IMAGE"
+    ],
+    [
+      32,
+      17,
+      0,
+      23,
+      0,
+      "IMAGE"
+    ],
+    [
+      33,
+      17,
+      0,
+      21,
+      0,
+      "IMAGE"
+    ],
+    [
+      34,
+      19,
+      0,
+      20,
+      0,
+      "MODEL"
+    ],
+    [
+      35,
+      19,
+      1,
+      20,
+      1,
+      "IPADAPTER"
+    ],
+    [
+      36,
+      14,
+      0,
+      24,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      37,
+      10,
+      0,
+      24,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      38,
+      22,
+      0,
+      24,
+      2,
+      "CONTROL_NET"
+    ],
+    [
+      39,
+      23,
+      0,
+      24,
+      3,
+      "IMAGE"
+    ],
+    [
+      40,
+      15,
+      0,
+      25,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      41,
+      10,
+      0,
+      25,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      42,
+      22,
+      0,
+      25,
+      2,
+      "CONTROL_NET"
+    ],
+    [
+      43,
+      23,
+      0,
+      25,
+      3,
+      "IMAGE"
+    ],
+    [
+      44,
+      20,
+      0,
+      26,
+      0,
+      "MODEL"
+    ],
+    [
+      45,
+      24,
+      0,
+      26,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      46,
+      24,
+      1,
+      26,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      47,
+      21,
+      0,
+      26,
+      3,
+      "LATENT"
+    ],
+    [
+      48,
+      26,
+      0,
+      27,
+      0,
+      "LATENT"
+    ],
+    [
+      49,
+      27,
+      0,
+      28,
+      0,
+      "IMAGE"
+    ],
+    [
+      50,
+      20,
+      0,
+      29,
+      0,
+      "MODEL"
+    ],
+    [
+      51,
+      25,
+      0,
+      29,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      52,
+      25,
+      1,
+      29,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      53,
+      21,
+      0,
+      29,
+      3,
+      "LATENT"
+    ],
+    [
+      54,
+      29,
+      0,
+      30,
+      0,
+      "LATENT"
+    ],
+    [
+      55,
+      30,
+      0,
+      31,
+      0,
+      "IMAGE"
+    ]
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "title": "MODELS (Pony + Realism Slider + IPAdapter + Depth CN)",
+      "bounding": [
+        20,
+        20,
+        480,
+        740
+      ],
+      "color": "#3f789e",
+      "flags": {}
+    },
+    {
+      "id": 2,
+      "title": "FROZEN PROMPTS + THREE ACTIONS",
+      "bounding": [
+        500,
+        20,
+        1180,
+        860
+      ],
+      "color": "#8A8",
+      "flags": {}
+    },
+    {
+      "id": 3,
+      "title": "SCENE 1 \u2014 HUG AT THE BAR (master txt2img)",
+      "bounding": [
+        1740,
+        20,
+        1000,
+        680
+      ],
+      "color": "#3f789e",
+      "flags": {}
+    },
+    {
+      "id": 4,
+      "title": "SCENE 2 \u2014 SOFA (img2img, depth 0.65, denoise 0.5)",
+      "bounding": [
+        1740,
+        700,
+        1740,
+        360
+      ],
+      "color": "#a1309b",
+      "flags": {}
+    },
+    {
+      "id": 5,
+      "title": "SCENE 3 \u2014 KNEELING POV (img2img, depth 0.20, denoise 0.6)",
+      "bounding": [
+        1740,
+        1040,
+        1740,
+        360
+      ],
+      "color": "#b58b2a",
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.45,
+      "offset": [
+        0,
+        0
+      ]
+    },
+    "frontendVersion": "1.52.7"
+  },
+  "version": 0.4
+}
