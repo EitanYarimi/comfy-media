@@ -12,14 +12,16 @@ One queue writes three stills of the **same two adults in the same dark bar**:
 | `scene2_sofa` | Sitting on the lounge sofa in that bar | img2img + InstantID + Depth **0.65**, denoise **0.50** |
 | `scene3_kneeling_pov` | He looks at her; she kneeling; his POV | img2img + InstantID, **no Depth**, denoise **0.60** — POV from the checkpoint prompt |
 
-The depth preprocessor is **only for scene 2**. InstantID `image` defaults to the scene 1 still.
+The depth preprocessor is **only for scene 2** and uses **MiDaS** (not Depth-Anything V2). Depth-Anything tries to download `depth_anything_v2_vitl.pth` into `/tmp/ckpts`, which fails on Colab (`[Errno 2] No such file or directory: '/tmp/ckpts'`).
+
+This graph has **no IPAdapter Plus nodes**. If you see `IPAdapter model not found` / `comfyui_ipadapter_plus/IPAdapterPlus.py`, you still have the **first** workflow loaded. Load this file again (Load → `same-room-couple.json`) so InstantID (`ip-adapter.bin`) is what runs.
 
 ## Custom nodes and models
 
 Install with ComfyUI Manager:
 
 - [ComfyUI_InstantID](https://github.com/cubiq/ComfyUI_InstantID) (same pack as the LinkedIn workflow)
-- [comfyui_controlnet_aux](https://github.com/Fannovel16/comfyui_controlnet_aux) (sofa Depth only)
+- [comfyui_controlnet_aux](https://github.com/Fannovel16/comfyui_controlnet_aux) (sofa Depth via **MiDaS**, not Depth-Anything)
 
 | Node | File / setting |
 |---|---|
@@ -52,6 +54,11 @@ Do **not** edit **LOOK**, **ROOM**, or **PEOPLE**. Only the three **ACTION** box
 **ACTION 2 — sofa:** both sitting on that bar’s lounge sofa; not a different apartment.
 
 **ACTION 3 — kneeling POV:** from the man looking down; she kneels on the bar floor in front of him; over-shoulder / first-person; same bar behind them.
+
+## Colab errors
+
+- **`IPAdapter model not found`** — old graph. Re-import this JSON. InstantID does not use `models/ipadapter/`. It uses `models/instantid/ip-adapter.bin` (same as your LinkedIn workflow).
+- **`Failed to find ... Depth-Anything-V2-Large` / `/tmp/ckpts`** — do not use DepthAnythingV2 on Colab. This file’s sofa preprocessor is MiDaS.
 
 ## If identity or room slips
 

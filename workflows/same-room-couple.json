@@ -930,9 +930,9 @@
         }
       ],
       "widgets_values": [
-        "DepthAnythingV2Preprocessor"
+        "MiDaS-DepthMapPreprocessor"
       ],
-      "title": "Depth preprocessor"
+      "title": "Depth preprocessor (MiDaS — Colab-safe, no Depth-Anything download)"
     },
     {
       "flags": {},
@@ -1348,7 +1348,7 @@
       "inputs": [],
       "outputs": [],
       "widgets_values": [
-        "THREE SCENES \u2014 same bar, same couple\nIdentity = InstantID (same stack as linkedin_instantid_00427):\n  ip-adapter.bin + instantid_controlnet.safetensors + Face Analysis CUDA\n  ApplyInstantIDAdvanced: ip 0.8, cn 0.8, start 0.3, end 1, noise 0.2, concat\n\n1. Scene 1 hug is txt2img master. InstantID image = that still (both faces).\n   Optional: load a face photo and reconnect it to ApplyInstantID image.\n2. Scene 2 sofa = InstantID + Depth (room lock). image_kps left empty so pose can change.\n3. Scene 3 POV = InstantID only (checkpoint POV prompt). No depth.\n\nDo not edit LOOK / ROOM / PEOPLE. Only ACTION boxes.\nDenoise: hug 1.0 / sofa 0.50 / POV 0.60.\n"
+        "THREE SCENES — same bar, same couple\nIdentity = InstantID (NOT IPAdapter Plus).\n  ip-adapter.bin + instantid_controlnet.safetensors + Face Analysis CUDA\n  ApplyInstantIDAdvanced: ip 0.8, cn 0.8, start 0.3, end 1, noise 0.2, concat\n\nIf you see IPAdapter model not found, you loaded the OLD json. Load this file again.\nSofa depth = MiDaS (avoids Colab /tmp/ckpts Depth-Anything download failure).\n\n1. Scene 1 hug is txt2img master. InstantID image = that still.\n2. Scene 2 sofa = InstantID + MiDaS depth.\n3. Scene 3 POV = InstantID only. No depth.\n\nDo not edit LOOK / ROOM / PEOPLE. Only ACTION boxes.\n"
       ],
       "color": "#432",
       "bgcolor": "#000"
