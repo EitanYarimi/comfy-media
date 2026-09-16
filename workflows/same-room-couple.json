@@ -1,8 +1,8 @@
 {
   "id": "same-room-couple-three-scenes",
   "revision": 0,
-  "last_node_id": 34,
-  "last_link_id": 57,
+  "last_node_id": 39,
+  "last_link_id": 75,
   "nodes": [
     {
       "flags": {},
@@ -93,7 +93,8 @@
           "type": "MODEL",
           "links": [
             2,
-            3
+            56,
+            57
           ],
           "slot_index": 0
         }
@@ -143,60 +144,6 @@
       "flags": {},
       "mode": 0,
       "properties": {
-        "Node name for S&R": "IPAdapterUnifiedLoader",
-        "cnr_id": "ComfyUI_IPAdapter_plus"
-      },
-      "id": 19,
-      "type": "IPAdapterUnifiedLoader",
-      "pos": [
-        40,
-        520
-      ],
-      "size": [
-        420,
-        80
-      ],
-      "order": 3,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 3
-        },
-        {
-          "name": "ipadapter",
-          "type": "IPADAPTER",
-          "link": null,
-          "shape": 7
-        }
-      ],
-      "outputs": [
-        {
-          "name": "MODEL",
-          "type": "MODEL",
-          "links": [
-            34
-          ],
-          "slot_index": 0
-        },
-        {
-          "name": "ipadapter",
-          "type": "IPADAPTER",
-          "links": [
-            35
-          ],
-          "slot_index": 1
-        }
-      ],
-      "widgets_values": [
-        "PLUS (high strength)"
-      ],
-      "title": "IPAdapter Unified Loader"
-    },
-    {
-      "flags": {},
-      "mode": 0,
-      "properties": {
         "Node name for S&R": "ControlNetLoader",
         "cnr_id": "comfy-core",
         "ver": "0.18.1"
@@ -205,7 +152,7 @@
       "type": "ControlNetLoader",
       "pos": [
         40,
-        650
+        790
       ],
       "size": [
         420,
@@ -226,7 +173,7 @@
       "widgets_values": [
         "diffusers_xl_depth_full.safetensors"
       ],
-      "title": "Load ControlNet (SDXL Depth)"
+      "title": "Load ControlNet (SDXL Depth, sofa only)"
     },
     {
       "flags": {},
@@ -506,8 +453,8 @@
           "type": "CONDITIONING",
           "links": [
             27,
-            37,
-            57
+            67,
+            69
           ],
           "slot_index": 0
         }
@@ -684,7 +631,7 @@
           "name": "CONDITIONING",
           "type": "CONDITIONING",
           "links": [
-            36
+            66
           ],
           "slot_index": 0
         }
@@ -727,7 +674,7 @@
           "name": "CONDITIONING",
           "type": "CONDITIONING",
           "links": [
-            56
+            68
           ],
           "slot_index": 0
         }
@@ -834,9 +781,10 @@
           "links": [
             29,
             30,
-            31,
             32,
-            33
+            33,
+            61,
+            65
           ],
           "slot_index": 0
         }
@@ -944,81 +892,7 @@
         "example.png",
         "image"
       ],
-      "title": "OPTIONAL: load frozen master PNG (reconnect IMAGE to IPAdapter + sofa Depth + VAEEncode)"
-    },
-    {
-      "flags": {},
-      "mode": 0,
-      "properties": {
-        "Node name for S&R": "IPAdapterAdvanced",
-        "cnr_id": "ComfyUI_IPAdapter_plus"
-      },
-      "id": 20,
-      "type": "IPAdapterAdvanced",
-      "pos": [
-        1760,
-        740
-      ],
-      "size": [
-        340,
-        280
-      ],
-      "order": 22,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 34
-        },
-        {
-          "name": "ipadapter",
-          "type": "IPADAPTER",
-          "link": 35
-        },
-        {
-          "name": "image",
-          "type": "IMAGE",
-          "link": 31
-        },
-        {
-          "name": "image_negative",
-          "type": "IMAGE",
-          "link": null,
-          "shape": 7
-        },
-        {
-          "name": "attn_mask",
-          "type": "MASK",
-          "link": null,
-          "shape": 7
-        },
-        {
-          "name": "clip_vision",
-          "type": "CLIP_VISION",
-          "link": null,
-          "shape": 7
-        }
-      ],
-      "outputs": [
-        {
-          "name": "MODEL",
-          "type": "MODEL",
-          "links": [
-            44,
-            50
-          ],
-          "slot_index": 0
-        }
-      ],
-      "widgets_values": [
-        0.75,
-        "linear",
-        "concat",
-        0.0,
-        1.0,
-        "V only"
-      ],
-      "title": "IPAdapter from master (identity)"
+      "title": "OPTIONAL FACE REFERENCE (reconnect IMAGE into ApplyInstantID image to use a photo instead of the master still)"
     },
     {
       "flags": {},
@@ -1127,12 +1001,12 @@
         {
           "name": "positive",
           "type": "CONDITIONING",
-          "link": 36
+          "link": 70
         },
         {
           "name": "negative",
           "type": "CONDITIONING",
-          "link": 37
+          "link": 71
         },
         {
           "name": "control_net",
@@ -1199,7 +1073,7 @@
         {
           "name": "model",
           "type": "MODEL",
-          "link": 44
+          "link": 72
         },
         {
           "name": "positive",
@@ -1236,7 +1110,7 @@
         "karras",
         0.5
       ],
-      "title": "Scene 2 KSampler (sofa denoise 0.5)"
+      "title": "Scene 2 KSampler (sofa + InstantID + Depth)"
     },
     {
       "flags": {},
@@ -1338,17 +1212,17 @@
         {
           "name": "model",
           "type": "MODEL",
-          "link": 50
+          "link": 73
         },
         {
           "name": "positive",
           "type": "CONDITIONING",
-          "link": 56
+          "link": 74
         },
         {
           "name": "negative",
           "type": "CONDITIONING",
-          "link": 57
+          "link": 75
         },
         {
           "name": "latent_image",
@@ -1375,7 +1249,7 @@
         "karras",
         0.6
       ],
-      "title": "Scene 3 KSampler (POV prompt + IPAdapter, no Depth)"
+      "title": "Scene 3 KSampler (POV + InstantID, no Depth)"
     },
     {
       "flags": {},
@@ -1474,10 +1348,322 @@
       "inputs": [],
       "outputs": [],
       "widgets_values": [
-        "THREE SCENES \u2014 same bar, same couple\n\n1. Queue Prompt. Scene 1 (hug at the bar) is txt2img and is the master.\n   Scene 2 img2img with IPAdapter + Depth (keep the bar).\n   Scene 3 img2img with IPAdapter only \u2014 POV comes from the checkpoint prompt.\n\n2. When you like scene 1: set its seed to fixed (or Load Image the PNG),\n   mute scene 1 KSampler if you only want 2/3, keep room + people CLIP frozen.\n\n3. Edit only the three ACTION prompt boxes. Do not change Room or People.\n\nControlNet Depth is used for the sofa scene only.\nIPAdapter: Unified Loader preset PLUS (high strength).\n\nDenoise: hug 1.0 / sofa 0.50 / POV 0.60.\n"
+        "THREE SCENES \u2014 same bar, same couple\nIdentity = InstantID (same stack as linkedin_instantid_00427):\n  ip-adapter.bin + instantid_controlnet.safetensors + Face Analysis CUDA\n  ApplyInstantIDAdvanced: ip 0.8, cn 0.8, start 0.3, end 1, noise 0.2, concat\n\n1. Scene 1 hug is txt2img master. InstantID image = that still (both faces).\n   Optional: load a face photo and reconnect it to ApplyInstantID image.\n2. Scene 2 sofa = InstantID + Depth (room lock). image_kps left empty so pose can change.\n3. Scene 3 POV = InstantID only (checkpoint POV prompt). No depth.\n\nDo not edit LOOK / ROOM / PEOPLE. Only ACTION boxes.\nDenoise: hug 1.0 / sofa 0.50 / POV 0.60.\n"
       ],
       "color": "#432",
       "bgcolor": "#000"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "InstantIDModelLoader",
+        "cnr_id": "ComfyUI_InstantID"
+      },
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "INSTANTID",
+          "type": "INSTANTID",
+          "links": [
+            58,
+            62
+          ],
+          "slot_index": 0
+        }
+      ],
+      "id": 35,
+      "type": "InstantIDModelLoader",
+      "pos": [
+        40,
+        520
+      ],
+      "size": [
+        420,
+        60
+      ],
+      "order": 3,
+      "widgets_values": [
+        "ip-adapter.bin"
+      ],
+      "title": "InstantID Model (ip-adapter.bin)"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "InstantIDFaceAnalysis",
+        "cnr_id": "ComfyUI_InstantID"
+      },
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "FACEANALYSIS",
+          "type": "FACEANALYSIS",
+          "links": [
+            59,
+            63
+          ],
+          "slot_index": 0
+        }
+      ],
+      "id": 36,
+      "type": "InstantIDFaceAnalysis",
+      "pos": [
+        40,
+        610
+      ],
+      "size": [
+        420,
+        60
+      ],
+      "order": 4,
+      "widgets_values": [
+        "CUDA"
+      ],
+      "title": "InstantID Face Analysis"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "ControlNetLoader",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CONTROL_NET",
+          "type": "CONTROL_NET",
+          "links": [
+            60,
+            64
+          ],
+          "slot_index": 0
+        }
+      ],
+      "id": 37,
+      "type": "ControlNetLoader",
+      "pos": [
+        40,
+        700
+      ],
+      "size": [
+        420,
+        60
+      ],
+      "order": 5,
+      "widgets_values": [
+        "instantid_controlnet.safetensors"
+      ],
+      "title": "InstantID ControlNet"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "ApplyInstantIDAdvanced",
+        "cnr_id": "ComfyUI_InstantID"
+      },
+      "inputs": [
+        {
+          "name": "instantid",
+          "type": "INSTANTID",
+          "link": 58
+        },
+        {
+          "name": "insightface",
+          "type": "FACEANALYSIS",
+          "link": 59
+        },
+        {
+          "name": "control_net",
+          "type": "CONTROL_NET",
+          "link": 60
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 61
+        },
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 56
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 66
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 67
+        },
+        {
+          "name": "image_kps",
+          "type": "IMAGE",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "mask",
+          "type": "MASK",
+          "link": null,
+          "shape": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            72
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "links": [
+            70
+          ],
+          "slot_index": 1
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "links": [
+            71
+          ],
+          "slot_index": 2
+        }
+      ],
+      "id": 38,
+      "type": "ApplyInstantIDAdvanced",
+      "pos": [
+        1760,
+        720
+      ],
+      "size": [
+        320,
+        338
+      ],
+      "order": 22,
+      "widgets_values": [
+        0.8,
+        0.8,
+        0.3,
+        1,
+        0.2,
+        "concat"
+      ],
+      "title": "Apply InstantID (sofa) \u2014 same as LinkedIn graph"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "ApplyInstantIDAdvanced",
+        "cnr_id": "ComfyUI_InstantID"
+      },
+      "inputs": [
+        {
+          "name": "instantid",
+          "type": "INSTANTID",
+          "link": 62
+        },
+        {
+          "name": "insightface",
+          "type": "FACEANALYSIS",
+          "link": 63
+        },
+        {
+          "name": "control_net",
+          "type": "CONTROL_NET",
+          "link": 64
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 65
+        },
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 57
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 68
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 69
+        },
+        {
+          "name": "image_kps",
+          "type": "IMAGE",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "mask",
+          "type": "MASK",
+          "link": null,
+          "shape": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            73
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "links": [
+            74
+          ],
+          "slot_index": 1
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "links": [
+            75
+          ],
+          "slot_index": 2
+        }
+      ],
+      "id": 39,
+      "type": "ApplyInstantIDAdvanced",
+      "pos": [
+        1760,
+        1100
+      ],
+      "size": [
+        320,
+        338
+      ],
+      "order": 23,
+      "widgets_values": [
+        0.8,
+        0.8,
+        0.3,
+        1,
+        0.2,
+        "concat"
+      ],
+      "title": "Apply InstantID (POV) \u2014 same as LinkedIn graph"
     }
   ],
   "links": [
@@ -1494,14 +1680,6 @@
       2,
       0,
       16,
-      0,
-      "MODEL"
-    ],
-    [
-      3,
-      2,
-      0,
-      19,
       0,
       "MODEL"
     ],
@@ -1722,14 +1900,6 @@
       "IMAGE"
     ],
     [
-      31,
-      17,
-      0,
-      20,
-      2,
-      "IMAGE"
-    ],
-    [
       32,
       17,
       0,
@@ -1746,38 +1916,6 @@
       "IMAGE"
     ],
     [
-      34,
-      19,
-      0,
-      20,
-      0,
-      "MODEL"
-    ],
-    [
-      35,
-      19,
-      1,
-      20,
-      1,
-      "IPADAPTER"
-    ],
-    [
-      36,
-      14,
-      0,
-      24,
-      0,
-      "CONDITIONING"
-    ],
-    [
-      37,
-      10,
-      0,
-      24,
-      1,
-      "CONDITIONING"
-    ],
-    [
       38,
       22,
       0,
@@ -1792,14 +1930,6 @@
       24,
       3,
       "IMAGE"
-    ],
-    [
-      44,
-      20,
-      0,
-      26,
-      0,
-      "MODEL"
     ],
     [
       45,
@@ -1842,14 +1972,6 @@
       "IMAGE"
     ],
     [
-      50,
-      20,
-      0,
-      29,
-      0,
-      "MODEL"
-    ],
-    [
       53,
       21,
       0,
@@ -1875,16 +1997,160 @@
     ],
     [
       56,
+      2,
+      0,
+      38,
+      4,
+      "MODEL"
+    ],
+    [
+      57,
+      2,
+      0,
+      39,
+      4,
+      "MODEL"
+    ],
+    [
+      58,
+      35,
+      0,
+      38,
+      0,
+      "INSTANTID"
+    ],
+    [
+      59,
+      36,
+      0,
+      38,
+      1,
+      "FACEANALYSIS"
+    ],
+    [
+      60,
+      37,
+      0,
+      38,
+      2,
+      "CONTROL_NET"
+    ],
+    [
+      61,
+      17,
+      0,
+      38,
+      3,
+      "IMAGE"
+    ],
+    [
+      62,
+      35,
+      0,
+      39,
+      0,
+      "INSTANTID"
+    ],
+    [
+      63,
+      36,
+      0,
+      39,
+      1,
+      "FACEANALYSIS"
+    ],
+    [
+      64,
+      37,
+      0,
+      39,
+      2,
+      "CONTROL_NET"
+    ],
+    [
+      65,
+      17,
+      0,
+      39,
+      3,
+      "IMAGE"
+    ],
+    [
+      66,
+      14,
+      0,
+      38,
+      5,
+      "CONDITIONING"
+    ],
+    [
+      67,
+      10,
+      0,
+      38,
+      6,
+      "CONDITIONING"
+    ],
+    [
+      68,
       15,
       0,
+      39,
+      5,
+      "CONDITIONING"
+    ],
+    [
+      69,
+      10,
+      0,
+      39,
+      6,
+      "CONDITIONING"
+    ],
+    [
+      70,
+      38,
+      1,
+      24,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      71,
+      38,
+      2,
+      24,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      72,
+      38,
+      0,
+      26,
+      0,
+      "MODEL"
+    ],
+    [
+      73,
+      39,
+      0,
+      29,
+      0,
+      "MODEL"
+    ],
+    [
+      74,
+      39,
+      1,
       29,
       1,
       "CONDITIONING"
     ],
     [
-      57,
-      10,
-      0,
+      75,
+      39,
+      2,
       29,
       2,
       "CONDITIONING"
@@ -1893,12 +2159,12 @@
   "groups": [
     {
       "id": 1,
-      "title": "MODELS (Pony + Realism Slider + IPAdapter + Depth CN)",
+      "title": "MODELS (Pony + Realism Slider + InstantID ip-adapter.bin)",
       "bounding": [
         20,
         20,
         480,
-        740
+        860
       ],
       "color": "#3f789e",
       "flags": {}
@@ -1929,7 +2195,7 @@
     },
     {
       "id": 4,
-      "title": "SCENE 2 \u2014 SOFA (img2img, depth 0.65, denoise 0.5)",
+      "title": "SCENE 2 \u2014 SOFA (InstantID + depth 0.65, denoise 0.5)",
       "bounding": [
         1740,
         700,
@@ -1941,7 +2207,7 @@
     },
     {
       "id": 5,
-      "title": "SCENE 3 \u2014 KNEELING POV (img2img, checkpoint POV prompt, no Depth)",
+      "title": "SCENE 3 \u2014 KNEELING POV (InstantID + checkpoint POV, no Depth)",
       "bounding": [
         1740,
         1040,

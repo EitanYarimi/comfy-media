@@ -2,39 +2,42 @@
 
 Import [`same-room-couple.json`](same-room-couple.json) in ComfyUI (**Load** / drag onto the canvas). It is a fork of your Pony txt2img graph (`cyberrealisticPony_v127Alt` + **Pony Realism Slider** 1.8, 1216×832, `dpmpp_2m` / karras, 20 steps, CFG 2.5).
 
+Identity uses the **same InstantID stack** as `linkedin_instantid_00427_.json`: `ip-adapter.bin`, `instantid_controlnet.safetensors`, Face Analysis **CUDA**, **ApplyInstantIDAdvanced** at `ip 0.8 / cn 0.8 / start 0.3 / end 1 / noise 0.2 / concat`. `image_kps` is left unconnected so sofa and POV poses can change (keypoints from the hug would freeze that camera).
+
 One queue writes three stills of the **same two adults in the same dark bar**:
 
 | File prefix | Scene | How it is sampled |
 |---|---|---|
 | `scene1_hug_bar` | Hugging at the bar counter | txt2img, denoise **1.0** (master) |
-| `scene2_sofa` | Sitting on the lounge sofa in that bar | img2img from scene 1, denoise **0.50**, Depth **0.65** |
-| `scene3_kneeling_pov` | He looks at her; she kneeling; his POV | img2img from scene 1, denoise **0.60**, **no Depth** — POV from the checkpoint prompt |
+| `scene2_sofa` | Sitting on the lounge sofa in that bar | img2img + InstantID + Depth **0.65**, denoise **0.50** |
+| `scene3_kneeling_pov` | He looks at her; she kneeling; his POV | img2img + InstantID, **no Depth**, denoise **0.60** — POV from the checkpoint prompt |
 
-The depth preprocessor is **only for scene 2** (same sofa/bar layout). Scene 3 does not use it: a depth map of the hug freeze the original camera and fights POV. Your Pony checkpoint already understands POV from the ACTION prompt. **IPAdapter** still copies the same faces from the master.
+The depth preprocessor is **only for scene 2**. InstantID `image` defaults to the scene 1 still.
 
 ## Custom nodes and models
 
 Install with ComfyUI Manager:
 
-- [ComfyUI_IPAdapter_plus](https://github.com/cubiq/ComfyUI_IPAdapter_plus)
-- [comfyui_controlnet_aux](https://github.com/Fannovel16/comfyui_controlnet_aux)
+- [ComfyUI_InstantID](https://github.com/cubiq/ComfyUI_InstantID) (same pack as the LinkedIn workflow)
+- [comfyui_controlnet_aux](https://github.com/Fannovel16/comfyui_controlnet_aux) (sofa Depth only)
 
-Then put matching weights in `models/` (names vary; pick yours in the dropdowns):
-
-| Node | Typical files |
+| Node | File / setting |
 |---|---|
-| Checkpoint | `Copy of Copy of Copy of cyberrealisticPony_v127Alt.safetensors` (whatever you already use) |
+| Checkpoint | `Copy of Copy of Copy of cyberrealisticPony_v127Alt.safetensors` |
 | LoRA | `Pony Realism Slider.safetensors` |
-| IPAdapter Unified Loader preset **PLUS (high strength)** | `ip-adapter-plus_sdxl_vit-h.safetensors` + CLIP Vision `CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors` |
-| Load ControlNet | SDXL depth for **scene 2 only**, e.g. `diffusers_xl_depth_full.safetensors` |
+| InstantID Model | `models/instantid/ip-adapter.bin` |
+| InstantID ControlNet | `instantid_controlnet.safetensors` |
+| InsightFace | `models/insightface/models/antelopev2/*.onnx` |
+| Face Analysis | **CUDA** (same as your LinkedIn graph; switch to CPU/ROCM if that is what you run) |
+| SDXL Depth ControlNet | sofa scene only, e.g. `diffusers_xl_depth_full.safetensors` |
 
-If a node shows red after import, select the file you actually have. Pony is SDXL-shaped, so use **SDXL** IPAdapter and ControlNet, not SD1.5.
+InstantID is built for **one primary face**. On a two-person still it usually locks the largest/closest face. For a dedicated identity photo, load it in **OPTIONAL FACE REFERENCE** and reconnect that `IMAGE` into both ApplyInstantID `image` inputs.
 
 ## Queue order
 
-1. **Queue Prompt.** Scene 1 generates the master hug; scenes 2 and 3 are built from that image in the same run.
-2. Keep generating until the couple and bar look right. Then set scene 1’s seed to **fixed**.
-3. To reuse a saved PNG: load it in **OPTIONAL: load frozen master PNG**, then reconnect that `IMAGE` output to **IPAdapter**, **Depth preprocessor**, and **VAEEncode** (disconnect those three from scene 1 decode). Mute scene 1’s KSampler if you do not want a new hug.
+1. **Queue Prompt.** Scene 1 generates the master hug; InstantID + scenes 2/3 run from that image.
+2. When the couple and bar look right, set scene 1’s seed to **fixed**.
+3. To reuse a PNG: load it, reconnect `IMAGE` to both ApplyInstantID `image` inputs, Depth preprocessor, and VAEEncode. Mute scene 1’s KSampler if you do not want a new hug.
 
 Do **not** edit **LOOK**, **ROOM**, or **PEOPLE**. Only the three **ACTION** boxes change pose/camera.
 
@@ -50,13 +53,11 @@ Do **not** edit **LOOK**, **ROOM**, or **PEOPLE**. Only the three **ACTION** box
 
 **ACTION 3 — kneeling POV:** from the man looking down; she kneels on the bar floor in front of him; over-shoulder / first-person; same bar behind them.
 
-Clothes stay in PEOPLE unless you change that box on purpose.
-
 ## If identity or room slips
 
-- Faces drift: raise IPAdapter weight (start ~0.75, try 0.85) or switch the Unified Loader preset to **PLUS FACE**.
-- Sofa scene rebuilds a new room: raise Depth strength toward 0.8 or lower denoise to ~0.4.
-- POV still looks like the hug framing: raise scene 3 denoise slightly (0.65–0.75) or strengthen POV words in ACTION 3 (`first person`, `from his eyes`, `looking down`). Do not add Depth back unless you want the original hug camera.
-- Extra people or a child in frame: already in the shared negative; add `1girl, 1boy, two people only` to PEOPLE if needed.
+- Faces drift: raise ApplyInstantID `ip_weight` from 0.8 toward 1.0, or feed a tight face crop as the InstantID image.
+- Sofa rebuilds a new room: raise Depth toward 0.8 or lower denoise to ~0.4.
+- Sofa/POV copy the hug pose: keep `image_kps` disconnected (do not wire the master into keypoints).
+- POV still looks like the hug framing: raise scene 3 denoise (0.65–0.75) or strengthen POV words in ACTION 3. Do not add Depth on scene 3.
 
-Outputs land in ComfyUI `output/` with the prefixes above, which this gallery already browses if that folder is your media root.
+Outputs land in ComfyUI `output/` with the prefixes above.
