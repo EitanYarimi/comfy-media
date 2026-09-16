@@ -849,6 +849,43 @@ _thumb_memory = OrderedDict()
 _thumb_memory_bytes = 0
 _thumb_memory_lock = threading.Lock()
 
+# Thumb URLs carry ?v=<pipeline>&m=<mtime>, so a given URL never changes content.
+# Revalidating them made every filter change re-fetch the whole grid.
+THUMB_CACHE_HEADER = 'public, max-age=31536000, immutable'
+
+# Files ffmpeg cannot thumbnail (cloud stubs, truncated writes) otherwise re-run
+# the full seek/encode search on every grid render.
+THUMB_FAILURE_TTL = 600
+_thumb_failures = {}
+_thumb_failures_lock = threading.Lock()
+
+
+def _thumb_failure_key(cache_key, filepath):
+    try:
+        return cache_key, filepath.stat().st_mtime
+    except OSError:
+        return cache_key, None
+
+
+def _thumb_failed_recently(cache_key, filepath):
+    key = _thumb_failure_key(cache_key, filepath)
+    with _thumb_failures_lock:
+        failed_at = _thumb_failures.get(key)
+        if failed_at is None:
+            return False
+        if time.time() - failed_at < THUMB_FAILURE_TTL:
+            return True
+        _thumb_failures.pop(key, None)
+        return False
+
+
+def _remember_thumb_failure(cache_key, filepath):
+    key = _thumb_failure_key(cache_key, filepath)
+    with _thumb_failures_lock:
+        if len(_thumb_failures) > 5000:
+            _thumb_failures.clear()
+        _thumb_failures[key] = time.time()
+
 
 def _thumb_memory_get(cache_key):
     with _thumb_memory_lock:
@@ -1057,9 +1094,9 @@ def _thumb_from_ffmpeg(filepath, cache_key):
             if score > best_score:
                 best_score = score
                 best = (ext, data, mime)
-            # Good enough — stop early
-            if score >= 18.0:
-                break
+            # The other encoder would re-encode the same frame, so its score is
+            # effectively identical — move to the next seek instead.
+            break
         if best_score >= 18.0:
             break
 
@@ -1075,18 +1112,79 @@ def generate_video_thumbnail(filepath):
     if cached:
         return cached
 
+    cache_key = _video_cache_key(filepath)
+    if _thumb_failed_recently(cache_key, filepath):
+        return None
+
     with _vthumb_semaphore:
         cached = get_cached_video_thumbnail(filepath)
         if cached:
             return cached
-        cache_key = _video_cache_key(filepath)
+        if _thumb_failed_recently(cache_key, filepath):
+            return None
         result = _thumb_from_ffmpeg(filepath, cache_key)
         if result:
             return result
-        return _thumb_from_qlmanage(filepath, cache_key)
+        result = _thumb_from_qlmanage(filepath, cache_key)
+        if not result:
+            _remember_thumb_failure(cache_key, filepath)
+        return result
 
 
 _prewarm_state = {'done': 0, 'missing': None, 'running': False}
+
+# Paths the browser is actually showing right now. Filtering jumps to a month or
+# day the sequential prewarm walk has not reached yet, so those grids used to run
+# ffmpeg on demand for every tile.
+_warm_queue = []
+_warm_seen = set()
+_warm_lock = threading.Lock()
+WARM_QUEUE_LIMIT = 600
+
+
+def queue_warm_paths(rel_paths):
+    """Push visible video paths to the front of the prewarm queue."""
+    added = 0
+    with _warm_lock:
+        for rel in reversed(rel_paths):
+            if not rel or rel in _warm_seen:
+                continue
+            _warm_seen.add(rel)
+            _warm_queue.insert(0, rel)
+            added += 1
+        while len(_warm_queue) > WARM_QUEUE_LIMIT:
+            _warm_seen.discard(_warm_queue.pop())
+    return added
+
+
+def _next_warm_path():
+    with _warm_lock:
+        if not _warm_queue:
+            return None
+        rel = _warm_queue.pop(0)
+        _warm_seen.discard(rel)
+        return rel
+
+
+def _drain_warm_queue():
+    """Thumbnail whatever the browser just asked for, newest request first."""
+    while True:
+        rel = _next_warm_path()
+        if rel is None:
+            return
+        with _active_streams_lock:
+            if _active_streams > 0:
+                return
+        filepath = resolve_media_path(rel)
+        try:
+            if not filepath or not filepath.is_file():
+                continue
+            if get_cached_video_thumbnail(filepath):
+                continue
+        except OSError:
+            continue
+        generate_video_thumbnail(filepath)
+        _prewarm_state['done'] += 1
 
 
 def _prewarm_worker(worker_id=0, worker_count=1):
@@ -1102,6 +1200,8 @@ def _prewarm_worker(worker_id=0, worker_count=1):
 
         pending = 0
         for position, item in enumerate(videos):
+            # What the user is looking at outranks the sequential walk.
+            _drain_warm_queue()
             if position % worker_count != worker_id:
                 continue
             # Never compete with an active playback session.
@@ -1130,7 +1230,10 @@ def _prewarm_worker(worker_id=0, worker_count=1):
 
         if pending:
             print(f'   [prewarm] worker {worker_id}: generated {pending} thumbnails')
-        time.sleep(300)
+        # Stay responsive to the grid instead of sleeping through a filter change.
+        for _ in range(60):
+            _drain_warm_queue()
+            time.sleep(5)
 
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
@@ -1598,7 +1701,7 @@ def serve_drive_thumb(handler, rel_path):
     handler.send_response(200)
     handler.send_header('Content-Type', mime)
     handler.send_header('Content-Length', str(len(data)))
-    handler.send_header('Cache-Control', 'public, max-age=300, must-revalidate')
+    handler.send_header('Cache-Control', THUMB_CACHE_HEADER)
     handler.end_headers()
     safe_write(handler.wfile, data)
 
@@ -1942,6 +2045,18 @@ class VideoHandler(SimpleHTTPRequestHandler):
             })
             return
 
+        # Tell the prewarm workers which tiles are on screen right now.
+        if path.split('?', 1)[0] == '/api/warm':
+            if STORAGE_MODE == 'drive' or not PREWARM_ENABLED:
+                respond_json(self, {'queued': 0, 'prewarm': False})
+                return
+            query = parse_qs(urlparse(self.path).query)
+            raw = query.get('paths', [''])[0]
+            paths = [p for p in (raw.split('\n') if raw else []) if p.strip()][:200]
+            queued = queue_warm_paths([p.strip() for p in paths])
+            respond_json(self, {'queued': queued, 'prewarm': True})
+            return
+
         # One random video from the library (All / optional month / search)
         if path.split('?', 1)[0] == '/api/random/video':
             query = parse_qs(urlparse(self.path).query)
@@ -2083,7 +2198,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     self.send_response(200)
                     self.send_header('Content-Type', mime)
                     self.send_header('Content-Length', str(len(data)))
-                    self.send_header('Cache-Control', 'public, max-age=300, must-revalidate')
+                    self.send_header('Cache-Control', THUMB_CACHE_HEADER)
                     self.end_headers()
                     safe_write(self.wfile, data)
                 except ImportError:
@@ -2134,7 +2249,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-Type', mime)
                 self.send_header('Content-Length', str(len(data)))
-                self.send_header('Cache-Control', 'public, max-age=300, must-revalidate')
+                self.send_header('Cache-Control', THUMB_CACHE_HEADER)
                 self.end_headers()
                 safe_write(self.wfile, data)
                 return

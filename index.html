@@ -1326,6 +1326,7 @@ async function loadFromServer(isPoll = false, forceRefresh = false) {
             throw new Error(data.error);
         }
         applyVideosSummary(data);
+        if (!isPoll) await restoreFiltersFromUrl();
         updateMonthPicker();
         updateDayFilter();
         if (data.indexing) {
@@ -1335,7 +1336,9 @@ async function loadFromServer(isPoll = false, forceRefresh = false) {
                 indexPollTimer = setTimeout(() => { indexPollTimer = null; loadFromServer(true); }, 2500);
             }
         }
-        if (!isPoll || !feedCache.items.length) {
+        if (searchMode) {
+            await loadSearchVideos(false);
+        } else if (!isPoll || !feedCache.items.length) {
             await loadFeed(false);
         } else {
             const stats = document.getElementById('stats');
@@ -1390,6 +1393,7 @@ async function loadFeed(append = false) {
             hasMore,
         };
         const added = merged.slice(prevLen);
+        requestThumbWarm(added.length ? added : merged);
         const viewKey = activeMonth || 'all';
         if (append && document.querySelector('#videoGrid .month-grid') && added.length) {
             appendVideosToMonth(viewKey, added);
@@ -1437,6 +1441,7 @@ async function loadSearchVideos(append = false) {
             loading: false,
             hasMore: resolveHasMore(data, mergedLen),
         };
+        requestThumbWarm(items);
         if (!append) renderGrid();
         else {
             appendVideosToMonth('search', searchResults.items.slice(prevLen));
@@ -1463,6 +1468,7 @@ async function filterVideos() {
     if (q) {
         searchMode = true;
         updateDayFilter();
+        syncFilterUrl();
         await loadSearchVideos(false);
         return;
     }
@@ -1470,8 +1476,74 @@ async function filterVideos() {
     searchResults = { items: [], total: 0, loading: false, hasMore: false };
     filteredVideos = [];
     updateDayFilter();
+    syncFilterUrl();
     if (feedCache.items.length) renderGrid();
     else await loadFeed(false);
+}
+
+// ===== Filter state in the URL =====
+// Keeps month/day/search shareable and lets a reload fetch the filtered page
+// directly instead of loading All first and then re-requesting.
+function syncFilterUrl(replace = true) {
+    const params = new URLSearchParams(location.search);
+    const q = document.getElementById('searchInput')?.value.trim() || '';
+    ['month', 'day', 'q'].forEach(k => params.delete(k));
+    if (searchMode && q) params.set('q', q);
+    else {
+        if (activeMonth) params.set('month', activeMonth);
+        if (activeMonth && activeDay) params.set('day', activeDay);
+    }
+    const qs = params.toString();
+    const url = location.pathname + (qs ? `?${qs}` : '') + location.hash;
+    if (url === location.pathname + location.search + location.hash) return;
+    if (replace) history.replaceState(null, '', url);
+    else history.pushState(null, '', url);
+}
+
+async function restoreFiltersFromUrl() {
+    const { month, day, q } = readFilterUrl();
+    if (q) {
+        const input = document.getElementById('searchInput');
+        if (input) input.value = q;
+        searchMode = true;
+        activeMonth = null;
+        activeDay = null;
+        daySummaries = [];
+        return;
+    }
+    searchMode = false;
+    activeMonth = month;
+    activeDay = day;
+    daySummaries = [];
+    if (month) await loadDaySummary(month);
+}
+
+function readFilterUrl() {
+    const params = new URLSearchParams(location.search);
+    const month = params.get('month');
+    const day = params.get('day');
+    const q = params.get('q');
+    return {
+        month: month || null,
+        day: month && day ? day : null,
+        q: q || '',
+    };
+}
+
+// Tell the server which tiles are on screen so its prewarm workers thumbnail
+// these first. Without this, filtering to an old month means every tile runs
+// ffmpeg on demand.
+let warmRequestTimer = null;
+function requestThumbWarm(videos) {
+    if (!videos || !videos.length) return;
+    clearTimeout(warmRequestTimer);
+    const paths = videos.slice(0, 120).map(v => v.path).filter(Boolean);
+    if (!paths.length) return;
+    warmRequestTimer = setTimeout(() => {
+        fetch(`${serverBaseUrl}/api/warm?paths=${encodeURIComponent(paths.join('\n'))}`, {
+            cache: 'no-store',
+        }).catch(() => {});
+    }, 150);
 }
 
 function getMonthKey(date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`; }
@@ -1525,6 +1597,7 @@ async function selectDay(value) {
     activeDay = next;
     feedCache = { items: [], total: 0, loading: false, hasMore: true };
     updateDayFilter();
+    syncFilterUrl();
     window.scrollTo({ top: 0, behavior: 'auto' });
     await loadFeed(false);
 }
@@ -1569,6 +1642,7 @@ async function selectMonth(key) {
     feedCache = { items: [], total: 0, loading: false, hasMore: true };
     updateMonthPicker();
     updateDayFilter();
+    syncFilterUrl();
     window.scrollTo({ top: 0, behavior: 'auto' });
     const days = loadDaySummary(next);
     await loadFeed(false);
@@ -2931,6 +3005,18 @@ async function deleteVideoByPath(event, pathEnc) {
 })();
 window.addEventListener('scroll', onScrollPage, { passive: true });
 window.addEventListener('resize', onResizeFill);
+window.addEventListener('popstate', async () => {
+    if (slideshowActive) stopSlideshow(true);
+    feedCache = { items: [], total: 0, loading: false, hasMore: true };
+    searchResults = { items: [], total: 0, loading: false, hasMore: false };
+    const input = document.getElementById('searchInput');
+    if (input && !readFilterUrl().q) input.value = '';
+    await restoreFiltersFromUrl();
+    updateMonthPicker();
+    updateDayFilter();
+    if (searchMode) await loadSearchVideos(false);
+    else await loadFeed(false);
+});
 syncHeaderOffset();
 loadFromServer();
 
