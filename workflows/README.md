@@ -12,7 +12,9 @@ All three scenes are **txt2img** (empty latent, denoise **1.0**). Hug-depth img2
 | `scene2_sofa` | Both **sitting** on the lounge sofa | txt2img + InstantID faces (cn **0.2**) |
 | `scene3_kneeling_pov` | **POV** looking down, she kneeling | txt2img + InstantID faces (cn **0.2**) |
 
-ApplyInstantIDAdvanced: `ip 0.85 / cn 0.2 / start 0.55 / concat`. `image_kps` unconnected. InstantID `image` is the scene 1 still (faces only at this CN).
+ApplyInstantIDAdvanced: `ip 0.85 / cn 0.2 / start 0.0 / end 1.0 / noise 0.2 / concat`. `image_kps` unconnected. InstantID `image` is the scene 1 still.
+
+**Known fragility:** InsightFace has to find a face in that wide two-person hug. On a 1216×832 wide shot the faces are small, and InstantID locks **one** face only. If the run dies with a no-face error, or scene 2/3 give you one person's face twice, load a face close-up in **OPTIONAL FACE REFERENCE** and wire its `IMAGE` into both ApplyInstantID `image` inputs. Scene 1's seed is **fixed** so the couple does not change between queues.
 
 ## Custom nodes and models
 
@@ -61,8 +63,6 @@ Do **not** edit **LOOK**, **ROOM**, or **PEOPLE**. Only the three **ACTION** box
 ## If identity or room slips
 
 - Faces drift: raise ApplyInstantID `ip_weight` from 0.8 toward 1.0, or feed a tight face crop as the InstantID image.
-- Sofa rebuilds a new room: raise Depth toward 0.8 or lower denoise to ~0.4.
-- Sofa/POV copy the hug pose: keep `image_kps` disconnected (do not wire the master into keypoints).
-- POV still looks like the hug framing: raise scene 3 denoise (0.65–0.75) or strengthen POV words in ACTION 3. Do not add Depth on scene 3.
+- **All three images look the same** — you had img2img + InstantID cn 0.8 + hug depth. Re-import this JSON (txt2img, cn 0.2, depth muted).
 
 Outputs land in ComfyUI `output/` with the prefixes above.
