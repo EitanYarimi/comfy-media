@@ -1,8 +1,8 @@
 {
   "id": "same-room-couple-three-scenes",
   "revision": 0,
-  "last_node_id": 39,
-  "last_link_id": 75,
+  "last_node_id": 43,
+  "last_link_id": 93,
   "nodes": [
     {
       "flags": {},
@@ -43,7 +43,9 @@
             7,
             8,
             9,
-            10
+            10,
+            82,
+            83
           ],
           "slot_index": 1
         },
@@ -129,7 +131,9 @@
           "name": "LATENT",
           "type": "LATENT",
           "links": [
-            15
+            15,
+            92,
+            93
           ],
           "slot_index": 0
         }
@@ -142,7 +146,7 @@
     },
     {
       "flags": {},
-      "mode": 0,
+      "mode": 4,
       "properties": {
         "Node name for S&R": "ControlNetLoader",
         "cnr_id": "comfy-core",
@@ -329,13 +333,13 @@
           "name": "CONDITIONING",
           "type": "CONDITIONING",
           "links": [
-            21
+            76
           ],
           "slot_index": 0
         }
       ],
       "widgets_values": [
-        "the woman hugging the man, both standing at the bar counter, embracing, side view three-quarter, full body in frame"
+        "(standing hug at the bar:1.4), both standing, full body side view, embracing at the bar counter, two people standing together, wide three-quarter shot"
       ],
       "title": "ACTION 1 \u2014 hug at the bar"
     },
@@ -370,13 +374,13 @@
           "name": "CONDITIONING",
           "type": "CONDITIONING",
           "links": [
-            23
+            78
           ],
           "slot_index": 0
         }
       ],
       "widgets_values": [
-        "the same couple sitting together on the lounge sofa in this bar, both sitting on a sofa, bodies visible, still inside the same dark bar, not a different room, not an apartment"
+        "(sitting on a sofa:1.5), both seated on the lounge couch, NOT standing, NOT hugging, man and woman sitting side by side on a sofa in the bar, legs visible, medium shot of the couch, relaxed sitting pose, facing forward"
       ],
       "title": "ACTION 2 \u2014 sitting on sofa"
     },
@@ -411,13 +415,13 @@
           "name": "CONDITIONING",
           "type": "CONDITIONING",
           "links": [
-            25
+            80
           ],
           "slot_index": 0
         }
       ],
       "widgets_values": [
-        "POV from the man looking down at her, she kneeling on the bar floor in front of him, he looks at her, over his shoulder point of view, first person perspective, same faces, same dark bar background behind them"
+        "(first person POV:1.5), (from the man's eyes looking down:1.4), she is kneeling on the floor in front of him, he looks at her, over his chest and suit in the foreground, her face looking up at the camera, NOT a side view, NOT a wide couple shot, NOT sitting on a sofa, NOT a standing hug"
       ],
       "title": "ACTION 3 \u2014 kneeling POV"
     },
@@ -453,8 +457,8 @@
           "type": "CONDITIONING",
           "links": [
             27,
-            67,
-            69
+            84,
+            86
           ],
           "slot_index": 0
         }
@@ -543,9 +547,9 @@
           "name": "CONDITIONING",
           "type": "CONDITIONING",
           "links": [
-            20,
-            22,
-            24
+            77,
+            79,
+            81
           ],
           "slot_index": 0
         }
@@ -575,12 +579,12 @@
         {
           "name": "conditioning_to",
           "type": "CONDITIONING",
-          "link": 20
+          "link": 76
         },
         {
           "name": "conditioning_from",
           "type": "CONDITIONING",
-          "link": 21
+          "link": 77
         }
       ],
       "outputs": [
@@ -618,12 +622,12 @@
         {
           "name": "conditioning_to",
           "type": "CONDITIONING",
-          "link": 22
+          "link": 78
         },
         {
           "name": "conditioning_from",
           "type": "CONDITIONING",
-          "link": 23
+          "link": 79
         }
       ],
       "outputs": [
@@ -661,12 +665,12 @@
         {
           "name": "conditioning_to",
           "type": "CONDITIONING",
-          "link": 24
+          "link": 80
         },
         {
           "name": "conditioning_from",
           "type": "CONDITIONING",
-          "link": 25
+          "link": 81
         }
       ],
       "outputs": [
@@ -735,7 +739,7 @@
       "widgets_values": [
         945502012161406,
         "randomize",
-        20,
+        28,
         2.5,
         "dpmpp_2m",
         "karras",
@@ -896,7 +900,7 @@
     },
     {
       "flags": {},
-      "mode": 0,
+      "mode": 4,
       "properties": {
         "Node name for S&R": "AIO_Preprocessor",
         "cnr_id": "comfyui_controlnet_aux"
@@ -932,11 +936,11 @@
       "widgets_values": [
         "MiDaS-DepthMapPreprocessor"
       ],
-      "title": "Depth preprocessor (MiDaS — Colab-safe, no Depth-Anything download)"
+      "title": "Depth preprocessor (MiDaS \u2014 Colab-safe, no Depth-Anything download)"
     },
     {
       "flags": {},
-      "mode": 0,
+      "mode": 4,
       "properties": {
         "Node name for S&R": "VAEEncode",
         "cnr_id": "comfy-core",
@@ -969,10 +973,7 @@
         {
           "name": "LATENT",
           "type": "LATENT",
-          "links": [
-            47,
-            53
-          ],
+          "links": [],
           "slot_index": 0
         }
       ],
@@ -980,7 +981,7 @@
     },
     {
       "flags": {},
-      "mode": 0,
+      "mode": 4,
       "properties": {
         "Node name for S&R": "ControlNetApplyAdvanced",
         "cnr_id": "comfy-core",
@@ -1029,17 +1030,13 @@
         {
           "name": "positive",
           "type": "CONDITIONING",
-          "links": [
-            45
-          ],
+          "links": [],
           "slot_index": 0
         },
         {
           "name": "negative",
           "type": "CONDITIONING",
-          "links": [
-            46
-          ],
+          "links": [],
           "slot_index": 1
         }
       ],
@@ -1078,17 +1075,17 @@
         {
           "name": "positive",
           "type": "CONDITIONING",
-          "link": 45
+          "link": 90
         },
         {
           "name": "negative",
           "type": "CONDITIONING",
-          "link": 46
+          "link": 91
         },
         {
           "name": "latent_image",
           "type": "LATENT",
-          "link": 47
+          "link": 92
         }
       ],
       "outputs": [
@@ -1102,15 +1099,15 @@
         }
       ],
       "widgets_values": [
-        1,
+        101,
         "randomize",
-        20,
+        28,
         2.5,
         "dpmpp_2m",
         "karras",
-        0.5
+        1.0
       ],
-      "title": "Scene 2 KSampler (sofa + InstantID + Depth)"
+      "title": "Scene 2 KSampler (txt2img sofa, InstantID face only)"
     },
     {
       "flags": {},
@@ -1227,7 +1224,7 @@
         {
           "name": "latent_image",
           "type": "LATENT",
-          "link": 53
+          "link": 93
         }
       ],
       "outputs": [
@@ -1241,15 +1238,15 @@
         }
       ],
       "widgets_values": [
-        2,
+        202,
         "randomize",
-        20,
+        28,
         2.5,
         "dpmpp_2m",
         "karras",
-        0.6
+        1.0
       ],
-      "title": "Scene 3 KSampler (POV + InstantID, no Depth)"
+      "title": "Scene 3 KSampler (txt2img POV, InstantID face only)"
     },
     {
       "flags": {},
@@ -1348,7 +1345,7 @@
       "inputs": [],
       "outputs": [],
       "widgets_values": [
-        "THREE SCENES — same bar, same couple\nIdentity = InstantID (NOT IPAdapter Plus).\n  ip-adapter.bin + instantid_controlnet.safetensors + Face Analysis CUDA\n  ApplyInstantIDAdvanced: ip 0.8, cn 0.8, start 0.3, end 1, noise 0.2, concat\n\nIf you see IPAdapter model not found, you loaded the OLD json. Load this file again.\nSofa depth = MiDaS (avoids Colab /tmp/ckpts Depth-Anything download failure).\n\n1. Scene 1 hug is txt2img master. InstantID image = that still.\n2. Scene 2 sofa = InstantID + MiDaS depth.\n3. Scene 3 POV = InstantID only. No depth.\n\nDo not edit LOOK / ROOM / PEOPLE. Only ACTION boxes.\n"
+        "WHY THE FIRST RUN LOOKED THE SAME\nScenes 2/3 were img2img + InstantID ControlNet + hug depth, so they kept the hug pose.\n\nNOW: all three are txt2img (denoise 1) from empty latent.\nInstantID cn_strength = 0.2 (faces only, not pose).\nHug depth is MUTED (never).\nACTION prompt is first. Extra negatives block hug on sofa/POV.\n\nQueue Prompt \u2014 you should get: standing hug / sitting sofa / kneeling POV.\n"
       ],
       "color": "#432",
       "bgcolor": "#000"
@@ -1500,7 +1497,7 @@
         {
           "name": "negative",
           "type": "CONDITIONING",
-          "link": 67
+          "link": 88
         },
         {
           "name": "image_kps",
@@ -1528,7 +1525,8 @@
           "name": "positive",
           "type": "CONDITIONING",
           "links": [
-            70
+            70,
+            90
           ],
           "slot_index": 1
         },
@@ -1536,7 +1534,8 @@
           "name": "negative",
           "type": "CONDITIONING",
           "links": [
-            71
+            71,
+            91
           ],
           "slot_index": 2
         }
@@ -1553,14 +1552,14 @@
       ],
       "order": 22,
       "widgets_values": [
-        0.8,
-        0.8,
-        0.3,
-        1,
+        0.85,
+        0.2,
+        0.55,
+        1.0,
         0.2,
         "concat"
       ],
-      "title": "Apply InstantID (sofa) \u2014 same as LinkedIn graph"
+      "title": "Apply InstantID sofa (low CN 0.2 \u2014 faces, not hug pose)"
     },
     {
       "flags": {},
@@ -1603,7 +1602,7 @@
         {
           "name": "negative",
           "type": "CONDITIONING",
-          "link": 69
+          "link": 89
         },
         {
           "name": "image_kps",
@@ -1656,14 +1655,182 @@
       ],
       "order": 23,
       "widgets_values": [
-        0.8,
-        0.8,
-        0.3,
-        1,
+        0.85,
+        0.2,
+        0.55,
+        1.0,
         0.2,
         "concat"
       ],
-      "title": "Apply InstantID (POV) \u2014 same as LinkedIn graph"
+      "title": "Apply InstantID POV (low CN 0.2 \u2014 faces, not hug pose)"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 40,
+      "type": "CLIPTextEncode",
+      "pos": [
+        980,
+        860
+      ],
+      "size": [
+        400,
+        140
+      ],
+      "order": 34,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 82
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            85
+          ],
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        "hugging, embrace, standing at the bar, standing couple, full body side hug, two people standing, pov, kneeling, first person"
+      ],
+      "title": "NEGATIVE extra \u2014 sofa (block hug/standing)"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 41,
+      "type": "CLIPTextEncode",
+      "pos": [
+        980,
+        1030
+      ],
+      "size": [
+        400,
+        140
+      ],
+      "order": 34,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 83
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            87
+          ],
+          "slot_index": 0
+        }
+      ],
+      "widgets_values": [
+        "wide shot, side view couple, sitting on sofa, both standing, hugging at the bar, full body two-shot from the side, both faces in profile"
+      ],
+      "title": "NEGATIVE extra \u2014 POV (block wide/side/sofa)"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "ConditioningConcat",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 42,
+      "type": "ConditioningConcat",
+      "pos": [
+        1440,
+        860
+      ],
+      "size": [
+        260,
+        50
+      ],
+      "order": 35,
+      "inputs": [
+        {
+          "name": "conditioning_to",
+          "type": "CONDITIONING",
+          "link": 84
+        },
+        {
+          "name": "conditioning_from",
+          "type": "CONDITIONING",
+          "link": 85
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            88
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Neg shared + sofa"
+    },
+    {
+      "flags": {},
+      "mode": 0,
+      "properties": {
+        "Node name for S&R": "ConditioningConcat",
+        "cnr_id": "comfy-core",
+        "ver": "0.18.1"
+      },
+      "id": 43,
+      "type": "ConditioningConcat",
+      "pos": [
+        1440,
+        1030
+      ],
+      "size": [
+        260,
+        50
+      ],
+      "order": 35,
+      "inputs": [
+        {
+          "name": "conditioning_to",
+          "type": "CONDITIONING",
+          "link": 86
+        },
+        {
+          "name": "conditioning_from",
+          "type": "CONDITIONING",
+          "link": 87
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            89
+          ],
+          "slot_index": 0
+        }
+      ],
+      "title": "Neg shared + POV"
     }
   ],
   "links": [
@@ -1812,54 +1979,6 @@
       "CONDITIONING"
     ],
     [
-      20,
-      12,
-      0,
-      13,
-      0,
-      "CONDITIONING"
-    ],
-    [
-      21,
-      7,
-      0,
-      13,
-      1,
-      "CONDITIONING"
-    ],
-    [
-      22,
-      12,
-      0,
-      14,
-      0,
-      "CONDITIONING"
-    ],
-    [
-      23,
-      8,
-      0,
-      14,
-      1,
-      "CONDITIONING"
-    ],
-    [
-      24,
-      12,
-      0,
-      15,
-      0,
-      "CONDITIONING"
-    ],
-    [
-      25,
-      9,
-      0,
-      15,
-      1,
-      "CONDITIONING"
-    ],
-    [
       26,
       13,
       0,
@@ -1932,30 +2051,6 @@
       "IMAGE"
     ],
     [
-      45,
-      24,
-      0,
-      26,
-      1,
-      "CONDITIONING"
-    ],
-    [
-      46,
-      24,
-      1,
-      26,
-      2,
-      "CONDITIONING"
-    ],
-    [
-      47,
-      21,
-      0,
-      26,
-      3,
-      "LATENT"
-    ],
-    [
       48,
       26,
       0,
@@ -1970,14 +2065,6 @@
       28,
       0,
       "IMAGE"
-    ],
-    [
-      53,
-      21,
-      0,
-      29,
-      3,
-      "LATENT"
     ],
     [
       54,
@@ -2084,27 +2171,11 @@
       "CONDITIONING"
     ],
     [
-      67,
-      10,
-      0,
-      38,
-      6,
-      "CONDITIONING"
-    ],
-    [
       68,
       15,
       0,
       39,
       5,
-      "CONDITIONING"
-    ],
-    [
-      69,
-      10,
-      0,
-      39,
-      6,
       "CONDITIONING"
     ],
     [
@@ -2154,6 +2225,150 @@
       29,
       2,
       "CONDITIONING"
+    ],
+    [
+      76,
+      7,
+      0,
+      13,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      77,
+      12,
+      0,
+      13,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      78,
+      8,
+      0,
+      14,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      79,
+      12,
+      0,
+      14,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      80,
+      9,
+      0,
+      15,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      81,
+      12,
+      0,
+      15,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      82,
+      1,
+      1,
+      40,
+      0,
+      "CLIP"
+    ],
+    [
+      83,
+      1,
+      1,
+      41,
+      0,
+      "CLIP"
+    ],
+    [
+      84,
+      10,
+      0,
+      42,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      85,
+      40,
+      0,
+      42,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      86,
+      10,
+      0,
+      43,
+      0,
+      "CONDITIONING"
+    ],
+    [
+      87,
+      41,
+      0,
+      43,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      88,
+      42,
+      0,
+      38,
+      6,
+      "CONDITIONING"
+    ],
+    [
+      89,
+      43,
+      0,
+      39,
+      6,
+      "CONDITIONING"
+    ],
+    [
+      90,
+      38,
+      1,
+      26,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      91,
+      38,
+      2,
+      26,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      92,
+      3,
+      0,
+      26,
+      3,
+      "LATENT"
+    ],
+    [
+      93,
+      3,
+      0,
+      29,
+      3,
+      "LATENT"
     ]
   ],
   "groups": [
@@ -2195,7 +2410,7 @@
     },
     {
       "id": 4,
-      "title": "SCENE 2 \u2014 SOFA (InstantID + depth 0.65, denoise 0.5)",
+      "title": "SCENE 2 \u2014 SOFA (txt2img + InstantID faces, no hug-depth)",
       "bounding": [
         1740,
         700,
@@ -2207,7 +2422,7 @@
     },
     {
       "id": 5,
-      "title": "SCENE 3 \u2014 KNEELING POV (InstantID + checkpoint POV, no Depth)",
+      "title": "SCENE 3 \u2014 KNEELING POV (txt2img + InstantID faces)",
       "bounding": [
         1740,
         1040,

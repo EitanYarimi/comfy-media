@@ -2,26 +2,24 @@
 
 Import [`same-room-couple.json`](same-room-couple.json) in ComfyUI (**Load** / drag onto the canvas). It is a fork of your Pony txt2img graph (`cyberrealisticPony_v127Alt` + **Pony Realism Slider** 1.8, 1216×832, `dpmpp_2m` / karras, 20 steps, CFG 2.5).
 
-Identity uses the **same InstantID stack** as `linkedin_instantid_00427_.json`: `ip-adapter.bin`, `instantid_controlnet.safetensors`, Face Analysis **CUDA**, **ApplyInstantIDAdvanced** at `ip 0.8 / cn 0.8 / start 0.3 / end 1 / noise 0.2 / concat`. `image_kps` is left unconnected so sofa and POV poses can change (keypoints from the hug would freeze that camera).
+Identity uses InstantID like `linkedin_instantid_00427_.json`, but **ControlNet strength is 0.2** (LinkedIn used 0.8). At 0.8 InstantID copies the hug pose onto every scene, so all three images look the same.
 
-One queue writes three stills of the **same two adults in the same dark bar**:
+All three scenes are **txt2img** (empty latent, denoise **1.0**). Hug-depth img2img is muted. ACTION is concatenated **first**. Sofa/POV have extra negatives that ban hugging / side two-shots.
 
 | File prefix | Scene | How it is sampled |
 |---|---|---|
-| `scene1_hug_bar` | Hugging at the bar counter | txt2img, denoise **1.0** (master) |
-| `scene2_sofa` | Sitting on the lounge sofa in that bar | img2img + InstantID + Depth **0.65**, denoise **0.50** |
-| `scene3_kneeling_pov` | He looks at her; she kneeling; his POV | img2img + InstantID, **no Depth**, denoise **0.60** — POV from the checkpoint prompt |
+| `scene1_hug_bar` | Standing hug at the bar | txt2img |
+| `scene2_sofa` | Both **sitting** on the lounge sofa | txt2img + InstantID faces (cn **0.2**) |
+| `scene3_kneeling_pov` | **POV** looking down, she kneeling | txt2img + InstantID faces (cn **0.2**) |
 
-The depth preprocessor is **only for scene 2** and uses **MiDaS** (not Depth-Anything V2). Depth-Anything tries to download `depth_anything_v2_vitl.pth` into `/tmp/ckpts`, which fails on Colab (`[Errno 2] No such file or directory: '/tmp/ckpts'`).
-
-This graph has **no IPAdapter Plus nodes**. If you see `IPAdapter model not found` / `comfyui_ipadapter_plus/IPAdapterPlus.py`, you still have the **first** workflow loaded. Load this file again (Load → `same-room-couple.json`) so InstantID (`ip-adapter.bin`) is what runs.
+ApplyInstantIDAdvanced: `ip 0.85 / cn 0.2 / start 0.55 / concat`. `image_kps` unconnected. InstantID `image` is the scene 1 still (faces only at this CN).
 
 ## Custom nodes and models
 
 Install with ComfyUI Manager:
 
 - [ComfyUI_InstantID](https://github.com/cubiq/ComfyUI_InstantID) (same pack as the LinkedIn workflow)
-- [comfyui_controlnet_aux](https://github.com/Fannovel16/comfyui_controlnet_aux) (sofa Depth via **MiDaS**, not Depth-Anything)
+- [comfyui_controlnet_aux](https://github.com/Fannovel16/comfyui_controlnet_aux) (optional; hug-depth nodes are **muted**)
 
 | Node | File / setting |
 |---|---|
@@ -30,16 +28,16 @@ Install with ComfyUI Manager:
 | InstantID Model | `models/instantid/ip-adapter.bin` |
 | InstantID ControlNet | `instantid_controlnet.safetensors` |
 | InsightFace | `models/insightface/models/antelopev2/*.onnx` |
-| Face Analysis | **CUDA** (same as your LinkedIn graph; switch to CPU/ROCM if that is what you run) |
-| SDXL Depth ControlNet | sofa scene only, e.g. `diffusers_xl_depth_full.safetensors` |
+| Face Analysis | **CUDA** |
+| InstantID weights | ip **0.85**, cn **0.2** (raise cn only if you want pose copied) |
 
 InstantID is built for **one primary face**. On a two-person still it usually locks the largest/closest face. For a dedicated identity photo, load it in **OPTIONAL FACE REFERENCE** and reconnect that `IMAGE` into both ApplyInstantID `image` inputs.
 
 ## Queue order
 
-1. **Queue Prompt.** Scene 1 generates the master hug; InstantID + scenes 2/3 run from that image.
-2. When the couple and bar look right, set scene 1’s seed to **fixed**.
-3. To reuse a PNG: load it, reconnect `IMAGE` to both ApplyInstantID `image` inputs, Depth preprocessor, and VAEEncode. Mute scene 1’s KSampler if you do not want a new hug.
+1. **Queue Prompt.** All three txt2img in one run. Scene 1 still feeds InstantID `image` for faces on 2 and 3.
+2. If sofa/POV still look like the hug: InstantID `cn_strength` is too high — keep it at **0.2** or **0**.
+3. Faces too weak: raise `ip_weight` toward 1.0, or reconnect a close-up into ApplyInstantID `image`.
 
 Do **not** edit **LOOK**, **ROOM**, or **PEOPLE**. Only the three **ACTION** boxes change pose/camera.
 
