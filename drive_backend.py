@@ -63,6 +63,29 @@ def month_key_from_ts(modified_ts):
     return f'{dt.year}-{dt.month:02d}'
 
 
+def day_utc_bounds(day):
+    """Return UTC [start, end) datetimes for a YYYY-MM-DD key."""
+    year_s, month_s, day_s = day.split('-')
+    start = datetime(int(year_s), int(month_s), int(day_s), tzinfo=timezone.utc)
+    return start, start + timedelta(days=1)
+
+
+def day_key_from_ts(modified_ts):
+    dt = datetime.fromtimestamp(float(modified_ts), tz=timezone.utc)
+    return f'{dt.year}-{dt.month:02d}-{dt.day:02d}'
+
+
+def days_payload(items, month=None):
+    """Per-day counts for the loaded items, newest first."""
+    counts = {}
+    for item in items:
+        key = day_key_from_ts(item['modified'])
+        if month and not key.startswith(f'{month}-'):
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    return [{'day': key, 'count': counts[key]} for key in sorted(counts.keys(), reverse=True)]
+
+
 def months_between_keys(oldest_key, newest_key):
     """Inclusive YYYY-MM range, newest first."""
     if not oldest_key or not newest_key:
@@ -640,7 +663,7 @@ class DriveStorage:
         self._persist_photos()
         print(f'   Refresh: merged {len(incoming)} photos from last {REFRESH_LOOKBACK_DAYS} days')
 
-    def _videos_from_memory(self, month=None, q=None, offset=0, limit=VIDEO_PAGE_SIZE, summary=False):
+    def _videos_from_memory(self, month=None, q=None, offset=0, limit=VIDEO_PAGE_SIZE, summary=False, day=None):
         with self._list_lock:
             videos = list(self._videos)
             complete = self._videos_complete
@@ -655,6 +678,15 @@ class DriveStorage:
                 video for video in videos
                 if start_ts <= float(video.get('modified') or 0) < end_ts
             ]
+        # Day counts describe the whole month, so take them before narrowing to one day.
+        days = days_payload(videos, month) if month else None
+        if day:
+            start, end = day_utc_bounds(day)
+            start_ts, end_ts = start.timestamp(), end.timestamp()
+            videos = [
+                video for video in videos
+                if start_ts <= float(video.get('modified') or 0) < end_ts
+            ]
         if summary:
             page = videos[:VIDEO_PAGE_SIZE]
             # Counts use all loaded videos; month keys come from discover/rebuild.
@@ -663,6 +695,7 @@ class DriveStorage:
                 'videos': page,
                 'loaded': page,
                 'months': months,
+                'days': days,
                 'total': len(videos),
                 'hasMore': not complete,
                 'indexing': indexing,
@@ -673,6 +706,7 @@ class DriveStorage:
             'videos': page,
             'loaded': videos,
             'months': self._months_payload(videos) if self._month_keys is not None else None,
+            'days': days,
             'total': len(videos),
             'hasMore': (offset + limit) < len(videos) if complete else True,
             'indexing': indexing,
@@ -705,6 +739,17 @@ class DriveStorage:
             f"modifiedTime < '{end.strftime('%Y-%m-%dT%H:%M:%SZ')}'"
         )
         state = self._month_state.setdefault(month, {'items': [], 'token': None, 'complete': False})
+        return self._paged_video_query(extra, offset, limit, state)
+
+    def _day_videos(self, day, offset, limit):
+        start, end = day_utc_bounds(day)
+        extra = (
+            f"modifiedTime >= '{start.strftime('%Y-%m-%dT%H:%M:%SZ')}' and "
+            f"modifiedTime < '{end.strftime('%Y-%m-%dT%H:%M:%SZ')}'"
+        )
+        state = self._month_state.setdefault(
+            f'day:{day}', {'items': [], 'token': None, 'complete': False}
+        )
         return self._paged_video_query(extra, offset, limit, state)
 
     def _search_videos(self, q, offset, limit):
@@ -743,7 +788,18 @@ class DriveStorage:
         )
         return self._paged_image_query(extra, offset, limit, state)
 
-    def list_videos(self, month=None, q=None, offset=0, limit=VIDEO_PAGE_SIZE, summary=False, refresh=False):
+    def _day_photos(self, day, offset, limit):
+        start, end = day_utc_bounds(day)
+        extra = (
+            f"modifiedTime >= '{start.strftime('%Y-%m-%dT%H:%M:%SZ')}' and "
+            f"modifiedTime < '{end.strftime('%Y-%m-%dT%H:%M:%SZ')}'"
+        )
+        state = self._photo_month_state.setdefault(
+            f'day:{day}', {'items': [], 'token': None, 'complete': False}
+        )
+        return self._paged_image_query(extra, offset, limit, state)
+
+    def list_videos(self, month=None, q=None, offset=0, limit=VIDEO_PAGE_SIZE, summary=False, refresh=False, day=None):
         """Serve from persisted/full index; Refresh merges files from the last REFRESH_LOOKBACK_DAYS."""
         self.videos_error = None
         try:
@@ -751,11 +807,22 @@ class DriveStorage:
             if refresh:
                 self._refresh_recent_videos()
                 return self._videos_from_memory(
-                    month=month, q=q, offset=offset, limit=limit, summary=summary
+                    month=month, q=q, offset=offset, limit=limit, summary=summary, day=day
                 )
 
-            # Month/search pages must hit Drive until the full library is in memory.
+            # Month/day/search pages must hit Drive until the full library is in memory.
             # Otherwise old months look empty while only recent videos are indexed.
+            if day and not summary and not self._videos_complete:
+                page, total, has_more = self._day_videos(day, offset, limit)
+                self.start_video_scan_if_needed()
+                return {
+                    'videos': page,
+                    'loaded': page,
+                    'total': total,
+                    'hasMore': has_more,
+                    'indexing': True,
+                    'error': None,
+                }
             if month and not summary and not self._videos_complete:
                 page, total, has_more = self._month_videos(month, offset, limit)
                 self.start_video_scan_if_needed()
@@ -781,7 +848,7 @@ class DriveStorage:
 
             if self._videos_complete or self.videos_indexing:
                 return self._videos_from_memory(
-                    month=month, q=q, offset=offset, limit=limit, summary=summary
+                    month=month, q=q, offset=offset, limit=limit, summary=summary, day=day
                 )
 
             # Cold start (All feed / summary): first page quickly, then background full scan.
@@ -793,7 +860,7 @@ class DriveStorage:
             self._fill_recent(wanted)
             self.start_video_scan_if_needed()
             return self._videos_from_memory(
-                month=month, q=q, offset=offset, limit=limit, summary=summary
+                month=month, q=q, offset=offset, limit=limit, summary=summary, day=day
             )
         except Exception as exc:
             self.videos_error = str(exc)
@@ -860,7 +927,7 @@ class DriveStorage:
         keys = sorted(counts.keys(), reverse=True)
         return [{'month': key, 'count': counts[key]} for key in keys]
 
-    def _photos_from_memory(self, month=None, q=None, offset=0, limit=VIDEO_PAGE_SIZE, summary=False):
+    def _photos_from_memory(self, month=None, q=None, offset=0, limit=VIDEO_PAGE_SIZE, summary=False, day=None):
         with self._list_lock:
             all_photos = list(self._photos)
             complete = self._photos_complete
@@ -877,12 +944,22 @@ class DriveStorage:
                 photo for photo in photos
                 if start_ts <= float(photo.get('modified') or 0) < end_ts
             ]
+        # Day counts describe the whole month, so take them before narrowing to one day.
+        days = days_payload(photos, month) if month else None
+        if day:
+            start, end = day_utc_bounds(day)
+            start_ts, end_ts = start.timestamp(), end.timestamp()
+            photos = [
+                photo for photo in photos
+                if start_ts <= float(photo.get('modified') or 0) < end_ts
+            ]
         if summary:
             page = photos[:VIDEO_PAGE_SIZE]
             return {
                 'photos': page,
                 'loaded': page,
                 'months': months,
+                'days': days,
                 'total': len(photos),
                 'hasMore': not complete,
                 'indexing': indexing,
@@ -893,13 +970,14 @@ class DriveStorage:
             'photos': page,
             'loaded': photos,
             'months': months,
+            'days': days,
             'total': len(photos),
             'hasMore': (offset + limit) < len(photos) if complete else True,
             'indexing': indexing,
             'error': None,
         }
 
-    def list_photos(self, month=None, q=None, offset=0, limit=VIDEO_PAGE_SIZE, summary=False, refresh=False):
+    def list_photos(self, month=None, q=None, offset=0, limit=VIDEO_PAGE_SIZE, summary=False, refresh=False, day=None):
         """Serve photos from memory like list_videos; Refresh merges last REFRESH_LOOKBACK_DAYS."""
         self.photos_error = None
         try:
@@ -907,11 +985,23 @@ class DriveStorage:
             if refresh:
                 self._refresh_recent_photos()
                 return self._photos_from_memory(
-                    month=month, q=q, offset=offset, limit=limit, summary=summary
+                    month=month, q=q, offset=offset, limit=limit, summary=summary, day=day
                 )
 
             # Until the full photo index is ready, load a month directly from Drive
             # so older months are not empty while the folder crawl is still running.
+            if day and not summary and not self._photos_complete:
+                page, total, has_more = self._day_photos(day, offset, limit)
+                self.start_photo_scan_if_needed()
+                return {
+                    'photos': page,
+                    'loaded': page,
+                    'months': self._photo_months_payload(self._photos),
+                    'total': total,
+                    'hasMore': has_more,
+                    'indexing': True,
+                    'error': None,
+                }
             if month and not summary and not self._photos_complete:
                 page, total, has_more = self._month_photos(month, offset, limit)
                 self.start_photo_scan_if_needed()
@@ -927,13 +1017,13 @@ class DriveStorage:
 
             if self._photos_complete or self.photos_indexing:
                 return self._photos_from_memory(
-                    month=month, q=q, offset=offset, limit=limit, summary=summary
+                    month=month, q=q, offset=offset, limit=limit, summary=summary, day=day
                 )
 
             # Cold start: progressive folder scan publishes as it walks; return what we have.
             self.start_photo_scan_if_needed()
             return self._photos_from_memory(
-                month=month, q=q, offset=offset, limit=limit, summary=summary
+                month=month, q=q, offset=offset, limit=limit, summary=summary, day=day
             )
         except Exception as exc:
             self.photos_error = str(exc)

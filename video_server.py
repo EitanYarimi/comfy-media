@@ -1255,6 +1255,11 @@ def item_month_key(modified_ts):
     return f'{dt.year}-{dt.month:02d}'
 
 
+def item_day_key(modified_ts):
+    dt = datetime.fromtimestamp(modified_ts)
+    return f'{dt.year}-{dt.month:02d}-{dt.day:02d}'
+
+
 def media_month_summary(items):
     counts = {}
     for item in items:
@@ -1263,8 +1268,19 @@ def media_month_summary(items):
     return [{'month': k, 'count': counts[k]} for k in sorted(counts.keys(), reverse=True)]
 
 
-def filter_media_items(items, month=None, q=None, kind='videos'):
-    """Return all items matching month/q filters (no pagination)."""
+def media_day_summary(items, month=None):
+    """Per-day counts, newest first. Limited to one month when given."""
+    counts = {}
+    for item in items:
+        key = item_day_key(item['modified'])
+        if month and not key.startswith(f'{month}-'):
+            continue
+        counts[key] = counts.get(key, 0) + 1
+    return [{'day': k, 'count': counts[k]} for k in sorted(counts.keys(), reverse=True)]
+
+
+def filter_media_items(items, month=None, q=None, kind='videos', day=None):
+    """Return all items matching month/day/q filters (no pagination)."""
     filtered = items
     if month and not q:
         index = _media_by_month.get(kind)
@@ -1278,6 +1294,8 @@ def filter_media_items(items, month=None, q=None, kind='videos'):
         if q:
             ql = q.lower()
             filtered = [i for i in filtered if ql in i['name'].lower()]
+    if day:
+        filtered = [i for i in filtered if item_day_key(i['modified']) == day]
     return filtered
 
 
@@ -1293,8 +1311,8 @@ def pick_random_item(items, exclude_path=None):
     return random.choice(pool)
 
 
-def get_random_video(exclude_path=None, month=None, q=None):
-    """Server-side random pick for All/month/search without shipping the full list."""
+def get_random_video(exclude_path=None, month=None, q=None, day=None):
+    """Server-side random pick for All/month/day/search without shipping the full list."""
     if STORAGE_MODE == 'drive':
         drive = get_drive_storage()
         result = drive._videos_from_memory(
@@ -1302,6 +1320,7 @@ def get_random_video(exclude_path=None, month=None, q=None):
             q=q or None,
             offset=0,
             limit=10**9,
+            day=day or None,
         )
         items = result.get('loaded') or []
         total = result.get('total', len(items))
@@ -1309,7 +1328,7 @@ def get_random_video(exclude_path=None, month=None, q=None):
         error = result.get('error')
     else:
         videos = get_videos_cached()
-        items = filter_media_items(videos, month=month or None, q=q or None, kind='videos')
+        items = filter_media_items(videos, month=month or None, q=q or None, kind='videos', day=day or None)
         total = len(items)
         indexing = False
         error = None
@@ -1324,7 +1343,7 @@ def get_random_video(exclude_path=None, month=None, q=None):
     }
 
 
-def get_random_photo(exclude_path=None, month=None, q=None):
+def get_random_photo(exclude_path=None, month=None, q=None, day=None):
     if STORAGE_MODE == 'drive':
         drive = get_drive_storage()
         result = drive._photos_from_memory(
@@ -1332,6 +1351,7 @@ def get_random_photo(exclude_path=None, month=None, q=None):
             q=q or None,
             offset=0,
             limit=10**9,
+            day=day or None,
         )
         items = result.get('loaded') or []
         total = result.get('total', len(items))
@@ -1339,7 +1359,7 @@ def get_random_photo(exclude_path=None, month=None, q=None):
         error = result.get('error')
     else:
         photos = get_photos_cached()
-        items = filter_media_items(photos, month=month or None, q=q or None, kind='photos')
+        items = filter_media_items(photos, month=month or None, q=q or None, kind='photos', day=day or None)
         total = len(items)
         indexing = False
         error = None
@@ -1352,20 +1372,8 @@ def get_random_photo(exclude_path=None, month=None, q=None):
     }
 
 
-def paginate_media(items, month=None, q=None, offset=0, limit=40, kind='videos'):
-    filtered = items
-    if month and not q:
-        index = _media_by_month.get(kind)
-        if index is None:
-            index = _build_month_index(items)
-            _media_by_month[kind] = index
-        filtered = index.get(month, [])
-    else:
-        if month:
-            filtered = [i for i in filtered if item_month_key(i['modified']) == month]
-        if q:
-            ql = q.lower()
-            filtered = [i for i in filtered if ql in i['name'].lower()]
+def paginate_media(items, month=None, q=None, offset=0, limit=40, kind='videos', day=None):
+    filtered = filter_media_items(items, month=month, q=q, kind=kind, day=day)
     total = len(filtered)
     page = filtered[offset:offset + limit]
     return total, page
@@ -1375,6 +1383,7 @@ def parse_media_api_query(query):
     force = query.get('refresh', [''])[0].lower() in ('1', 'true', 'yes')
     summary = query.get('summary', [''])[0].lower() in ('1', 'true', 'yes')
     month = query.get('month', [''])[0]
+    day = query.get('day', [''])[0]
     q = query.get('q', [''])[0]
     try:
         offset = max(0, int(query.get('offset', ['0'])[0] or 0))
@@ -1384,7 +1393,7 @@ def parse_media_api_query(query):
         limit = min(5000, max(1, int(query.get('limit', ['40'])[0] or 40)))
     except ValueError:
         limit = 40
-    return force, summary, month, q, offset, limit
+    return force, summary, month, q, offset, limit, day
 
 
 _RANGE_RE = re.compile(r'bytes=(\d*)-(\d*)')
@@ -1800,7 +1809,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
         # API endpoint: returns JSON list of videos sorted by date
         if path.split('?', 1)[0] == '/api/videos':
             query = parse_qs(urlparse(self.path).query)
-            force, summary, month, q, offset, limit = parse_media_api_query(query)
+            force, summary, month, q, offset, limit, day = parse_media_api_query(query)
             if STORAGE_MODE == 'drive':
                 drive = get_drive_storage()
                 result = drive.list_videos(
@@ -1810,6 +1819,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     limit=limit,
                     summary=summary,
                     refresh=force,
+                    day=day or None,
                 )
                 error = result.get('error') or drive.last_error
                 indexing = bool(result.get('indexing') or drive.videos_indexing)
@@ -1821,6 +1831,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     respond_json(self, {
                         'total': result.get('total', len(loaded)),
                         'months': months,
+                        'days': result.get('days') if month else None,
                         'ffmpeg': bool(_ffmpeg_path),
                         'vthumb': vthumb_available(),
                         'indexing': indexing,
@@ -1845,6 +1856,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 respond_json(self, {
                     'total': len(videos),
                     'months': media_month_summary(videos),
+                    'days': media_day_summary(videos, month) if month else None,
                     'ffmpeg': bool(_ffmpeg_path),
                     'vthumb': vthumb_available(),
                     'indexing': False,
@@ -1852,7 +1864,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     'error': None,
                 })
                 return
-            total, page = paginate_media(videos, month=month or None, q=q or None, offset=offset, limit=limit, kind='videos')
+            total, page = paginate_media(videos, month=month or None, q=q or None, offset=offset, limit=limit, kind='videos', day=day or None)
             respond_json(self, {
                 'total': total,
                 'offset': offset,
@@ -1869,7 +1881,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
         # API endpoint: returns JSON list of photos sorted by date
         if path.split('?', 1)[0] == '/api/photos':
             query = parse_qs(urlparse(self.path).query)
-            force, summary, month, q, offset, limit = parse_media_api_query(query)
+            force, summary, month, q, offset, limit, day = parse_media_api_query(query)
             if STORAGE_MODE == 'drive':
                 drive = get_drive_storage()
                 result = drive.list_photos(
@@ -1879,6 +1891,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     limit=limit,
                     summary=summary,
                     refresh=force,
+                    day=day or None,
                 )
                 error = result.get('error') or drive.last_error
                 indexing = bool(result.get('indexing') or drive.photos_indexing)
@@ -1890,6 +1903,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     respond_json(self, {
                         'total': result.get('total', len(loaded)),
                         'months': months,
+                        'days': result.get('days') if month else None,
                         'indexing': indexing,
                         'hasMore': bool(result.get('hasMore')),
                         'error': error,
@@ -1910,12 +1924,13 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 respond_json(self, {
                     'total': len(photos),
                     'months': media_month_summary(photos),
+                    'days': media_day_summary(photos, month) if month else None,
                     'indexing': False,
                     'hasMore': False,
                     'error': None,
                 })
                 return
-            total, page = paginate_media(photos, month=month or None, q=q or None, offset=offset, limit=limit, kind='photos')
+            total, page = paginate_media(photos, month=month or None, q=q or None, offset=offset, limit=limit, kind='photos', day=day or None)
             respond_json(self, {
                 'total': total,
                 'offset': offset,
@@ -1932,8 +1947,9 @@ class VideoHandler(SimpleHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             exclude = query.get('exclude', [''])[0] or None
             month = query.get('month', [''])[0] or None
+            day = query.get('day', [''])[0] or None
             q = query.get('q', [''])[0] or None
-            result = get_random_video(exclude_path=exclude, month=month, q=q)
+            result = get_random_video(exclude_path=exclude, month=month, q=q, day=day)
             if not result.get('video'):
                 result = {
                     'video': None,
@@ -1950,8 +1966,9 @@ class VideoHandler(SimpleHTTPRequestHandler):
             query = parse_qs(urlparse(self.path).query)
             exclude = query.get('exclude', [''])[0] or None
             month = query.get('month', [''])[0] or None
+            day = query.get('day', [''])[0] or None
             q = query.get('q', [''])[0] or None
-            result = get_random_photo(exclude_path=exclude, month=month, q=q)
+            result = get_random_photo(exclude_path=exclude, month=month, q=q, day=day)
             if not result.get('photo'):
                 result = {
                     'photo': None,
