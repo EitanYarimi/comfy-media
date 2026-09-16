@@ -753,7 +753,7 @@ async function selectDay(value) {
     activeDay = next;
     feedCache = { items: [], total: 0, loading: false, hasMore: true };
     updateDayFilter();
-    syncFilterUrl();
+    syncFilterUrl(false);
     window.scrollTo({ top: 0, behavior: 'auto' });
     await loadFeed(false);
 }
@@ -798,7 +798,7 @@ async function selectMonth(key) {
     feedCache = { items: [], total: 0, loading: false, hasMore: true };
     updateMonthPicker();
     updateDayFilter();
-    syncFilterUrl();
+    syncFilterUrl(false);
     window.scrollTo({ top: 0, behavior: 'auto' });
     const days = loadDaySummary(next);
     await loadFeed(false);
