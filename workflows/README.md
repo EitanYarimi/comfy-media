@@ -8,9 +8,9 @@ One queue writes three stills of the **same two adults in the same dark bar**:
 |---|---|---|
 | `scene1_hug_bar` | Hugging at the bar counter | txt2img, denoise **1.0** (master) |
 | `scene2_sofa` | Sitting on the lounge sofa in that bar | img2img from scene 1, denoise **0.50**, Depth **0.65** |
-| `scene3_kneeling_pov` | He looks at her; she kneeling; his POV | img2img from scene 1, denoise **0.60**, Depth **0.20** |
+| `scene3_kneeling_pov` | He looks at her; she kneeling; his POV | img2img from scene 1, denoise **0.60**, **no Depth** — POV from the checkpoint prompt |
 
-Scene 3 uses **weak Depth** on purpose: full Depth would freeze the wide hug camera and fight a POV shot. **IPAdapter** still pulls identity from the master.
+The depth preprocessor is **only for scene 2** (same sofa/bar layout). Scene 3 does not use it: a depth map of the hug freeze the original camera and fights POV. Your Pony checkpoint already understands POV from the ACTION prompt. **IPAdapter** still copies the same faces from the master.
 
 ## Custom nodes and models
 
@@ -26,7 +26,7 @@ Then put matching weights in `models/` (names vary; pick yours in the dropdowns)
 | Checkpoint | `Copy of Copy of Copy of cyberrealisticPony_v127Alt.safetensors` (whatever you already use) |
 | LoRA | `Pony Realism Slider.safetensors` |
 | IPAdapter Unified Loader preset **PLUS (high strength)** | `ip-adapter-plus_sdxl_vit-h.safetensors` + CLIP Vision `CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors` |
-| Load ControlNet | SDXL depth, e.g. `diffusers_xl_depth_full.safetensors` or `sdxl_depth.safetensors` |
+| Load ControlNet | SDXL depth for **scene 2 only**, e.g. `diffusers_xl_depth_full.safetensors` |
 
 If a node shows red after import, select the file you actually have. Pony is SDXL-shaped, so use **SDXL** IPAdapter and ControlNet, not SD1.5.
 
@@ -56,7 +56,7 @@ Clothes stay in PEOPLE unless you change that box on purpose.
 
 - Faces drift: raise IPAdapter weight (start ~0.75, try 0.85) or switch the Unified Loader preset to **PLUS FACE**.
 - Sofa scene rebuilds a new room: raise Depth strength toward 0.8 or lower denoise to ~0.4.
-- POV still looks like the hug framing: drop Depth toward 0.0–0.15 and/or raise denoise slightly.
+- POV still looks like the hug framing: raise scene 3 denoise slightly (0.65–0.75) or strengthen POV words in ACTION 3 (`first person`, `from his eyes`, `looking down`). Do not add Depth back unless you want the original hug camera.
 - Extra people or a child in frame: already in the shared negative; add `1girl, 1boy, two people only` to PEOPLE if needed.
 
 Outputs land in ComfyUI `output/` with the prefixes above, which this gallery already browses if that folder is your media root.

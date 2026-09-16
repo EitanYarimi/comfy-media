@@ -2,7 +2,7 @@
   "id": "same-room-couple-three-scenes",
   "revision": 0,
   "last_node_id": 34,
-  "last_link_id": 55,
+  "last_link_id": 57,
   "nodes": [
     {
       "flags": {},
@@ -218,8 +218,7 @@
           "name": "CONTROL_NET",
           "type": "CONTROL_NET",
           "links": [
-            38,
-            42
+            38
           ],
           "slot_index": 0
         }
@@ -508,7 +507,7 @@
           "links": [
             27,
             37,
-            41
+            57
           ],
           "slot_index": 0
         }
@@ -728,7 +727,7 @@
           "name": "CONDITIONING",
           "type": "CONDITIONING",
           "links": [
-            40
+            56
           ],
           "slot_index": 0
         }
@@ -945,7 +944,7 @@
         "example.png",
         "image"
       ],
-      "title": "OPTIONAL: load frozen master PNG (then reconnect IMAGE to IPAdapter + Depth + VAEEncode)"
+      "title": "OPTIONAL: load frozen master PNG (reconnect IMAGE to IPAdapter + sofa Depth + VAEEncode)"
     },
     {
       "flags": {},
@@ -1051,8 +1050,7 @@
           "name": "IMAGE",
           "type": "IMAGE",
           "links": [
-            39,
-            43
+            39
           ],
           "slot_index": 0
         }
@@ -1177,78 +1175,6 @@
         1.0
       ],
       "title": "Depth strong (sofa 0.65)"
-    },
-    {
-      "flags": {},
-      "mode": 0,
-      "properties": {
-        "Node name for S&R": "ControlNetApplyAdvanced",
-        "cnr_id": "comfy-core",
-        "ver": "0.18.1"
-      },
-      "id": 25,
-      "type": "ControlNetApplyAdvanced",
-      "pos": [
-        2120,
-        1080
-      ],
-      "size": [
-        300,
-        166
-      ],
-      "order": 26,
-      "inputs": [
-        {
-          "name": "positive",
-          "type": "CONDITIONING",
-          "link": 40
-        },
-        {
-          "name": "negative",
-          "type": "CONDITIONING",
-          "link": 41
-        },
-        {
-          "name": "control_net",
-          "type": "CONTROL_NET",
-          "link": 42
-        },
-        {
-          "name": "image",
-          "type": "IMAGE",
-          "link": 43
-        },
-        {
-          "name": "vae",
-          "type": "VAE",
-          "link": null,
-          "shape": 7
-        }
-      ],
-      "outputs": [
-        {
-          "name": "positive",
-          "type": "CONDITIONING",
-          "links": [
-            51
-          ],
-          "slot_index": 0
-        },
-        {
-          "name": "negative",
-          "type": "CONDITIONING",
-          "links": [
-            52
-          ],
-          "slot_index": 1
-        }
-      ],
-      "widgets_values": [
-        0.2,
-        0.0,
-        0.65
-      ],
-      "title": "Depth weak (POV 0.20)"
     },
     {
       "flags": {},
@@ -1417,12 +1343,12 @@
         {
           "name": "positive",
           "type": "CONDITIONING",
-          "link": 51
+          "link": 56
         },
         {
           "name": "negative",
           "type": "CONDITIONING",
-          "link": 52
+          "link": 57
         },
         {
           "name": "latent_image",
@@ -1449,7 +1375,7 @@
         "karras",
         0.6
       ],
-      "title": "Scene 3 KSampler (POV denoise 0.6)"
+      "title": "Scene 3 KSampler (POV prompt + IPAdapter, no Depth)"
     },
     {
       "flags": {},
@@ -1548,7 +1474,7 @@
       "inputs": [],
       "outputs": [],
       "widgets_values": [
-        "THREE SCENES \u2014 same bar, same couple\n\n1. Queue Prompt. Scene 1 (hug at the bar) is txt2img and is the master.\n   Scenes 2 and 3 img2img from that image (IPAdapter + Depth).\n\n2. When you like scene 1: set its seed to fixed (or Load Image the PNG),\n   mute scene 1 KSampler if you only want 2/3, keep room + people CLIP frozen.\n\n3. Edit only the three ACTION prompt boxes. Do not change Room or People.\n\nControlNet: pick your SDXL depth model in Load ControlNet.\nIPAdapter: Unified Loader preset PLUS (high strength) \u2014 needs IPAdapter plus pack.\n\nDepth strength: sofa 0.65 / POV 0.20 (POV needs a new camera).\nDenoise: hug 1.0 / sofa 0.50 / POV 0.60.\n"
+        "THREE SCENES \u2014 same bar, same couple\n\n1. Queue Prompt. Scene 1 (hug at the bar) is txt2img and is the master.\n   Scene 2 img2img with IPAdapter + Depth (keep the bar).\n   Scene 3 img2img with IPAdapter only \u2014 POV comes from the checkpoint prompt.\n\n2. When you like scene 1: set its seed to fixed (or Load Image the PNG),\n   mute scene 1 KSampler if you only want 2/3, keep room + people CLIP frozen.\n\n3. Edit only the three ACTION prompt boxes. Do not change Room or People.\n\nControlNet Depth is used for the sofa scene only.\nIPAdapter: Unified Loader preset PLUS (high strength).\n\nDenoise: hug 1.0 / sofa 0.50 / POV 0.60.\n"
       ],
       "color": "#432",
       "bgcolor": "#000"
@@ -1868,38 +1794,6 @@
       "IMAGE"
     ],
     [
-      40,
-      15,
-      0,
-      25,
-      0,
-      "CONDITIONING"
-    ],
-    [
-      41,
-      10,
-      0,
-      25,
-      1,
-      "CONDITIONING"
-    ],
-    [
-      42,
-      22,
-      0,
-      25,
-      2,
-      "CONTROL_NET"
-    ],
-    [
-      43,
-      23,
-      0,
-      25,
-      3,
-      "IMAGE"
-    ],
-    [
       44,
       20,
       0,
@@ -1956,22 +1850,6 @@
       "MODEL"
     ],
     [
-      51,
-      25,
-      0,
-      29,
-      1,
-      "CONDITIONING"
-    ],
-    [
-      52,
-      25,
-      1,
-      29,
-      2,
-      "CONDITIONING"
-    ],
-    [
       53,
       21,
       0,
@@ -1994,6 +1872,22 @@
       31,
       0,
       "IMAGE"
+    ],
+    [
+      56,
+      15,
+      0,
+      29,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      57,
+      10,
+      0,
+      29,
+      2,
+      "CONDITIONING"
     ]
   ],
   "groups": [
@@ -2047,7 +1941,7 @@
     },
     {
       "id": 5,
-      "title": "SCENE 3 \u2014 KNEELING POV (img2img, depth 0.20, denoise 0.6)",
+      "title": "SCENE 3 \u2014 KNEELING POV (img2img, checkpoint POV prompt, no Depth)",
       "bounding": [
         1740,
         1040,
