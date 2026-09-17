@@ -1179,7 +1179,10 @@ let prefetchController = null;
 const VIDEO_PREFETCH_ENABLED = !(navigator.connection && navigator.connection.saveData);
 let thumbObserver = null;
 let thumbUnloadObserver = null;
-let thumbLoadQueue = [], thumbLoadActive = 0;
+let thumbLoadQueue = [];
+const thumbLoadInFlight = new Set();
+const thumbLoadTimers = new Map();
+const THUMB_LOAD_TIMEOUT = 30000;
 let serverHasFfmpeg = false;
 let serverHasVthumb = false;
 const serverBaseUrl = window.location.origin;
@@ -1393,7 +1396,7 @@ async function loadFeed(append = false) {
             hasMore,
         };
         const added = merged.slice(prevLen);
-        requestThumbWarm(added.length ? added : merged);
+        requestThumbWarm(added.length ? added : merged, !append);
         const viewKey = activeMonth || 'all';
         if (append && document.querySelector('#videoGrid .month-grid') && added.length) {
             appendVideosToMonth(viewKey, added);
@@ -1441,7 +1444,7 @@ async function loadSearchVideos(append = false) {
             loading: false,
             hasMore: resolveHasMore(data, mergedLen),
         };
-        requestThumbWarm(items);
+        requestThumbWarm(items, !append);
         if (!append) renderGrid();
         else {
             appendVideosToMonth('search', searchResults.items.slice(prevLen));
@@ -1534,15 +1537,14 @@ function readFilterUrl() {
 // these first. Without this, filtering to an old month means every tile runs
 // ffmpeg on demand.
 let warmRequestTimer = null;
-function requestThumbWarm(videos) {
+function requestThumbWarm(videos, reset = false) {
     if (!videos || !videos.length) return;
     clearTimeout(warmRequestTimer);
     const paths = videos.slice(0, 120).map(v => v.path).filter(Boolean);
     if (!paths.length) return;
     warmRequestTimer = setTimeout(() => {
-        fetch(`${serverBaseUrl}/api/warm?paths=${encodeURIComponent(paths.join('\n'))}`, {
-            cache: 'no-store',
-        }).catch(() => {});
+        const qs = (reset ? 'reset=1&' : '') + `paths=${encodeURIComponent(paths.join('\n'))}`;
+        fetch(`${serverBaseUrl}/api/warm?${qs}`, { cache: 'no-store' }).catch(() => {});
     }, 150);
 }
 
@@ -1651,6 +1653,28 @@ async function selectMonth(key) {
 
 function clearThumbLoadQueue() {
     thumbLoadQueue = [];
+    pruneThumbSlots();
+}
+
+// Switching months replaces the grid, which aborts in-flight <img> loads without
+// firing load or error. Tracking the elements (instead of counting) lets those
+// slots be reclaimed, otherwise the pipeline wedges after a few navigations and
+// no thumbnail is ever requested again.
+function pruneThumbSlots() {
+    thumbLoadInFlight.forEach(img => {
+        if (!img.isConnected) releaseThumbSlot(img);
+    });
+}
+
+function releaseThumbSlot(img) {
+    if (!thumbLoadInFlight.has(img)) return false;
+    thumbLoadInFlight.delete(img);
+    const timer = thumbLoadTimers.get(img);
+    if (timer) {
+        clearTimeout(timer);
+        thumbLoadTimers.delete(img);
+    }
+    return true;
 }
 
 function queueThumbLoad(img) {
@@ -1663,25 +1687,30 @@ function queueThumbLoad(img) {
 
 function processThumbLoadQueue() {
     if (thumbLoadPaused) return;
-    while (thumbLoadActive < THUMB_CONCURRENCY && thumbLoadQueue.length) {
+    pruneThumbSlots();
+    while (thumbLoadInFlight.size < THUMB_CONCURRENCY && thumbLoadQueue.length) {
         const img = thumbLoadQueue.shift();
         if (!img) continue;
         img.dataset.thumbQueued = '0';
-        if (!document.contains(img)) continue;
+        if (!img.isConnected) continue;
         const src = img.dataset.src;
         if (!src) continue;
         if (img.getAttribute('src') === src) continue;
-        thumbLoadActive++;
+        thumbLoadInFlight.add(img);
+        // A request that never completes must not hold its slot forever.
+        thumbLoadTimers.set(img, setTimeout(() => {
+            if (releaseThumbSlot(img)) processThumbLoadQueue();
+        }, THUMB_LOAD_TIMEOUT));
         const retries = parseInt(img.dataset.thumbRetries || '0', 10);
         img.onload = () => {
-            thumbLoadActive--;
+            releaseThumbSlot(img);
             img.removeAttribute('data-thumb-retries');
             onThumbLoaded(img);
             processThumbLoadQueue();
         };
         img.onerror = () => {
-            thumbLoadActive--;
-            if (retries < THUMB_RETRY_MAX && document.contains(img)) {
+            releaseThumbSlot(img);
+            if (retries < THUMB_RETRY_MAX && img.isConnected) {
                 img.dataset.thumbRetries = String(retries + 1);
                 img.removeAttribute('src');
                 setTimeout(() => queueThumbLoad(img), 1200 + retries * 1200);
@@ -1703,6 +1732,8 @@ function unloadFarThumb(img) {
     img.onerror = null;
     img.removeAttribute('src');
     img.dataset.thumbQueued = '0';
+    // Scrolling away aborts the request, so hand the slot back.
+    if (releaseThumbSlot(img)) processThumbLoadQueue();
     const ph = img.parentElement?.querySelector('.thumbnail-placeholder');
     if (ph) ph.style.display = 'flex';
 }

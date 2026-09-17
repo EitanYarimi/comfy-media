@@ -1142,15 +1142,22 @@ _warm_lock = threading.Lock()
 WARM_QUEUE_LIMIT = 600
 
 
-def queue_warm_paths(rel_paths):
-    """Push visible video paths to the front of the prewarm queue."""
+def queue_warm_paths(rel_paths, reset=False):
+    """Queue visible video paths ahead of the sequential prewarm walk.
+
+    A new view resets the queue so stale months stop competing; later pages of
+    the same view append, which keeps warming in the order they are scrolled.
+    """
     added = 0
     with _warm_lock:
-        for rel in reversed(rel_paths):
+        if reset:
+            _warm_queue.clear()
+            _warm_seen.clear()
+        for rel in rel_paths:
             if not rel or rel in _warm_seen:
                 continue
             _warm_seen.add(rel)
-            _warm_queue.insert(0, rel)
+            _warm_queue.append(rel)
             added += 1
         while len(_warm_queue) > WARM_QUEUE_LIMIT:
             _warm_seen.discard(_warm_queue.pop())
@@ -2052,8 +2059,9 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 return
             query = parse_qs(urlparse(self.path).query)
             raw = query.get('paths', [''])[0]
+            reset = query.get('reset', [''])[0].lower() in ('1', 'true', 'yes')
             paths = [p for p in (raw.split('\n') if raw else []) if p.strip()][:200]
-            queued = queue_warm_paths([p.strip() for p in paths])
+            queued = queue_warm_paths([p.strip() for p in paths], reset=reset)
             respond_json(self, {'queued': queued, 'prewarm': True})
             return
 

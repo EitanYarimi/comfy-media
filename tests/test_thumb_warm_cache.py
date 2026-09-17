@@ -83,12 +83,18 @@ class WarmQueueTests(unittest.TestCase):
         self.assertEqual(drained, ['a.mp4', 'b.mp4', 'c.mp4'])
         self.assertIsNone(video_server._next_warm_path())
 
-    def test_newest_request_jumps_the_queue(self):
+    def test_reset_drops_the_previous_view(self):
         video_server.queue_warm_paths(['old1.mp4', 'old2.mp4'])
-        video_server.queue_warm_paths(['new1.mp4', 'new2.mp4'])
+        video_server.queue_warm_paths(['new1.mp4', 'new2.mp4'], reset=True)
         self.assertEqual(video_server._next_warm_path(), 'new1.mp4')
         self.assertEqual(video_server._next_warm_path(), 'new2.mp4')
-        self.assertEqual(video_server._next_warm_path(), 'old1.mp4')
+        self.assertIsNone(video_server._next_warm_path())
+
+    def test_later_pages_append_in_scroll_order(self):
+        video_server.queue_warm_paths(['page1a.mp4', 'page1b.mp4'], reset=True)
+        video_server.queue_warm_paths(['page2a.mp4'])
+        drained = [video_server._next_warm_path() for _ in range(3)]
+        self.assertEqual(drained, ['page1a.mp4', 'page1b.mp4', 'page2a.mp4'])
 
     def test_duplicates_are_ignored_while_queued(self):
         self.assertEqual(video_server.queue_warm_paths(['a.mp4', 'b.mp4']), 2)
