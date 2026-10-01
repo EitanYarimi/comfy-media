@@ -17,9 +17,11 @@ MEDIA_URL = 'https://www.googleapis.com/drive/v3/files/{file_id}?alt=media&suppo
 FOLDER_MIME = 'application/vnd.google-apps.folder'
 VIDEO_PAGE_SIZE = 40
 REFRESH_LOOKBACK_DAYS = 30
-VIDEO_LIST_FIELDS = (
-    'nextPageToken, files(id, name, mimeType, size, modifiedTime, thumbnailLink, hasThumbnail)'
+_LIST_FILE_FIELDS = (
+    'id, name, mimeType, size, modifiedTime, thumbnailLink, hasThumbnail, '
+    'videoMediaMetadata(width, height), imageMediaMetadata(width, height)'
 )
+VIDEO_LIST_FIELDS = f'nextPageToken, files({_LIST_FILE_FIELDS})'
 _VIDEO_EXT_QUERY = ' or '.join(
     f"fileExtension='{ext.lstrip('.')}'" for ext in sorted(VIDEO_EXTENSIONS)
 )
@@ -28,12 +30,28 @@ _IMAGE_EXT_QUERY = ' or '.join(
     f"fileExtension='{ext.lstrip('.')}'" for ext in sorted(IMAGE_EXTENSIONS)
 )
 IMAGE_FILE_QUERY = f"trashed=false and (mimeType contains 'image/' or {_IMAGE_EXT_QUERY})"
-INDEX_ITEM_KEYS = ('path', 'name', 'id', 'size', 'modified', 'mime', 'thumbnailLink', 'hasThumbnail')
+INDEX_ITEM_KEYS = (
+    'path', 'name', 'id', 'size', 'modified', 'mime', 'thumbnailLink', 'hasThumbnail',
+    'width', 'height',
+)
 
 
 def _clean_id(value):
     """Render env values often include a trailing newline that breaks Drive queries."""
     return (value or '').strip().strip('"').strip("'").replace('\r', '').replace('\n', '')
+
+
+def _media_dimensions(item):
+    """Drive reports pixel size for videos and images under different keys."""
+    for key in ('videoMediaMetadata', 'imageMediaMetadata'):
+        meta = item.get(key) or {}
+        try:
+            width, height = int(meta.get('width') or 0), int(meta.get('height') or 0)
+        except (TypeError, ValueError):
+            continue
+        if width > 0 and height > 0:
+            return width, height
+    return None, None
 
 
 def _parse_drive_time(value):
@@ -380,12 +398,13 @@ class DriveStorage:
         folder_id = _clean_id(folder_id)
         yield from self._iter_query_pages(
             q=f"'{folder_id}' in parents and trashed=false",
-            fields='nextPageToken, files(id, name, mimeType, size, modifiedTime, thumbnailLink, hasThumbnail)',
+            fields=VIDEO_LIST_FIELDS,
         )
 
     def _file_entry(self, item, prefix):
         name = item.get('name', '')
         rel = f'{prefix}/{name}' if prefix else name
+        width, height = _media_dimensions(item)
         return {
             'path': rel,
             'name': name,
@@ -395,6 +414,8 @@ class DriveStorage:
             'mime': item.get('mimeType') or '',
             'thumbnailLink': item.get('thumbnailLink') or '',
             'hasThumbnail': bool(item.get('hasThumbnail')),
+            'width': width,
+            'height': height,
         }
 
     def _index_folder_files(self, folder_id, prefix, extensions, skip_folders=None, on_batch=None):

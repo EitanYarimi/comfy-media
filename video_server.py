@@ -982,17 +982,40 @@ def get_cached_video_thumbnail(filepath):
     return None
 
 
+def _read_thumb_meta(cache_key):
+    """Merge the sidecar caches, newest location winning."""
+    meta = {}
+    for candidate in (
+        LEGACY_THUMB_CACHE_DIR / (cache_key + '.meta.json'),
+        THUMB_CACHE_DIR / (cache_key + '.meta.json'),
+    ):
+        try:
+            loaded = json.loads(candidate.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if isinstance(loaded, dict):
+            meta.update(loaded)
+    return meta
+
+
+def _update_thumb_meta(cache_key, updates):
+    """Sidecars hold duration and orientation, so never overwrite the whole file."""
+    meta = _read_thumb_meta(cache_key)
+    meta.update(updates)
+    try:
+        THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        (THUMB_CACHE_DIR / (cache_key + '.meta.json')).write_text(json.dumps(meta))
+    except OSError:
+        pass
+    return meta
+
+
 def get_video_duration(filepath):
     """Return video duration in seconds, using sidecar cache when available."""
     cache_key = _video_cache_key(filepath)
-    meta_path = THUMB_CACHE_DIR / (cache_key + '.meta.json')
-    for candidate in (meta_path, LEGACY_THUMB_CACHE_DIR / (cache_key + '.meta.json')):
-        try:
-            meta = json.loads(candidate.read_text())
-        except (json.JSONDecodeError, OSError):
-            continue
-        if meta.get('duration') is not None:
-            return meta['duration']
+    meta = _read_thumb_meta(cache_key)
+    if meta.get('duration') is not None:
+        return meta['duration']
     if not _ffprobe_path:
         return None
     try:
@@ -1005,12 +1028,124 @@ def get_video_duration(filepath):
         )
         if result.returncode == 0 and result.stdout.strip():
             duration = float(result.stdout.strip())
-            THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            meta_path.write_text(json.dumps({'duration': duration}))
+            _update_thumb_meta(cache_key, {'duration': duration})
             return duration
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
     return None
+
+
+ORIENTATIONS = ('horizontal', 'vertical')
+# Probing is only for clips that have never been thumbnailed; the walk stops here
+# so one Random click can never turn into thousands of ffprobe runs.
+ORIENTATION_PROBE_BUDGET = 24
+
+_orientation_cache = {}
+_orientation_lock = threading.Lock()
+
+
+def orientation_from_size(width, height):
+    """Square counts as horizontal — it frames like one and keeps the split binary."""
+    try:
+        width, height = int(width or 0), int(height or 0)
+    except (TypeError, ValueError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return 'vertical' if height > width else 'horizontal'
+
+
+def normalize_orientation(value):
+    value = (value or '').strip().lower()
+    aliases = {
+        'landscape': 'horizontal', 'wide': 'horizontal', 'h': 'horizontal',
+        'portrait': 'vertical', 'tall': 'vertical', 'v': 'vertical',
+    }
+    value = aliases.get(value, value)
+    return value if value in ORIENTATIONS else None
+
+
+def _orientation_from_thumb(filepath):
+    """Thumbnails keep the source aspect ratio, so a cached one answers for free."""
+    cached = get_cached_video_thumbnail(filepath)
+    if not cached:
+        return None
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(cached[0])) as img:
+            return orientation_from_size(img.width, img.height)
+    except Exception:
+        return None
+
+
+def _orientation_from_ffprobe(filepath):
+    if not _ffprobe_path:
+        return None
+    try:
+        result = subprocess.run(
+            [
+                _ffprobe_path, '-v', 'error', '-select_streams', 'v:0',
+                '-show_entries', 'stream=width,height:stream_tags=rotate:stream_side_data=rotation',
+                '-of', 'json', str(filepath),
+            ],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        streams = json.loads(result.stdout).get('streams') or []
+        if not streams:
+            return None
+        stream = streams[0]
+        width, height = stream.get('width'), stream.get('height')
+        rotation = (stream.get('tags') or {}).get('rotate')
+        for side in stream.get('side_data_list') or []:
+            if side.get('rotation') is not None:
+                rotation = side['rotation']
+        try:
+            # Phone footage is stored landscape with a rotation flag.
+            if rotation is not None and abs(int(float(rotation))) % 180 == 90:
+                width, height = height, width
+        except (TypeError, ValueError):
+            pass
+        return orientation_from_size(width, height)
+    except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError):
+        return None
+
+
+def video_orientation(item, allow_probe=False):
+    """Resolve 'horizontal'/'vertical' for a media item, cheapest source first.
+
+    Returns None when it cannot be determined without more work than allowed.
+    """
+    known = orientation_from_size(item.get('width'), item.get('height'))
+    if known:
+        return known
+    rel = item.get('path')
+    if not rel:
+        return None
+    with _orientation_lock:
+        cached = _orientation_cache.get(rel)
+    if cached:
+        return cached
+    if STORAGE_MODE == 'drive':
+        return None
+    filepath = resolve_media_path(rel)
+    try:
+        if not filepath or not filepath.is_file():
+            return None
+    except OSError:
+        return None
+    cache_key = _video_cache_key(filepath)
+    found = normalize_orientation(_read_thumb_meta(cache_key).get('orientation'))
+    if not found:
+        found = _orientation_from_thumb(filepath)
+    if not found and allow_probe:
+        found = _orientation_from_ffprobe(filepath)
+    if found:
+        _update_thumb_meta(cache_key, {'orientation': found})
+        with _orientation_lock:
+            _orientation_cache[rel] = found
+    return found
 
 
 def _store_thumb(cache_key, ext, data, mime):
@@ -1106,6 +1241,20 @@ def _thumb_from_ffmpeg(filepath, cache_key):
     return _store_thumb(cache_key, ext, data, mime)
 
 
+def _record_thumb_orientation(cache_key, data):
+    """Prewarm already decoded the frame, so bank the orientation while it is here."""
+    if _read_thumb_meta(cache_key).get('orientation'):
+        return
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(data)) as img:
+            found = orientation_from_size(img.width, img.height)
+    except Exception:
+        return
+    if found:
+        _update_thumb_meta(cache_key, {'orientation': found})
+
+
 def generate_video_thumbnail(filepath):
     """Generate or load cached video thumbnail. Returns (data, mime) or None."""
     cached = get_cached_video_thumbnail(filepath)
@@ -1123,10 +1272,11 @@ def generate_video_thumbnail(filepath):
         if _thumb_failed_recently(cache_key, filepath):
             return None
         result = _thumb_from_ffmpeg(filepath, cache_key)
-        if result:
-            return result
-        result = _thumb_from_qlmanage(filepath, cache_key)
         if not result:
+            result = _thumb_from_qlmanage(filepath, cache_key)
+        if result:
+            _record_thumb_orientation(cache_key, result[0])
+        else:
             _remember_thumb_failure(cache_key, filepath)
         return result
 
@@ -1421,7 +1571,35 @@ def pick_random_item(items, exclude_path=None):
     return random.choice(pool)
 
 
-def get_random_video(exclude_path=None, month=None, q=None, day=None):
+def pick_random_oriented_video(items, orientation, exclude_path=None):
+    """Random pick restricted to horizontal or vertical clips.
+
+    Orientation is resolved lazily while walking a shuffled pool: already known
+    clips answer instantly, and only a bounded tail gets probed with ffprobe.
+    Returns (item, matched) where matched is False when nothing could be
+    confirmed and the caller is getting an unfiltered pick instead.
+    """
+    orientation = normalize_orientation(orientation)
+    if not orientation:
+        return pick_random_item(items, exclude_path=exclude_path), False
+    if not items:
+        return None, False
+    pool = [i for i in items if i.get('path') != exclude_path] or list(items)
+    random.shuffle(pool)
+    unknown = []
+    for item in pool:
+        known = video_orientation(item, allow_probe=False)
+        if known == orientation:
+            return item, True
+        if known is None:
+            unknown.append(item)
+    for item in unknown[:ORIENTATION_PROBE_BUDGET]:
+        if video_orientation(item, allow_probe=True) == orientation:
+            return item, True
+    return None, False
+
+
+def get_random_video(exclude_path=None, month=None, q=None, day=None, orientation=None):
     """Server-side random pick for All/month/day/search without shipping the full list."""
     if STORAGE_MODE == 'drive':
         drive = get_drive_storage()
@@ -1442,12 +1620,20 @@ def get_random_video(exclude_path=None, month=None, q=None, day=None):
         total = len(items)
         indexing = False
         error = None
-    picked = pick_random_item(items, exclude_path=exclude_path)
+    orientation = normalize_orientation(orientation)
+    if orientation:
+        picked, matched = pick_random_oriented_video(items, orientation, exclude_path=exclude_path)
+        if not picked and items and not indexing:
+            error = error or f'No {orientation} videos in this view'
+    else:
+        picked, matched = pick_random_item(items, exclude_path=exclude_path), False
     return {
         'video': picked,
         'total': total,
         'indexing': indexing,
         'error': error,
+        'orientation': orientation,
+        'orientationMatched': matched,
         'ffmpeg': bool(_ffmpeg_path),
         'vthumb': vthumb_available(),
     }
@@ -2072,13 +2258,18 @@ class VideoHandler(SimpleHTTPRequestHandler):
             month = query.get('month', [''])[0] or None
             day = query.get('day', [''])[0] or None
             q = query.get('q', [''])[0] or None
-            result = get_random_video(exclude_path=exclude, month=month, q=q, day=day)
+            orientation = query.get('orientation', [''])[0] or None
+            result = get_random_video(
+                exclude_path=exclude, month=month, q=q, day=day, orientation=orientation,
+            )
             if not result.get('video'):
                 result = {
                     'video': None,
                     'total': result.get('total', 0),
                     'indexing': result.get('indexing', False),
                     'error': result.get('error') or 'No videos available',
+                    'orientation': result.get('orientation'),
+                    'orientationMatched': False,
                     'ffmpeg': result.get('ffmpeg'),
                     'vthumb': result.get('vthumb'),
                 }

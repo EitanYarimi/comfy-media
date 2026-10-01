@@ -1051,6 +1051,8 @@
         <button class="btn" onclick="loadFromServer(false, true)">↻ Refresh</button>
         <button class="btn" onclick="startSlideshow(false)" id="slideshowSeqBtn">▶ Slideshow</button>
         <button class="btn" onclick="startSlideshow(true)" id="slideshowRandomBtn">🎲 Random</button>
+        <button class="btn" onclick="startSlideshow(true, 'horizontal')" id="slideshowRandomWideBtn" title="Random horizontal (landscape) videos">🎲 ▭ Wide</button>
+        <button class="btn" onclick="startSlideshow(true, 'vertical')" id="slideshowRandomTallBtn" title="Random vertical (portrait) videos">🎲 ▯ Tall</button>
         <button class="btn btn--panic" onclick="togglePanic()">⚡ Boss</button>
     </div>
 </header>
@@ -1174,6 +1176,7 @@ let slideshowServerRandom = false; // All + Random: ask server for each next cli
 let slideshowNextIndex = null;
 let slideshowRandomPending = null;
 let slideshowRandomTotal = 0;
+let slideshowOrientation = null; // 'horizontal' | 'vertical' | null
 let prefetchUrl = null;
 let prefetchController = null;
 const VIDEO_PREFETCH_ENABLED = !(navigator.connection && navigator.connection.saveData);
@@ -2115,30 +2118,42 @@ function updateSlideshowUI() {
     const counter = document.getElementById('slideshowCounter');
     const pauseBtn = document.getElementById('slideshowPauseBtn');
     const seqBtn = document.getElementById('slideshowSeqBtn');
-    const randomBtn = document.getElementById('slideshowRandomBtn');
     const overlay = document.getElementById('modalOverlay');
+    // Each Random flavour owns a button, and only the running one turns into Stop.
+    const randomBtns = [
+        { el: document.getElementById('slideshowRandomBtn'), orientation: null, label: '🎲 Random' },
+        { el: document.getElementById('slideshowRandomWideBtn'), orientation: 'horizontal', label: '🎲 ▭ Wide' },
+        { el: document.getElementById('slideshowRandomTallBtn'), orientation: 'vertical', label: '🎲 ▯ Tall' },
+    ].filter(b => b.el);
     if (slideshowActive) {
+        const tag = slideshowOrientation === 'horizontal' ? '🎲 ▭'
+            : slideshowOrientation === 'vertical' ? '🎲 ▯' : '🎲';
         if (slideshowServerRandom) {
             const n = currentVideoIndex + 1;
             const total = slideshowRandomTotal || totalVideoCount || '?';
-            counter.textContent = `🎲 ${n} · pool ${total}`;
+            counter.textContent = `${tag} ${n} · pool ${total}`;
         } else {
-            counter.textContent = `${slideshowRandom ? '🎲 ' : ''}${currentVideoIndex + 1} / ${modalPlaylist.length}`;
+            counter.textContent = `${slideshowRandom ? tag + ' ' : ''}${currentVideoIndex + 1} / ${modalPlaylist.length}`;
         }
         pauseBtn.style.display = 'flex';
         pauseBtn.textContent = slideshowPaused ? '▶' : '⏸';
         seqBtn.textContent = slideshowRandom ? '▶ Slideshow' : '⏹ Stop';
-        randomBtn.textContent = slideshowRandom ? '⏹ Stop' : '🎲 Random';
         seqBtn.classList.toggle('btn--active', !slideshowRandom);
-        randomBtn.classList.toggle('btn--active', slideshowRandom);
+        randomBtns.forEach(b => {
+            const running = slideshowRandom && b.orientation === slideshowOrientation;
+            b.el.textContent = running ? '⏹ Stop' : b.label;
+            b.el.classList.toggle('btn--active', running);
+        });
         overlay.classList.add('slideshow-mode');
     } else {
         counter.textContent = '';
         pauseBtn.style.display = 'none';
         seqBtn.textContent = '▶ Slideshow';
-        randomBtn.textContent = '🎲 Random';
         seqBtn.classList.remove('btn--active');
-        randomBtn.classList.remove('btn--active');
+        randomBtns.forEach(b => {
+            b.el.textContent = b.label;
+            b.el.classList.remove('btn--active');
+        });
         overlay.classList.remove('slideshow-mode');
         document.getElementById('slideshowProgress').style.width = '0%';
     }
@@ -2190,6 +2205,11 @@ async function fetchServerRandomVideo(excludePath = null) {
     if (excludePath) params.set('exclude', excludePath);
     if (activeMonth) params.set('month', activeMonth);
     if (activeMonth && activeDay) params.set('day', activeDay);
+    if (slideshowOrientation) params.set('orientation', slideshowOrientation);
+    if (searchMode) {
+        const q = document.getElementById('searchInput').value.trim();
+        if (q) params.set('q', q);
+    }
     const resp = await fetch(`${serverBaseUrl}/api/random/video?${params}`, { cache: 'no-store' });
     if (!resp.ok) throw new Error('Random request failed');
     const data = await resp.json();
@@ -2348,19 +2368,27 @@ async function startMonthRandom(monthKey, event) {
     updateSlideshowUI();
 }
 
-async function startSlideshow(random = false) {
+async function startSlideshow(random = false, orientation = null) {
+    const wanted = random ? (orientation || null) : null;
     if (slideshowActive) {
-        stopSlideshow(true);
-        return;
+        // Clicking a different Random flavour switches to it instead of stopping.
+        const switching = random && slideshowRandom && wanted !== slideshowOrientation;
+        stopSlideshow(!switching);
+        if (!switching) return;
     }
     slideshowRandom = random;
+    slideshowOrientation = wanted;
     const stats = document.getElementById('stats');
     const prevStats = stats ? stats.textContent : '';
 
     // All + Random: each next clip is a server pick — no full-library download.
-    const useServerRandom = random && !searchMode && !activeMonth;
+    // Orientation picks always go to the server too: only it knows the pixel
+    // size of each clip, so the browser cannot filter the playlist itself.
+    const useServerRandom = random && (slideshowOrientation || (!searchMode && !activeMonth));
     if (useServerRandom) {
-        if (stats) stats.textContent = 'Picking a random video…';
+        if (stats) stats.textContent = slideshowOrientation
+            ? `Picking a random ${slideshowOrientation} video…`
+            : 'Picking a random video…';
         try {
             const video = await fetchServerRandomVideo();
             slideshowServerRandom = true;
@@ -2409,6 +2437,7 @@ function stopSlideshow(closeBox) {
     slideshowServerRandom = false;
     slideshowRandomPending = null;
     slideshowNextIndex = null;
+    slideshowOrientation = null;
     updateSlideshowUI();
     if (closeBox) closeModal();
 }
@@ -2980,6 +3009,8 @@ document.addEventListener('keydown', (e) => {
     // Slideshow shortcuts (when modal closed)
     if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
         if (e.key === 'r' || e.key === 'R') { e.preventDefault(); startSlideshow(true); }
+        if (e.key === 'h' || e.key === 'H') { e.preventDefault(); startSlideshow(true, 'horizontal'); }
+        if (e.key === 'v' || e.key === 'V') { e.preventDefault(); startSlideshow(true, 'vertical'); }
     }
     // Panic escape
     if (e.key === 'Escape' && document.getElementById('panicCover').classList.contains('active')) togglePanic();
