@@ -396,10 +396,10 @@ const serverBaseUrl = window.location.origin;
 const PHOTOS_PER_LOAD = 40;
 const SLIDESHOW_INTERVAL = 4000;
 const THUMB_CONCURRENCY = (navigator.connection && navigator.connection.saveData)
-    ? 2
-    : (window.matchMedia('(max-width: 768px)').matches ? 3 : 4);
-const THUMB_LOAD_MARGIN = '100px';
-const THUMB_UNLOAD_MARGIN = '900px';
+    ? 3
+    : (window.matchMedia('(max-width: 768px)').matches ? 6 : 12);
+const THUMB_LOAD_MARGIN = '800px';
+const THUMB_UNLOAD_MARGIN = '2400px';
 let pageLoading = false;
 let scrollTicking = false;
 let allPhotos = [], filteredPhotos = [], currentPhotoIndex = -1;
@@ -911,9 +911,11 @@ function initThumbObserver() {
 function observeThumbs(root) {
     initThumbObserver();
     const scope = root && root.querySelectorAll ? root : document;
-    scope.querySelectorAll('img.thumb-lazy[data-src]').forEach(img => {
-        thumbObserver.observe(img);
-        thumbUnloadObserver.observe(img);
+    const imgs = scope.querySelectorAll('img.thumb-lazy[data-src]');
+    imgs.forEach(img => thumbObserver.observe(img));
+    let n = 0;
+    imgs.forEach(img => {
+        if (n < 48) { queueThumbLoad(img); n += 1; }
     });
 }
 

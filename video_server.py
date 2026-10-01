@@ -185,6 +185,13 @@ _photo_cache = {'data': None, 'time': 0.0}
 _video_cache = {'data': None, 'time': 0.0}
 _media_by_month = {'videos': None, 'photos': None}
 _index_refresh_lock = threading.Lock()
+_refresh_flags = {'videos': False, 'photos': False}
+_refresh_flags_lock = threading.Lock()
+_basename_map = None
+_basename_map_lock = threading.Lock()
+# Existence-checking 17k Drive files on every process start made the first
+# /api/videos wait on File Provider. Trust the disk index above this size.
+INDEX_EXISTENCE_CHECK_LIMIT = 2000
 
 _ffmpeg_path = shutil.which('ffmpeg')
 _ffprobe_path = shutil.which('ffprobe')
@@ -223,30 +230,60 @@ def get_drive_storage():
     return _drive_storage
 
 
+def _invalidate_basename_map():
+    global _basename_map
+    with _basename_map_lock:
+        _basename_map = None
+
+
+def _video_basename_map():
+    """One rglob of VIDEO_DIR, reused so a missing file cannot trigger another."""
+    global _basename_map
+    with _basename_map_lock:
+        if _basename_map is not None:
+            return _basename_map
+        mapping = {}
+        scan_path = Path(VIDEO_DIR)
+        if scan_path.is_dir():
+            for path in scan_path.rglob('*'):
+                try:
+                    if path.is_file() and path.suffix.lower() in VIDEO_EXTENSIONS:
+                        mapping.setdefault(path.name, []).append(path)
+                except OSError:
+                    continue
+        _basename_map = mapping
+        return mapping
+
+
 def resolve_media_path(rel_path):
     """Return a local Path for serving (local mode only)."""
     rel_path = str(rel_path).replace('\\', '/').lstrip('/')
     filepath = Path(rel_path)
-    if filepath.is_file():
-        return filepath
-    # Index may be stale or VIDEO_DIR changed — try unique basename under video dir.
+    try:
+        if filepath.is_file():
+            return filepath
+    except OSError:
+        pass
+    # Index may be stale or VIDEO_DIR changed — unique basename under video dir.
     name = Path(rel_path).name
-    if name:
-        scan_path = Path(VIDEO_DIR)
-        if scan_path.is_dir():
-            matches = [
-                p for p in scan_path.rglob(name)
-                if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS
-            ]
-            if len(matches) == 1:
-                return matches[0]
+    if not name:
+        return None
+    matches = _video_basename_map().get(name) or []
+    if len(matches) == 1:
+        return matches[0]
     return None
 
 
 def local_media_exists(rel_path):
     if STORAGE_MODE == 'drive':
         return get_drive_storage().exists(rel_path)
-    return resolve_media_path(rel_path) is not None
+    rel_path = str(rel_path).replace('\\', '/').lstrip('/')
+    try:
+        if Path(rel_path).is_file():
+            return True
+    except OSError:
+        return False
+    return False
 
 
 def media_exists(rel_path):
@@ -418,15 +455,56 @@ def _build_month_index(items):
     return by_month
 
 
+def _refresh_in_progress(kind):
+    with _refresh_flags_lock:
+        return bool(_refresh_flags.get(kind))
+
+
+def _schedule_media_refresh(kind):
+    """Scan Google Drive on a worker thread — never on an HTTP request."""
+    with _refresh_flags_lock:
+        if _refresh_flags.get(kind):
+            return False
+        _refresh_flags[kind] = True
+    target = _refresh_videos_background if kind == 'videos' else _refresh_photos_background
+
+    def run():
+        try:
+            target()
+        finally:
+            with _refresh_flags_lock:
+                _refresh_flags[kind] = False
+
+    threading.Thread(target=run, daemon=True, name=f'refresh-{kind}').start()
+    return True
+
+
+def _commit_scan(kind, items):
+    """Keep a larger existing index if Google Drive returned a partial listing."""
+    cache = _video_cache if kind == 'videos' else _photo_cache
+    old = cache['data'] or []
+    if old and len(items) < int(len(old) * 0.9):
+        print(
+            f'   Keeping existing {kind} index ({len(old)} items); '
+            f'scan returned {len(items)} — likely a partial Drive listing'
+        )
+        cache['time'] = time.time()
+        return old
+    months = media_month_summary(items)
+    cache['data'] = items
+    cache['time'] = time.time()
+    _media_by_month[kind] = _build_month_index(items)
+    path = VIDEO_INDEX_PATH if kind == 'videos' else PHOTO_INDEX_PATH
+    _save_disk_index(path, items, months)
+    if kind == 'videos':
+        _invalidate_basename_map()
+    return items
+
+
 def _refresh_videos_background():
     with _index_refresh_lock:
         try:
-            videos = scan_videos('.')
-            months = media_month_summary(videos)
-            _video_cache['data'] = videos
-            _video_cache['time'] = time.time()
-            _media_by_month['videos'] = _build_month_index(videos)
-            _save_disk_index(VIDEO_INDEX_PATH, videos, months)
+            _commit_scan('videos', scan_videos('.'))
         except OSError:
             pass
 
@@ -434,14 +512,39 @@ def _refresh_videos_background():
 def _refresh_photos_background():
     with _index_refresh_lock:
         try:
-            photos = scan_photos('.')
-            months = media_month_summary(photos)
-            _photo_cache['data'] = photos
-            _photo_cache['time'] = time.time()
-            _media_by_month['photos'] = _build_month_index(photos)
-            _save_disk_index(PHOTO_INDEX_PATH, photos, months)
+            _commit_scan('photos', scan_photos('.'))
         except OSError:
             pass
+
+
+def _load_local_media(kind, force=False):
+    """Memory/disk index first; full Drive walk only when we have nothing to show."""
+    cache = _video_cache if kind == 'videos' else _photo_cache
+    ttl = VIDEO_CACHE_TTL if kind == 'videos' else PHOTO_CACHE_TTL
+    index_path = VIDEO_INDEX_PATH if kind == 'videos' else PHOTO_INDEX_PATH
+    legacy_path = LEGACY_VIDEO_INDEX_PATH if kind == 'videos' else LEGACY_PHOTO_INDEX_PATH
+    now = time.time()
+    cached = cache['data']
+
+    if cached is None:
+        items, _months, saved = _load_disk_index(index_path, legacy_path)
+        if items:
+            kept = _filter_local_items(items) if len(items) <= INDEX_EXISTENCE_CHECK_LIMIT else items
+            if kept:
+                cached = kept
+                cache['data'] = kept
+                cache['time'] = saved or now
+                _media_by_month[kind] = _build_month_index(kept)
+            else:
+                print(f'   {kind[:-1].title()} index entries missing on disk — rescanning…')
+
+    if cached is not None:
+        if force:
+            _schedule_media_refresh(kind)
+        return cached
+
+    scanner = scan_videos if kind == 'videos' else scan_photos
+    return _commit_scan(kind, scanner('.'))
 
 
 def get_photos_cached(force=False):
@@ -452,34 +555,7 @@ def get_photos_cached(force=False):
         _photo_cache['time'] = time.time()
         _media_by_month['photos'] = _build_month_index(photos)
         return photos
-    now = time.time()
-    if (
-        not force
-        and _photo_cache['data'] is not None
-        and (now - _photo_cache['time']) < PHOTO_CACHE_TTL
-    ):
-        return _photo_cache['data']
-
-    if not force and _photo_cache['data'] is None:
-        items, months, saved = _load_disk_index(PHOTO_INDEX_PATH, LEGACY_PHOTO_INDEX_PATH)
-        if items:
-            kept = _filter_local_items(items)
-            if kept:
-                _photo_cache['data'] = kept
-                _photo_cache['time'] = now
-                _media_by_month['photos'] = _build_month_index(kept)
-                if saved and (now - saved) > PHOTO_CACHE_TTL:
-                    threading.Thread(target=_refresh_photos_background, daemon=True).start()
-                return kept
-            print('   Photo index entries missing on disk — rescanning…')
-
-    photos = scan_photos('.')
-    months = media_month_summary(photos)
-    _photo_cache['data'] = photos
-    _photo_cache['time'] = now
-    _media_by_month['photos'] = _build_month_index(photos)
-    _save_disk_index(PHOTO_INDEX_PATH, photos, months)
-    return photos
+    return _load_local_media('photos', force=force)
 
 
 def invalidate_photo_cache():
@@ -496,35 +572,7 @@ def get_videos_cached(force=False):
         _video_cache['time'] = time.time()
         _media_by_month['videos'] = _build_month_index(videos)
         return videos
-    now = time.time()
-    if (
-        not force
-        and _video_cache['data'] is not None
-        and (now - _video_cache['time']) < VIDEO_CACHE_TTL
-    ):
-        return _video_cache['data']
-
-    if not force and _video_cache['data'] is None:
-        items, months, saved = _load_disk_index(VIDEO_INDEX_PATH, LEGACY_VIDEO_INDEX_PATH)
-        if items:
-            kept = _filter_local_items(items)
-            if kept:
-                _video_cache['data'] = kept
-                _video_cache['time'] = now
-                _media_by_month['videos'] = _build_month_index(kept)
-                if saved and (now - saved) > VIDEO_CACHE_TTL:
-                    threading.Thread(target=_refresh_videos_background, daemon=True).start()
-                return kept
-            # Stale index from another folder / moved Drive path → never stick on [].
-            print('   Video index entries missing on disk — rescanning…')
-
-    videos = scan_videos('.')
-    months = media_month_summary(videos)
-    _video_cache['data'] = videos
-    _video_cache['time'] = now
-    _media_by_month['videos'] = _build_month_index(videos)
-    _save_disk_index(VIDEO_INDEX_PATH, videos, months)
-    return videos
+    return _load_local_media('videos', force=force)
 
 
 def invalidate_video_cache():
@@ -540,6 +588,50 @@ def invalidate_media_cache():
 
 def _video_cache_key(filepath):
     return hashlib.md5((str(filepath.resolve()) + ':v400webp').encode()).hexdigest()
+
+
+def _cache_key_from_rel(rel_path, variant):
+    """Hash an index path without statting Google Drive (abspath doesn't touch the file)."""
+    rel_path = str(rel_path).replace('\\', '/').lstrip('/')
+    return hashlib.md5((os.path.abspath(rel_path) + variant).encode()).hexdigest()
+
+
+def _mtime_from_query(query):
+    """Thumb URLs send JS milliseconds in ?m=; ignore junk."""
+    raw = (query or {}).get('m', [''])[0]
+    try:
+        value = float(raw or 0)
+    except (TypeError, ValueError):
+        return None
+    if value > 1e12:
+        value /= 1000.0
+    return value or None
+
+
+def get_disk_thumb(cache_key, src_mtime=None):
+    """Serve a cached thumb from memory/disk without touching the original media file."""
+    cached = _thumb_memory_get(cache_key)
+    if cached is not None:
+        data, mime = cached
+        if data and _thumb_magic_ok(data):
+            return cached
+        with _thumb_memory_lock:
+            _thumb_memory.pop(cache_key, None)
+
+    for cache_dir in (THUMB_CACHE_DIR, LEGACY_THUMB_CACHE_DIR):
+        for ext, mime in THUMB_FORMATS:
+            cache_path = cache_dir / (cache_key + ext)
+            try:
+                st = cache_path.stat()
+                if src_mtime and st.st_mtime < src_mtime:
+                    continue
+                data = cache_path.read_bytes()
+            except OSError:
+                continue
+            if data and _thumb_magic_ok(data):
+                _thumb_memory_put(cache_key, data, mime)
+                return data, mime
+    return None
 
 
 def _stream_cache_path(filepath):
@@ -1332,6 +1424,8 @@ def _drain_warm_queue():
         with _active_streams_lock:
             if _active_streams > 0:
                 return
+        if get_disk_thumb(_cache_key_from_rel(rel, ':v400webp')):
+            continue
         filepath = resolve_media_path(rel)
         try:
             if not filepath or not filepath.is_file():
@@ -1369,6 +1463,8 @@ def _prewarm_worker(worker_id=0, worker_count=1):
                     break
                 time.sleep(3)
 
+            if get_disk_thumb(_cache_key_from_rel(item['path'], ':v400webp')):
+                continue
             filepath = resolve_media_path(item['path'])
             try:
                 if not filepath or not filepath.is_file():
@@ -2148,6 +2244,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 })
                 return
             videos = get_videos_cached(force=force)
+            indexing = _refresh_in_progress('videos')
             if summary:
                 respond_json(self, {
                     'total': len(videos),
@@ -2155,7 +2252,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     'days': media_day_summary(videos, month) if month else None,
                     'ffmpeg': bool(_ffmpeg_path),
                     'vthumb': vthumb_available(),
-                    'indexing': False,
+                    'indexing': indexing,
                     'hasMore': False,
                     'error': None,
                 })
@@ -2168,7 +2265,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 'videos': page,
                 'ffmpeg': bool(_ffmpeg_path),
                 'vthumb': vthumb_available(),
-                'indexing': False,
+                'indexing': indexing,
                 'hasMore': (offset + limit) < total,
                 'error': None,
             })
@@ -2216,12 +2313,13 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 })
                 return
             photos = get_photos_cached(force=force)
+            indexing = _refresh_in_progress('photos')
             if summary:
                 respond_json(self, {
                     'total': len(photos),
                     'months': media_month_summary(photos),
                     'days': media_day_summary(photos, month) if month else None,
-                    'indexing': False,
+                    'indexing': indexing,
                     'hasMore': False,
                     'error': None,
                 })
@@ -2232,7 +2330,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 'offset': offset,
                 'limit': limit,
                 'photos': page,
-                'indexing': False,
+                'indexing': indexing,
                 'hasMore': (offset + limit) < total,
                 'error': None,
             })
@@ -2338,6 +2436,19 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 # fetch_thumbnail looks up meta itself — avoid a second Drive round-trip.
                 serve_drive_thumb(self, rel)
                 return
+            query = parse_qs(urlparse(self.path).query)
+            src_mtime = _mtime_from_query(query)
+            cache_key = _cache_key_from_rel(rel, ':400webp')
+            found = get_disk_thumb(cache_key, src_mtime)
+            if found:
+                data, mime = found
+                self.send_response(200)
+                self.send_header('Content-Type', mime)
+                self.send_header('Content-Length', str(len(data)))
+                self.send_header('Cache-Control', THUMB_CACHE_HEADER)
+                self.end_headers()
+                safe_write(self.wfile, data)
+                return
             filepath = resolve_media_path(rel)
             if filepath and filepath.is_file():
                 try:
@@ -2347,24 +2458,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                         (str(filepath.resolve()) + ':400webp').encode()
                     ).hexdigest()
 
-                    found = None
-                    memory_hit = _thumb_memory_get(cache_key)
-                    if memory_hit is not None:
-                        found = memory_hit
-                    else:
-                        src_mtime = filepath.stat().st_mtime
-                        for cache_dir in (THUMB_CACHE_DIR, LEGACY_THUMB_CACHE_DIR):
-                            for ext, ext_mime in THUMB_FORMATS:
-                                candidate = cache_dir / (cache_key + ext)
-                                try:
-                                    if candidate.stat().st_mtime >= src_mtime:
-                                        found = (candidate.read_bytes(), ext_mime)
-                                        _thumb_memory_put(cache_key, *found)
-                                        break
-                                except OSError:
-                                    continue
-                            if found:
-                                break
+                    found = get_disk_thumb(cache_key, filepath.stat().st_mtime)
 
                     if found:
                         data, mime = found
@@ -2416,6 +2510,19 @@ class VideoHandler(SimpleHTTPRequestHandler):
             rel = unquote(path[8:])
             if STORAGE_MODE == 'drive':
                 serve_drive_thumb(self, rel)
+                return
+            query = parse_qs(urlparse(self.path).query)
+            src_mtime = _mtime_from_query(query)
+            cache_key = _cache_key_from_rel(rel, ':v400webp')
+            cached = get_disk_thumb(cache_key, src_mtime)
+            if cached:
+                data, mime = cached
+                self.send_response(200)
+                self.send_header('Content-Type', mime)
+                self.send_header('Content-Length', str(len(data)))
+                self.send_header('Cache-Control', THUMB_CACHE_HEADER)
+                self.end_headers()
+                safe_write(self.wfile, data)
                 return
             filepath = resolve_media_path(rel)
             if filepath and filepath.is_file():

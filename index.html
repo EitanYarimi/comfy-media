@@ -1148,11 +1148,11 @@ let filteredVideos = [];
 let currentVideoIndex = -1;
 const VIDEO_EXTENSIONS = ['.mp4', '.webm', '.ogg', '.mov', '.mkv', '.avi', '.m4v', '.3gp', '.flv', '.wmv'];
 const THUMB_CONCURRENCY = (navigator.connection && navigator.connection.saveData)
-    ? 2
-    : (window.matchMedia('(max-width: 768px)').matches ? 3 : 4);
+    ? 3
+    : (window.matchMedia('(max-width: 768px)').matches ? 6 : 12);
 const THUMB_RETRY_MAX = 2;
-const THUMB_LOAD_MARGIN = '100px';
-const THUMB_UNLOAD_MARGIN = '900px';
+const THUMB_LOAD_MARGIN = '800px';
+const THUMB_UNLOAD_MARGIN = '2400px';
 const VIDEOS_PER_LOAD = 40;
 let pageLoading = false;
 let scrollTicking = false;
@@ -1227,7 +1227,7 @@ function getVideoByVid(vid) {
     return allVideos.find(v => v.name === name);
 }
 const THUMB_URL_VERSION = '4'; // bump when thumb pipeline changes (busts browser cache)
-const APP_BUILD = '2026-09-09-r4';
+const APP_BUILD = '2026-10-01-r1';
 const DISABLE_THUMBS = new URLSearchParams(location.search).has('nothumbs');
 function getVThumbSrc(video) {
     const base = serverBaseUrl + '/vthumb/' + encodeURIComponent(video.path).replace(/%2F/g, '/');
@@ -1728,6 +1728,9 @@ function processThumbLoadQueue() {
 }
 
 function unloadFarThumb(img) {
+    // Cached server thumbs are ~14KB. Unloading them on scroll made the grid
+    // wait on the 4-slot queue every time you moved 900px, which felt frozen.
+    if (useServerVthumb()) return;
     if (!img || img.tagName !== 'IMG') return;
     if (!img.dataset.src) return;
     if (!img.getAttribute('src')) return;
@@ -1767,9 +1770,12 @@ function observeThumbs(root) {
     initThumbObserver();
     const scope = root && root.querySelectorAll ? root : document;
     if (useServerVthumb()) {
-        scope.querySelectorAll('img.thumb-lazy[data-src]').forEach(img => {
-            thumbObserver.observe(img);
-            thumbUnloadObserver.observe(img);
+        const imgs = scope.querySelectorAll('img.thumb-lazy[data-src]');
+        imgs.forEach(img => thumbObserver.observe(img));
+        // IntersectionObserver can wait a frame; queue the first screen now.
+        let n = 0;
+        imgs.forEach(img => {
+            if (n < 48) { queueThumbLoad(img); n += 1; }
         });
     } else if (useClientVideoThumbs()) {
         scope.querySelectorAll('.thumbnail-container[data-needs-thumb]').forEach(el => {
