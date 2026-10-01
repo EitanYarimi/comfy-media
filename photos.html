@@ -434,7 +434,10 @@ document.getElementById('searchInput').addEventListener('input', debounce(filter
 function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 function formatDate(d) { return d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'2-digit' }); }
 function formatSize(b) { if (!b) return '0B'; const k=1024, s=['B','KB','MB','GB'], i=Math.floor(Math.log(b)/Math.log(k)); return (b/Math.pow(k,i)).toFixed(1)+s[i]; }
-function getPhotoByVid(vid) { return allPhotos.find(p => p.name === decodeURIComponent(vid)); }
+function getPhotoByVid(vid) {
+    const key = decodeURIComponent(vid);
+    return allPhotos.find(p => p.path === key || p.name === key);
+}
 function showLoading() { document.getElementById('photoGrid').innerHTML = '<div class="loading-spinner"></div>'; }
 function getThumbSrc(photo) {
     const base = photo.url.replace(serverBaseUrl + '/', serverBaseUrl + '/thumb/');
@@ -451,6 +454,45 @@ function mapPhoto(p) {
         date: new Date(p.modified * 1000),
         url: serverBaseUrl + '/' + encodeURIComponent(p.path).replace(/%2F/g, '/'),
     };
+}
+
+let thumbProgress = null;
+function formatThumbProgress() {
+    if (!thumbProgress || !thumbProgress.total) return '';
+    const cached = thumbProgress.cached || 0;
+    const total = thumbProgress.total;
+    if (cached >= total) return ' · all thumbs cached';
+    return ` · thumbs ${cached.toLocaleString()} / ${total.toLocaleString()}`;
+}
+function setStats(text) {
+    const el = document.getElementById('stats');
+    if (el) el.textContent = text + formatThumbProgress();
+}
+async function refreshThumbStats() {
+    try {
+        const resp = await fetch(`${serverBaseUrl}/api/thumbs`, { cache: 'no-store' });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        thumbProgress = data.photos || null;
+        const el = document.getElementById('stats');
+        if (!el) return;
+        const base = el.textContent.replace(/ · (thumbs \d[\d,]* \/ \d[\d,]*|all thumbs cached)$/, '');
+        if (base && !/^(Scanning|Checking)/.test(base)) el.textContent = base + formatThumbProgress();
+    } catch (err) {}
+}
+if (!window._thumbStatsTimer) {
+    window._thumbStatsTimer = setInterval(refreshThumbStats, 8000);
+}
+let warmRequestTimer = null;
+function requestThumbWarm(photos, reset = false) {
+    if (!photos || !photos.length) return;
+    clearTimeout(warmRequestTimer);
+    const paths = photos.slice(0, 120).map(p => p.path).filter(Boolean);
+    if (!paths.length) return;
+    warmRequestTimer = setTimeout(() => {
+        const qs = (reset ? 'reset=1&' : '') + `paths=${encodeURIComponent(paths.join('\n'))}`;
+        fetch(`${serverBaseUrl}/api/warm?${qs}`, { cache: 'no-store' }).catch(() => {});
+    }, 150);
 }
 
 function registerPhotos(photos) {
@@ -581,6 +623,7 @@ async function loadFeed(append = false) {
             hasMore,
         };
         const added = merged.slice(prevLen);
+        requestThumbWarm(added.length ? added : merged, !append);
         const viewKey = activeMonth || 'all';
         if (append && document.querySelector('#photoGrid .month-grid') && added.length) {
             appendPhotosToMonth(viewKey, added);
@@ -594,6 +637,7 @@ async function loadFeed(append = false) {
             renderGrid();
         }
         if (!append) await fillViewportIfNeeded();
+        refreshThumbStats();
     } catch (err) {
         feedCache.loading = false;
         renderGrid();
@@ -627,6 +671,7 @@ async function loadSearchPhotos(append = false) {
             hasMore: resolveHasMore(data, mergedLen),
         };
         filteredPhotos = searchResults.items;
+        requestThumbWarm(items, !append);
         if (!append) renderGrid();
         else {
             appendPhotosToMonth('search', searchResults.items.slice(prevLen));
@@ -872,11 +917,16 @@ function processThumbQueue() {
             if (ph) ph.style.display = 'flex';
             processThumbQueue();
         };
+        img.decoding = 'async';
+        if (thumbLoadInFlight.size <= 8) img.fetchPriority = 'high';
         img.src = src;
     }
 }
 
 function unloadFarThumb(img) {
+    // /thumb/ responses are small local-cache files. Unloading them makes the
+    // grid ask Google Drive to decode the original PNG again.
+    if (img && img.dataset.src && img.getAttribute('src')) return;
     if (!img || img.tagName !== 'IMG') return;
     if (!img.dataset.src) return;
     if (!img.getAttribute('src')) return;
@@ -1082,7 +1132,7 @@ function onScrollPage() {
 }
 
 function buildPhotoCardHtml(photo) {
-    const vid = encodeURIComponent(photo.name);
+    const vid = encodeURIComponent(photo.path || photo.name);
     return `<div class="photo-card" data-vid="${vid}" onclick="openLightbox('${vid}')">
         <img class="thumb-lazy" data-src="${getThumbSrc(photo)}" alt="${escapeHtml(photo.name)}">
         <div class="photo-overlay">
@@ -1430,42 +1480,65 @@ function toggleSlideshowPause() {
     }
 }
 
+function removePhotoFromState(photo) {
+    if (!photo) return;
+    allPhotos = allPhotos.filter(p => p.path !== photo.path);
+    filteredPhotos = filteredPhotos.filter(p => p.path !== photo.path);
+    feedCache.items = (feedCache.items || []).filter(p => p.path !== photo.path);
+    if (feedCache.total) feedCache.total = Math.max(0, feedCache.total - 1);
+    if (searchResults.items?.length) {
+        searchResults.items = searchResults.items.filter(p => p.path !== photo.path);
+        if (searchResults.total) searchResults.total = Math.max(0, searchResults.total - 1);
+        filteredPhotos = searchResults.items;
+    }
+    if (window._visiblePhotos) {
+        window._visiblePhotos = window._visiblePhotos.filter(p => p.path !== photo.path);
+    }
+    if (totalPhotoCount) totalPhotoCount = Math.max(0, totalPhotoCount - 1);
+    const monthKey = getMonthKey(photo.date instanceof Date ? photo.date : new Date(photo.date));
+    monthSummaries = monthSummaries.map(s => (
+        s.month === monthKey ? { ...s, count: Math.max(0, (s.count || 0) - 1) } : s
+    ));
+    const vid = encodeURIComponent(photo.path || photo.name);
+    const card = document.querySelector(`.photo-card[data-vid="${vid}"]`);
+    if (card) card.remove();
+    updateMonthPicker();
+}
+
 // ========== DELETE ==========
 async function deletePhoto(event, vid) {
     event.stopPropagation();
-    const photo = getPhotoByVid(vid); if(!photo) return;
-    try { const r=await fetch(photo.url,{method:'DELETE'}); if(!r.ok){alert('Failed');return;} } catch(e){alert(e.message);return;}
-    allPhotos.splice(allPhotos.indexOf(photo),1);
-    const fi=filteredPhotos.indexOf(photo); if(fi>-1) filteredPhotos.splice(fi,1);
-    feedCache.items = (feedCache.items || []).filter(p => p.path !== photo.path);
-    if (searchResults.items?.length) {
-        searchResults.items = searchResults.items.filter(p => p.path !== photo.path);
-        filteredPhotos = searchResults.items;
-    }
-    const card=document.querySelector(`.photo-card[data-vid="${vid}"]`); if(card) card.remove();
-    document.getElementById('stats').textContent = searchMode
+    const photo = getPhotoByVid(vid); if (!photo) return;
+    try {
+        const r = await fetch(photo.url, { method: 'DELETE' });
+        if (!r.ok) { alert('Failed to delete'); return; }
+    } catch (e) { alert(e.message); return; }
+    removePhotoFromState(photo);
+    setStats(searchMode
         ? `${searchResults.items.length} of ${searchResults.total} results`
         : (feedCache.hasMore
             ? `${feedCache.items.length} loaded — scroll for more`
-            : `${feedCache.items.length} photos`);
+            : `${feedCache.items.length} photos`));
 }
 
 async function deleteFromLightbox() {
     const photos = getLightboxPhotos();
-    if(currentPhotoIndex<0||!photos.length) return;
-    const photo=photos[currentPhotoIndex]; if(!photo) return;
-    const vid=encodeURIComponent(photo.name);
-    try { const r=await fetch(photo.url,{method:'DELETE'}); if(!r.ok){alert('Failed');return;} } catch(e){alert(e.message);return;}
-    allPhotos.splice(allPhotos.indexOf(photo),1);
-    filteredPhotos.splice(filteredPhotos.indexOf(photo),1);
-    photos.splice(currentPhotoIndex,1);
+    if (currentPhotoIndex < 0 || !photos.length) return;
+    const photo = photos[currentPhotoIndex]; if (!photo) return;
+    try {
+        const r = await fetch(photo.url, { method: 'DELETE' });
+        if (!r.ok) { alert('Failed to delete'); return; }
+    } catch (e) { alert(e.message); return; }
+    photos.splice(currentPhotoIndex, 1);
     if (slideshowActive) slideshowPlaylist = slideshowPlaylist.filter(p => p !== photo);
-    const card=document.querySelector(`.photo-card[data-vid="${vid}"]`); if(card) card.remove();
-    document.getElementById('stats').textContent=`${filteredPhotos.length} of ${allPhotos.length} photos`;
-    if(!photos.length){ stopSlideshow(true); return; }
-    if(currentPhotoIndex>=photos.length) currentPhotoIndex=0;
-    document.getElementById('lightboxImg').src=getFullSrc(photos[currentPhotoIndex]);
-    document.getElementById('lightboxTitle').textContent=photos[currentPhotoIndex].name;
+    removePhotoFromState(photo);
+    setStats(searchMode
+        ? `${searchResults.items.length} of ${searchResults.total} results`
+        : `${feedCache.items.length} photos`);
+    if (!photos.length) { stopSlideshow(true); return; }
+    if (currentPhotoIndex >= photos.length) currentPhotoIndex = 0;
+    document.getElementById('lightboxImg').src = getFullSrc(photos[currentPhotoIndex]);
+    document.getElementById('lightboxTitle').textContent = photos[currentPhotoIndex].name;
     if (slideshowActive) {
         updateSlideshowUI();
         if (!slideshowPaused) scheduleSlideshowAdvance();

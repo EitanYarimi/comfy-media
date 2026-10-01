@@ -397,8 +397,12 @@ def vthumb_available():
 # Limit concurrent thumb work so listing/streaming aren't starved (esp. on Render).
 _vthumb_semaphore = threading.Semaphore(3)
 _drive_thumb_semaphore = threading.Semaphore(3)
-_photo_thumb_semaphore = threading.Semaphore(2)
+_photo_thumb_semaphore = threading.Semaphore(8)
 DRIVE_GRID_THUMB_SIZE = 220
+_photo_ondemand = 0
+_photo_ondemand_lock = threading.Lock()
+_thumb_inflight = {}
+_thumb_inflight_lock = threading.Lock()
 _active_streams = 0
 _active_streams_lock = threading.Lock()
 _faststart_jobs = set()
@@ -586,13 +590,111 @@ def invalidate_media_cache():
     invalidate_video_cache()
 
 
+def _norm_rel(rel_path):
+    return str(rel_path).replace('\\', '/').lstrip('/')
+
+
+def _photo_thumb_on_disk(rel_path):
+    """True if a grid thumb exists, without reading the bytes into memory."""
+    key = _cache_key_from_rel(rel_path, ':400webp')
+    if _thumb_memory_get(key) is not None:
+        return True
+    for cache_dir in (THUMB_CACHE_DIR, LEGACY_THUMB_CACHE_DIR):
+        for ext, _mime in THUMB_FORMATS:
+            try:
+                if (cache_dir / (key + ext)).is_file():
+                    return True
+            except OSError:
+                continue
+    return False
+
+
+def _delete_cached_thumbs(rel_path, filepath=None):
+    keys = [
+        _cache_key_from_rel(rel_path, ':400webp'),
+        _cache_key_from_rel(rel_path, ':v400webp'),
+    ]
+    if filepath is not None:
+        keys.append(_cache_key_from_rel(str(filepath), ':400webp'))
+        keys.append(_cache_key_from_rel(str(filepath), ':v400webp'))
+    for key in set(keys):
+        with _thumb_memory_lock:
+            _thumb_memory.pop(key, None)
+        for cache_dir in (THUMB_CACHE_DIR, LEGACY_THUMB_CACHE_DIR):
+            for ext in ('.webp', '.jpg', '.png', '.jpeg', '.meta.json'):
+                try:
+                    (cache_dir / (key + ext)).unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+
+def _remove_indexed_media(rel_path):
+    """Drop one file from the in-memory + disk index so it cannot reappear."""
+    rel = _norm_rel(rel_path)
+    suffix = Path(rel).suffix.lower()
+    kinds = []
+    if suffix in IMAGE_EXTENSIONS:
+        kinds.append('photos')
+    if suffix in VIDEO_EXTENSIONS:
+        kinds.append('videos')
+    if not kinds:
+        kinds = ['photos', 'videos']
+    removed = False
+    for kind in kinds:
+        cache = _video_cache if kind == 'videos' else _photo_cache
+        items = cache.get('data')
+        if items is None:
+            index_path = VIDEO_INDEX_PATH if kind == 'videos' else PHOTO_INDEX_PATH
+            legacy_path = LEGACY_VIDEO_INDEX_PATH if kind == 'videos' else LEGACY_PHOTO_INDEX_PATH
+            items, _months, saved = _load_disk_index(index_path, legacy_path)
+            items = items or []
+            if items:
+                cache['data'] = items
+                cache['time'] = saved or time.time()
+        kept = [
+            item for item in (items or [])
+            if _norm_rel(item.get('path', '')) != rel
+        ]
+        if len(kept) == len(items or []):
+            continue
+        cache['data'] = kept
+        cache['time'] = time.time()
+        _media_by_month[kind] = _build_month_index(kept)
+        index_path = VIDEO_INDEX_PATH if kind == 'videos' else PHOTO_INDEX_PATH
+        _save_disk_index(index_path, kept, media_month_summary(kept))
+        if kind == 'videos':
+            _invalidate_basename_map()
+        removed = True
+    return removed
+
+
+def delete_local_media(rel_path):
+    """Unlink a local file, drop it from the library index, and purge thumbs."""
+    rel = _norm_rel(rel_path)
+    if not rel or '..' in rel.split('/'):
+        return False
+    filepath = resolve_media_path(rel) or Path(rel)
+    removed_file = False
+    try:
+        if filepath.is_file():
+            filepath.unlink()
+            removed_file = True
+    except OSError:
+        raise
+    removed_index = _remove_indexed_media(rel)
+    _delete_cached_thumbs(rel, filepath)
+    return removed_file or removed_index
+
+
 def _video_cache_key(filepath):
     return hashlib.md5((str(filepath.resolve()) + ':v400webp').encode()).hexdigest()
 
 
 def _cache_key_from_rel(rel_path, variant):
     """Hash an index path without statting Google Drive (abspath doesn't touch the file)."""
-    rel_path = str(rel_path).replace('\\', '/').lstrip('/')
+    rel_path = str(rel_path).replace('\\', '/')
+    if not os.path.isabs(rel_path):
+        rel_path = rel_path.lstrip('/')
     return hashlib.md5((os.path.abspath(rel_path) + variant).encode()).hexdigest()
 
 
@@ -1373,7 +1475,147 @@ def generate_video_thumbnail(filepath):
         return result
 
 
+def _photo_cache_key(filepath):
+    """Hash without Path.resolve() — that stats Google Drive on every lookup."""
+    return _cache_key_from_rel(str(filepath), ':400webp')
+
+
+def _photo_ondemand_begin():
+    global _photo_ondemand
+    with _photo_ondemand_lock:
+        _photo_ondemand += 1
+
+
+def _photo_ondemand_end():
+    global _photo_ondemand
+    with _photo_ondemand_lock:
+        _photo_ondemand = max(0, _photo_ondemand - 1)
+
+
+def _photo_ondemand_busy():
+    with _photo_ondemand_lock:
+        return _photo_ondemand > 0
+
+
+class _InflightThumb:
+    def __init__(self):
+        self.event = threading.Event()
+        self.result = None
+
+
+def _single_flight_photo(cache_key, factory):
+    """One Drive decode per photo; browser + prewarm share the result."""
+    cached = get_disk_thumb(cache_key)
+    if cached:
+        return cached
+    owner = False
+    with _thumb_inflight_lock:
+        slot = _thumb_inflight.get(cache_key)
+        if slot is None:
+            slot = _InflightThumb()
+            _thumb_inflight[cache_key] = slot
+            owner = True
+    if not owner:
+        slot.event.wait(timeout=180)
+        return slot.result or get_disk_thumb(cache_key)
+    try:
+        slot.result = factory()
+        return slot.result
+    finally:
+        slot.event.set()
+        with _thumb_inflight_lock:
+            if _thumb_inflight.get(cache_key) is slot:
+                _thumb_inflight.pop(cache_key, None)
+
+
+def _render_photo_thumbnail(filepath, cache_key):
+    try:
+        from PIL import Image
+        img = Image.open(filepath)
+        if getattr(img, 'format', None) == 'JPEG' and hasattr(img, 'draft'):
+            try:
+                img.draft('RGB', PHOTO_THUMB_SIZE)
+            except Exception:
+                pass
+        if img.mode not in ('RGB', 'L'):
+            img = img.convert('RGB')
+        img.thumbnail(PHOTO_THUMB_SIZE, Image.BILINEAR)
+        buf = io.BytesIO()
+        img.save(buf, format='WEBP', quality=70, method=0)
+        stored = _store_thumb(cache_key, '.webp', buf.getvalue(), 'image/webp')
+        if stored:
+            return stored
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=70)
+        return _store_thumb(cache_key, '.jpg', buf.getvalue(), 'image/jpeg')
+    except Exception:
+        return None
+
+
+def generate_photo_thumbnail(filepath, background=False):
+    """Resize a still to the grid size. Returns (data, mime) or None.
+
+    background=True is for prewarm: skip rather than delay a /thumb/ the
+    grid is waiting on. Opening a PNG off Google Drive File Provider is the
+    slow part (~1–5s cold); don't spend those slots on off-screen files.
+    """
+    cache_key = _photo_cache_key(filepath)
+    cached = get_disk_thumb(cache_key)
+    if cached:
+        return cached
+    if background:
+        if _photo_ondemand_busy():
+            return None
+        with _thumb_inflight_lock:
+            slot = _thumb_inflight.get(cache_key)
+        if slot is not None:
+            slot.event.wait(timeout=180)
+            return slot.result or get_disk_thumb(cache_key)
+        acquired = _photo_thumb_semaphore.acquire(timeout=0.2)
+        if not acquired:
+            return None
+        try:
+            if _photo_ondemand_busy():
+                return get_disk_thumb(cache_key)
+            cached = get_disk_thumb(cache_key)
+            if cached:
+                return cached
+            return _render_photo_thumbnail(filepath, cache_key)
+        finally:
+            _photo_thumb_semaphore.release()
+
+    def factory():
+        cached = get_disk_thumb(cache_key)
+        if cached:
+            return cached
+        with _photo_thumb_semaphore:
+            cached = get_disk_thumb(cache_key)
+            if cached:
+                return cached
+            return _render_photo_thumbnail(filepath, cache_key)
+
+    _photo_ondemand_begin()
+    try:
+        return _single_flight_photo(cache_key, factory)
+    finally:
+        _photo_ondemand_end()
+
+
+def generate_media_thumbnail(filepath, background=False):
+    suffix = filepath.suffix.lower()
+    if suffix in IMAGE_EXTENSIONS:
+        return generate_photo_thumbnail(filepath, background=background)
+    if suffix in VIDEO_EXTENSIONS:
+        return generate_video_thumbnail(filepath)
+    return None
+
+
 _prewarm_state = {'done': 0, 'missing': None, 'running': False}
+_photo_thumb_stats_lock = threading.Lock()
+_photo_thumb_stats = {'cached': 0, 'total': 0}
+_photo_thumb_slices = {}
 
 # Paths the browser is actually showing right now. Filtering jumps to a month or
 # day the sequential prewarm walk has not reached yet, so those grids used to run
@@ -1384,7 +1626,7 @@ _warm_lock = threading.Lock()
 WARM_QUEUE_LIMIT = 600
 
 
-def queue_warm_paths(rel_paths, reset=False):
+def queue_warm_paths(rel_paths, reset=False, front=False):
     """Queue visible video paths ahead of the sequential prewarm walk.
 
     A new view resets the queue so stale months stop competing; later pages of
@@ -1399,7 +1641,10 @@ def queue_warm_paths(rel_paths, reset=False):
             if not rel or rel in _warm_seen:
                 continue
             _warm_seen.add(rel)
-            _warm_queue.append(rel)
+            if front:
+                _warm_queue.insert(0, rel)
+            else:
+                _warm_queue.append(rel)
             added += 1
         while len(_warm_queue) > WARM_QUEUE_LIMIT:
             _warm_seen.discard(_warm_queue.pop())
@@ -1418,24 +1663,42 @@ def _next_warm_path():
 def _drain_warm_queue():
     """Thumbnail whatever the browser just asked for, newest request first."""
     while True:
+        if _photo_ondemand_busy():
+            return
         rel = _next_warm_path()
         if rel is None:
             return
         with _active_streams_lock:
             if _active_streams > 0:
+                queue_warm_paths([rel], reset=False, front=True)
                 return
-        if get_disk_thumb(_cache_key_from_rel(rel, ':v400webp')):
+        rel_l = rel.lower()
+        is_photo = Path(rel_l).suffix in IMAGE_EXTENSIONS
+        variant = ':400webp' if is_photo else ':v400webp'
+        if get_disk_thumb(_cache_key_from_rel(rel, variant)):
             continue
         filepath = resolve_media_path(rel)
         try:
             if not filepath or not filepath.is_file():
                 continue
-            if get_cached_video_thumbnail(filepath):
-                continue
         except OSError:
             continue
-        generate_video_thumbnail(filepath)
-        _prewarm_state['done'] += 1
+        result = generate_media_thumbnail(filepath, background=True)
+        if result:
+            _prewarm_state['done'] += 1
+        elif is_photo and _photo_ondemand_busy():
+            queue_warm_paths([rel], reset=False, front=True)
+            return
+
+
+def _warm_queue_worker():
+    """Keep visible-grid paths ahead of the sequential library walk."""
+    while True:
+        try:
+            _drain_warm_queue()
+        except Exception:
+            pass
+        time.sleep(0.05)
 
 
 def _prewarm_worker(worker_id=0, worker_count=1):
@@ -1487,6 +1750,88 @@ def _prewarm_worker(worker_id=0, worker_count=1):
         for _ in range(60):
             _drain_warm_queue()
             time.sleep(5)
+
+
+def photo_thumb_progress():
+    with _photo_thumb_stats_lock:
+        cached = _photo_thumb_stats.get('cached', 0)
+        if _photo_thumb_slices:
+            cached = max(cached, sum(hits for hits, _seen in _photo_thumb_slices.values()))
+        total = _photo_thumb_stats.get('total', 0)
+    return {
+        'cached': cached,
+        'total': total,
+        'running': bool(PREWARM_ENABLED and STORAGE_MODE != 'drive'),
+    }
+
+
+def _note_photo_slice(worker_id, hits, seen, total=None):
+    with _photo_thumb_stats_lock:
+        _photo_thumb_slices[worker_id] = (hits, seen)
+        if total is not None:
+            _photo_thumb_stats['total'] = total
+        _photo_thumb_stats['cached'] = sum(h for h, _s in _photo_thumb_slices.values())
+
+
+def _prewarm_photos_worker(worker_id=0, worker_count=1):
+    """Walk every still newest-first and write grid thumbs to local disk.
+
+    Yields while the browser is waiting on /thumb/ so the visible month stays
+    first, then resumes until the whole library is cached.
+    """
+    time.sleep(2 + worker_id)
+    while True:
+        try:
+            photos = get_photos_cached()
+        except OSError:
+            time.sleep(60)
+            continue
+        pending = 0
+        hits = 0
+        seen = 0
+        _note_photo_slice(worker_id, 0, 0, total=len(photos))
+        for position, item in enumerate(photos):
+            _drain_warm_queue()
+            if position % worker_count != worker_id:
+                continue
+            seen += 1
+            rel = item.get('path') or ''
+            while not _photo_thumb_on_disk(rel):
+                while _photo_ondemand_busy():
+                    _drain_warm_queue()
+                    time.sleep(0.15)
+                with _active_streams_lock:
+                    streaming = _active_streams > 0
+                if streaming:
+                    time.sleep(1)
+                    continue
+                filepath = resolve_media_path(rel)
+                try:
+                    if not filepath or not filepath.is_file():
+                        break
+                except OSError:
+                    break
+                result = generate_photo_thumbnail(filepath, background=True)
+                if result:
+                    pending += 1
+                    _prewarm_state['done'] += 1
+                    break
+                if not _photo_ondemand_busy():
+                    break
+                time.sleep(0.1)
+            if _photo_thumb_on_disk(rel):
+                hits += 1
+            if seen % 25 == 0:
+                _note_photo_slice(worker_id, hits, seen, total=len(photos))
+        _note_photo_slice(worker_id, hits, seen, total=len(photos))
+        if pending:
+            print(
+                f'   [prewarm] photos {worker_id}: generated {pending} '
+                f'({hits}/{seen} cached in this slice)'
+            )
+        for _ in range(8):
+            _drain_warm_queue()
+            time.sleep(2)
 
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
@@ -2110,13 +2455,15 @@ class VideoHandler(SimpleHTTPRequestHandler):
             send_http_json(self, 403, {'error': 'Delete disabled in cloud/Drive mode'})
             return
         path = unquote(self.path).lstrip('/')
-        if not path or '..' in path:
+        if not path or '..' in path.split('/'):
             send_http_empty(self, 400)
             return
-        filepath = Path(path)
-        if filepath.exists() and filepath.is_file():
-            filepath.unlink()
-            invalidate_media_cache()
+        try:
+            deleted = delete_local_media(path)
+        except OSError as exc:
+            send_http_json(self, 500, {'error': str(exc)})
+            return
+        if deleted:
             send_http_json(self, 200, {'deleted': path})
         else:
             send_http_empty(self, 404)
@@ -2349,6 +2696,11 @@ class VideoHandler(SimpleHTTPRequestHandler):
             respond_json(self, {'queued': queued, 'prewarm': True})
             return
 
+        if path.split('?', 1)[0] == '/api/thumbs':
+            photos = photo_thumb_progress()
+            respond_json(self, {'photos': photos})
+            return
+
         # One random video from the library (All / optional month / search)
         if path.split('?', 1)[0] == '/api/random/video':
             query = parse_qs(urlparse(self.path).query)
@@ -2452,50 +2804,17 @@ class VideoHandler(SimpleHTTPRequestHandler):
             filepath = resolve_media_path(rel)
             if filepath and filepath.is_file():
                 try:
-                    from PIL import Image
-
-                    cache_key = hashlib.md5(
-                        (str(filepath.resolve()) + ':400webp').encode()
-                    ).hexdigest()
-
-                    found = get_disk_thumb(cache_key, filepath.stat().st_mtime)
-
-                    if found:
-                        data, mime = found
-                    else:
-                        with _photo_thumb_semaphore:
-                            img = Image.open(filepath)
-                            if getattr(img, 'format', None) == 'JPEG' and hasattr(img, 'draft'):
-                                try:
-                                    img.draft('RGB', PHOTO_THUMB_SIZE)
-                                except Exception:
-                                    pass
-                            # BILINEAR is much cheaper than LANCZOS for grid previews.
-                            img.thumbnail(PHOTO_THUMB_SIZE, Image.BILINEAR)
-                            buf = io.BytesIO()
-                            try:
-                                img.save(buf, format='WEBP', quality=72)
-                                mime, ext = 'image/webp', '.webp'
-                            except Exception:
-                                if img.mode in ('RGBA', 'P'):
-                                    img = img.convert('RGB')
-                                buf = io.BytesIO()
-                                img.save(buf, format='JPEG', quality=70)
-                                mime, ext = 'image/jpeg', '.jpg'
-                            stored = _store_thumb(cache_key, ext, buf.getvalue(), mime)
-                            if not stored:
-                                send_http_empty(self, 500)
-                                return
-                            data, mime = stored
-
+                    thumb = generate_photo_thumbnail(filepath)
+                    if not thumb:
+                        send_http_empty(self, 500)
+                        return
+                    data, mime = thumb
                     self.send_response(200)
                     self.send_header('Content-Type', mime)
                     self.send_header('Content-Length', str(len(data)))
                     self.send_header('Cache-Control', THUMB_CACHE_HEADER)
                     self.end_headers()
                     safe_write(self.wfile, data)
-                except ImportError:
-                    super().do_GET()
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                     pass
                 except Exception:
@@ -2693,7 +3012,16 @@ if __name__ == '__main__':
                 threading.Thread(
                     target=_prewarm_worker, args=(worker_id, prewarm_workers), daemon=True
                 ).start()
-            print(f'   Thumbnail prewarm: on, {prewarm_workers} idle workers (MEDIA_PREWARM=0 to disable)')
+            photo_workers = 4
+            for worker_id in range(photo_workers):
+                threading.Thread(
+                    target=_prewarm_photos_worker, args=(worker_id, photo_workers), daemon=True
+                ).start()
+            threading.Thread(target=_warm_queue_worker, daemon=True).start()
+            print(
+                f'   Thumbnail prewarm: on, {prewarm_workers} video + {photo_workers} photo '
+                f'workers building the full photo cache (MEDIA_PREWARM=0 to disable)'
+            )
     print(f'   Press Ctrl+C to stop')
     try:
         httpd.serve_forever()
