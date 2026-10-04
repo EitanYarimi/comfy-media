@@ -113,6 +113,14 @@ class WarmQueueTests(unittest.TestCase):
             gen.assert_not_called()
         self.assertEqual(len(video_server._warm_queue), 0)
 
+    def test_promote_moves_an_existing_path_to_the_front(self):
+        video_server.queue_warm_paths(['a.png', 'b.png', 'c.png'])
+        video_server.promote_warm_path('c.png')
+        self.assertEqual(
+            [video_server._next_warm_path() for _ in range(3)],
+            ['c.png', 'a.png', 'b.png'],
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

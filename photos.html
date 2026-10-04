@@ -22,6 +22,16 @@
 
         #dayFilter { padding: 7px 12px; border: 1px solid #2a2a2a; border-radius: 20px; background: #1a1a1a; color: #ccc; font-size: 0.8rem; cursor: pointer; }
         #dayFilter option { background: #1a1a1a; color: #ccc; }
+        .day-stepper { display: none; align-items: center; gap: 2px; }
+        .day-stepper.visible { display: inline-flex; }
+        .day-step {
+            width: 32px; height: 34px; padding: 0;
+            border: 1px solid #2a2a2a; border-radius: 17px;
+            background: #1a1a1a; color: #ccc; font-size: 1.15rem; line-height: 1;
+            cursor: pointer;
+        }
+        .day-step:hover { background: #252525; color: #fff; }
+        .day-step:disabled { opacity: 0.35; cursor: default; }
         #searchInput { padding: 8px 14px; border: 1px solid #2a2a2a; border-radius: 20px; background: #1a1a1a; color: #e0e0e0; font-size: 16px; width: 200px; -webkit-appearance: none; }
         #searchInput:focus { outline: none; border-color: #e60023; }
         #searchInput::placeholder { color: #555; }
@@ -49,24 +59,46 @@
             align-items: start;
         }
 
-        .month-picker {
+        .month-picker-bar {
             position: sticky;
             top: var(--header-h, 56px);
             z-index: 90;
             display: none;
-            gap: 6px;
-            padding: 8px 16px;
+            align-items: center;
+            gap: 4px;
+            padding: 6px 8px;
             max-width: 1800px;
             margin: 0 auto;
-            overflow-x: auto;
             background: rgba(10, 10, 10, 0.92);
             backdrop-filter: blur(8px);
             border-bottom: 1px solid #1a1a1a;
+        }
+        .month-picker-bar.visible { display: flex; }
+        .month-picker {
+            display: flex;
+            flex: 1;
+            min-width: 0;
+            gap: 6px;
+            overflow-x: auto;
             -webkit-overflow-scrolling: touch;
             scrollbar-width: none;
         }
         .month-picker::-webkit-scrollbar { display: none; }
-        .month-picker.visible { display: flex; }
+        .month-nav {
+            flex: 0 0 auto;
+            width: 36px;
+            height: 36px;
+            padding: 0;
+            border: 1px solid #2a2a2a;
+            border-radius: 18px;
+            background: #1a1a1a;
+            color: #eee;
+            font-size: 1.3rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+        .month-nav:hover { background: #252525; color: #fff; }
+        .month-nav:disabled { opacity: 0.3; cursor: default; }
         .month-chip {
             flex: 0 0 auto;
             border: 1px solid #2a2a2a;
@@ -90,8 +122,15 @@
             background: #141414;
             cursor: zoom-in;
             opacity: 1;
+            content-visibility: auto;
+            contain-intrinsic-size: auto 220px;
             transition: transform 0.25s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.25s ease;
             box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
+        }
+        .virt-spacer {
+            width: 100%;
+            pointer-events: none;
+            flex-shrink: 0;
         }
 
         .photo-card:hover {
@@ -100,16 +139,33 @@
             z-index: 5;
         }
 
-        .photo-card img {
+        .photo-card .thumbnail-container {
+            position: relative;
+            width: 100%;
+            overflow: hidden;
+            background: #141414;
+            aspect-ratio: 3 / 4;
+        }
+        .photo-card .thumbnail-placeholder {
+            position: absolute;
+            inset: 0;
+            z-index: 0;
+            background: linear-gradient(135deg, #141414 0%, #1c1c1c 100%);
+        }
+        .photo-card img.thumb-lazy {
+            position: absolute;
+            inset: 0;
+            z-index: 1;
             display: block;
             width: 100%;
-            height: auto;
+            height: 100%;
+            object-fit: cover;
+            opacity: 0;
+            transition: opacity 0.15s ease;
             vertical-align: bottom;
         }
-
-        .photo-card img.thumb-lazy {
-            min-height: 48px;
-            background: linear-gradient(135deg, #141414 0%, #1c1c1c 100%);
+        .photo-card img.thumb-lazy.is-loaded {
+            opacity: 1;
         }
 
         .photo-overlay {
@@ -263,7 +319,8 @@
             .photo-actions { display: none; }
             header { padding: 8px 12px; }
             #searchInput { width: 100%; order: -1; }
-            #dayFilter { flex: 1; }
+            .day-stepper { flex: 1; min-width: 0; }
+            #dayFilter { flex: 1; min-width: 0; }
             .controls { width: 100%; }
         }
         @media (max-width: 768px), (max-height: 520px) {
@@ -354,19 +411,27 @@
 </head>
 <body>
 <header>
-    <nav class="nav"><a href="index.html">Videos</a><a href="photos.html" class="active">Photos</a></nav>
+    <nav class="nav"><a href="index.html">Videos</a><a href="photos.html" class="active">Photos</a><a href="run.html" id="remixNav">Remix</a></nav>
     <div class="controls">
         <input type="text" id="searchInput" placeholder="Search...">
-        <select id="dayFilter" onchange="selectDay(this.value)" style="display:none" aria-label="Filter by day">
-            <option value="">All days</option>
-        </select>
+        <div class="day-stepper" id="dayStepper">
+            <button type="button" class="day-step" id="dayPrevBtn" onclick="shiftDay(-1)" title="Older day" aria-label="Older day">‹</button>
+            <select id="dayFilter" onchange="selectDay(this.value)" aria-label="Filter by day">
+                <option value="">All days</option>
+            </select>
+            <button type="button" class="day-step" id="dayNextBtn" onclick="shiftDay(1)" title="Newer day" aria-label="Newer day">›</button>
+        </div>
         <button class="btn" onclick="startSlideshow(false)" id="slideshowSeqBtn">▶ Slideshow</button>
         <button class="btn" onclick="startSlideshow(true)" id="slideshowRandomBtn">🎲 Random</button>
         <button class="btn" onclick="loadFromServer(false, true)">↻ Refresh</button>
     </div>
 </header>
 <div class="stats" id="stats"></div>
-<div class="month-picker" id="monthPicker" aria-label="Choose month"></div>
+<div class="month-picker-bar" id="monthPickerBar">
+    <button type="button" class="month-nav" id="monthPrevBtn" onclick="shiftMonth(1)" title="Newer month" aria-label="Newer month">‹</button>
+    <div class="month-picker" id="monthPicker" aria-label="Choose month"></div>
+    <button type="button" class="month-nav" id="monthNextBtn" onclick="shiftMonth(-1)" title="Older month" aria-label="Older month">›</button>
+</div>
 <div class="photo-grid" id="photoGrid"><div class="loading-spinner"></div></div>
 
 <div class="lightbox" id="lightbox">
@@ -393,22 +458,30 @@
 
 <script>
 const serverBaseUrl = window.location.origin;
-const PHOTOS_PER_LOAD = 40;
 const SLIDESHOW_INTERVAL = 4000;
 const THUMB_CONCURRENCY = (navigator.connection && navigator.connection.saveData)
     ? 3
-    : (window.matchMedia('(max-width: 768px)').matches ? 6 : 12);
-const THUMB_LOAD_MARGIN = '800px';
+    : 6;
+const THUMB_RETRY_MAX = 16;
+const THUMB_LOAD_MARGIN = '240px';
 const THUMB_UNLOAD_MARGIN = '2400px';
 let pageLoading = false;
 let scrollTicking = false;
 let allPhotos = [], filteredPhotos = [], currentPhotoIndex = -1;
 let monthSummaries = [], daySummaries = [], totalPhotoCount = 0;
-let feedCache = { items: [], total: 0, loading: false, hasMore: true };
+let feedCache = { items: [], total: 0, loading: false, hasMore: true, offset: 0 };
+let pageStore = new Map();
+let measuredRowH = 0;
+let windowToken = 0;
+let daySummaryCache = { month: null, days: [] };
+const thumbSrcCache = new Map();
 let searchMode = false;
 let searchResults = { items: [], total: 0, loading: false, hasMore: false };
 let activeMonth = null; // null = All (continuous chronological feed)
 let activeDay = null;   // null = every day in the selected month
+let lightboxIndex = 0;
+let monthPickerKey = '';
+let dayFilterKey = '';
 let thumbObserver = null;
 let thumbUnloadObserver = null;
 let thumbLoadQueue = [];
@@ -442,7 +515,7 @@ function showLoading() { document.getElementById('photoGrid').innerHTML = '<div 
 function getThumbSrc(photo) {
     const base = photo.url.replace(serverBaseUrl + '/', serverBaseUrl + '/thumb/');
     const m = photo.date instanceof Date ? photo.date.getTime() : 0;
-    return `${base}?v=4&m=${m}`;
+    return `${base}?v=6&m=${m}`;
 }
 function getFullSrc(photo) { return photo.url; }
 
@@ -487,12 +560,12 @@ let warmRequestTimer = null;
 function requestThumbWarm(photos, reset = false) {
     if (!photos || !photos.length) return;
     clearTimeout(warmRequestTimer);
-    const paths = photos.slice(0, 120).map(p => p.path).filter(Boolean);
+    const paths = photos.slice(0, 200).map(p => p.path).filter(Boolean);
     if (!paths.length) return;
     warmRequestTimer = setTimeout(() => {
         const qs = (reset ? 'reset=1&' : '') + `paths=${encodeURIComponent(paths.join('\n'))}`;
         fetch(`${serverBaseUrl}/api/warm?${qs}`, { cache: 'no-store' }).catch(() => {});
-    }, 150);
+    }, 0);
 }
 
 function registerPhotos(photos) {
@@ -538,7 +611,11 @@ async function loadFromServer(isPoll = false, forceRefresh = false) {
         allPhotos = [];
         monthSummaries = [];
         daySummaries = [];
-        feedCache = { items: [], total: 0, loading: false, hasMore: true };
+        feedCache = { items: [], total: 0, loading: false, hasMore: true, offset: 0 };
+        pageStore = new Map();
+        measuredRowH = 0;
+        windowToken += 1;
+        daySummaryCache = { month: null, days: [] };
         searchMode = false;
         searchResults = { items: [], total: 0, loading: false, hasMore: false };
         activeMonth = null;
@@ -573,7 +650,9 @@ async function loadFromServer(isPoll = false, forceRefresh = false) {
         if (searchMode) {
             await loadSearchPhotos(false);
         } else if (!isPoll || !feedCache.items.length) {
+            const days = activeMonth ? loadDaySummary(activeMonth) : Promise.resolve();
             await loadFeed(false);
+            await days;
         } else {
             const stats = document.getElementById('stats');
             if (stats && !data.indexing) {
@@ -589,60 +668,153 @@ async function loadFromServer(isPoll = false, forceRefresh = false) {
     }
 }
 
-async function loadFeed(append = false) {
-    if (feedCache.loading) return;
-    if (!append && feedCache.items.length) {
-        renderGrouped();
-        updateMonthPicker();
-        updateDayFilter();
+function photoGridColumnCount() {
+    const w = window.innerWidth;
+    if (w <= 480) return 3;
+    if (w <= 768) return 4;
+    if (w <= 1200) return 6;
+    if (w <= 1600) return 7;
+    return 8;
+}
+
+/** One viewport of tiles plus a row below the fold — never a whole month. */
+function photosPageSize() {
+    const cols = photoGridColumnCount();
+    const rowH = photoRowHeight();
+    const rows = Math.max(2, Math.ceil(window.innerHeight / rowH)) + 1;
+    return Math.max(cols * 2, Math.min(80, cols * rows));
+}
+
+function photoRowHeight() {
+    if (measuredRowH > 0) return measuredRowH;
+    const card = document.querySelector('#photoGrid .photo-card');
+    const grid = document.querySelector('#photoGrid .month-grid');
+    if (card) {
+        const styles = grid ? getComputedStyle(grid) : null;
+        const gap = styles ? (parseFloat(styles.rowGap) || parseFloat(styles.gap) || 10) : 10;
+        measuredRowH = Math.max(80, card.getBoundingClientRect().height + gap);
+        return measuredRowH;
+    }
+    const cols = photoGridColumnCount();
+    const width = (grid && grid.clientWidth) || Math.min(1800, window.innerWidth - 32);
+    const gap = window.innerWidth <= 480 ? 6 : (window.innerWidth <= 1200 ? 8 : 10);
+    const cell = Math.max(72, (width - gap * (cols - 1)) / cols);
+    return cell * (4 / 3) + gap;
+}
+
+function photoStoreKey(offset) {
+    return `${activeMonth || 'all'}|${activeDay || ''}|${offset}`;
+}
+
+function resetPhotoWindow() {
+    pageStore = new Map();
+    measuredRowH = 0;
+    windowToken += 1;
+    feedCache = { items: [], total: 0, loading: false, hasMore: true, offset: 0 };
+}
+
+function desiredWindowOffset(total, limit) {
+    const cols = photoGridColumnCount();
+    const rowH = photoRowHeight();
+    const section = document.querySelector('#photoGrid .month-section');
+    let listY = 0;
+    if (section) {
+        const sectionTop = section.getBoundingClientRect().top + window.scrollY;
+        listY = Math.max(0, window.scrollY - sectionTop);
+    }
+    const startRow = Math.max(0, Math.floor(listY / Math.max(rowH, 1)) - 1);
+    let offset = startRow * cols;
+    if (total) offset = Math.min(offset, Math.max(0, total - limit));
+    return Math.floor(offset / cols) * cols;
+}
+
+function windowSpacers(itemCount) {
+    const cols = photoGridColumnCount();
+    const rowH = photoRowHeight();
+    const offset = feedCache.offset || 0;
+    const total = feedCache.total || itemCount;
+    const topRows = Math.floor(offset / cols);
+    const shownRows = Math.ceil((itemCount || 0) / cols);
+    const totalRows = Math.ceil((total || 0) / cols);
+    const botRows = Math.max(0, totalRows - topRows - shownRows);
+    return { top: topRows * rowH, bot: botRows * rowH };
+}
+
+async function fetchPhotoPage(offset, limit) {
+    const qs = (activeMonth ? `month=${encodeURIComponent(activeMonth)}&` : '') +
+        (activeMonth && activeDay ? `day=${encodeURIComponent(activeDay)}&` : '') +
+        `offset=${offset}&limit=${limit}`;
+    const resp = await fetch(`${serverBaseUrl}/api/photos?${qs}`);
+    if (!resp.ok) throw new Error('Failed to load feed');
+    const data = await resp.json();
+    const items = (data.photos || []).map(mapPhoto);
+    registerPhotos(items);
+    const total = data.total != null ? data.total : offset + items.length;
+    return {
+        items,
+        total,
+        hasMore: offset + items.length < total,
+    };
+}
+
+function showPhotoWindow(offset, page) {
+    feedCache = {
+        items: page.items,
+        total: page.total,
+        loading: false,
+        hasMore: offset + page.items.length < page.total,
+        offset,
+    };
+    requestThumbWarm(page.items, true);
+    renderGrid();
+    refreshThumbStats();
+}
+
+async function ensureWindow(depth = 0) {
+    if (searchMode) return;
+    const limit = photosPageSize();
+    const offset = desiredWindowOffset(feedCache.total, limit);
+    if (
+        feedCache.items.length
+        && feedCache.offset === offset
+        && feedCache.total > 0
+        && !feedCache.loading
+    ) return;
+    const cached = pageStore.get(photoStoreKey(offset));
+    if (cached) {
+        showPhotoWindow(offset, cached);
         return;
     }
-    if (append && feedCache.hasMore === false) return;
-
-    const offset = feedCache.items.length;
+    if (feedCache.loading) return;
+    const token = ++windowToken;
     feedCache.loading = true;
-    if (!append) renderGrid();
-
+    if (!feedCache.items.length) renderGrid();
     try {
-        const qs = (activeMonth ? `month=${encodeURIComponent(activeMonth)}&` : '') +
-            (activeMonth && activeDay ? `day=${encodeURIComponent(activeDay)}&` : '') +
-            `offset=${offset}&limit=${PHOTOS_PER_LOAD}`;
-        const resp = await fetch(`${serverBaseUrl}/api/photos?${qs}`);
-        if (!resp.ok) throw new Error('Failed to load feed');
-        const data = await resp.json();
-        const items = (data.photos || []).map(mapPhoto);
-        registerPhotos(items);
-        const prevLen = feedCache.items.length;
-        const merged = feedCache.items.concat(items.filter(item => !feedCache.items.some(p => p.path === item.path)));
-        let hasMore = resolveHasMore(data, merged.length);
-        if (!items.length) hasMore = false;
-        feedCache = {
-            items: merged,
-            total: data.total != null ? data.total : merged.length,
-            loading: false,
-            hasMore,
-        };
-        const added = merged.slice(prevLen);
-        requestThumbWarm(added.length ? added : merged, !append);
-        const viewKey = activeMonth || 'all';
-        if (append && document.querySelector('#photoGrid .month-grid') && added.length) {
-            appendPhotosToMonth(viewKey, added);
-            const stats = document.getElementById('stats');
-            if (stats) {
-                stats.textContent = feedCache.hasMore
-                    ? `${feedCache.items.length} loaded — scroll for more`
-                    : `${feedCache.items.length} photos`;
-            }
-        } else {
-            renderGrid();
+        const page = await fetchPhotoPage(offset, limit);
+        pageStore.set(photoStoreKey(offset), page);
+        while (pageStore.size > 24) {
+            const oldest = pageStore.keys().next().value;
+            pageStore.delete(oldest);
         }
-        if (!append) await fillViewportIfNeeded();
-        refreshThumbStats();
+        if (token !== windowToken) return;
+        showPhotoWindow(offset, page);
+        const card = document.querySelector('#photoGrid .photo-card');
+        if (card && depth < 2) {
+            measuredRowH = 0;
+            photoRowHeight();
+            const aligned = desiredWindowOffset(page.total, limit);
+            if (aligned !== offset) await ensureWindow(depth + 1);
+        }
     } catch (err) {
+        if (token !== windowToken) return;
         feedCache.loading = false;
         renderGrid();
         alert('Failed to load photos: ' + err.message);
     }
+}
+
+async function loadFeed(append = false) {
+    await ensureWindow();
 }
 
 async function loadSearchPhotos(append = false) {
@@ -656,7 +828,7 @@ async function loadSearchPhotos(append = false) {
 
     try {
         const resp = await fetch(
-            `${serverBaseUrl}/api/photos?q=${encodeURIComponent(q)}&offset=${offset}&limit=${PHOTOS_PER_LOAD}`
+            `${serverBaseUrl}/api/photos?q=${encodeURIComponent(q)}&offset=${offset}&limit=${photosPageSize()}`
         );
         if (!resp.ok) throw new Error('Search failed');
         const data = await resp.json();
@@ -747,7 +919,6 @@ async function restoreFiltersFromUrl() {
     activeMonth = month;
     activeDay = day;
     daySummaries = [];
-    if (month) await loadDaySummary(month);
 }
 
 function getMonthKey(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; }
@@ -760,33 +931,76 @@ function getDayLabel(k) {
 
 function updateDayFilter() {
     const sel = document.getElementById('dayFilter');
+    const stepper = document.getElementById('dayStepper');
+    const prevBtn = document.getElementById('dayPrevBtn');
+    const nextBtn = document.getElementById('dayNextBtn');
     if (!sel) return;
-    if (searchMode || !activeMonth || !daySummaries.length) {
-        sel.style.display = 'none';
+    if (searchMode || !activeMonth) {
+        if (stepper) stepper.classList.remove('visible');
         sel.innerHTML = '<option value="">All days</option>';
+        dayFilterKey = '';
+        if (prevBtn) prevBtn.disabled = true;
+        if (nextBtn) nextBtn.disabled = true;
         return;
     }
-    const monthTotal = daySummaries.reduce((sum, d) => sum + (d.count || 0), 0);
-    sel.innerHTML = `<option value="">All days${monthTotal ? ` (${monthTotal})` : ''}</option>` +
-        daySummaries.map(d =>
-            `<option value="${d.day}"${d.day === activeDay ? ' selected' : ''}>${getDayLabel(d.day)}${d.count ? ` (${d.count})` : ''}</option>`
-        ).join('');
+    if (stepper) stepper.classList.add('visible');
+    if (!daySummaries.length) {
+        sel.innerHTML = '<option value="">All days</option>';
+        dayFilterKey = '';
+        if (prevBtn) prevBtn.disabled = true;
+        if (nextBtn) nextBtn.disabled = true;
+        return;
+    }
+    const daysKey = daySummaries.map(d => `${d.day}:${d.count || 0}`).join(',');
+    if (daysKey !== dayFilterKey) {
+        dayFilterKey = daysKey;
+        const monthTotal = daySummaries.reduce((sum, d) => sum + (d.count || 0), 0);
+        sel.innerHTML = `<option value="">All days${monthTotal ? ` (${monthTotal})` : ''}</option>` +
+            daySummaries.map(d =>
+                `<option value="${d.day}">${getDayLabel(d.day)}${d.count ? ` (${d.count})` : ''}</option>`
+            ).join('');
+    }
     sel.value = activeDay || '';
-    sel.style.display = '';
+    const idx = activeDay ? daySummaries.findIndex(d => d.day === activeDay) : -1;
+    // Newest-first list: higher index is older, lower index is newer.
+    if (prevBtn) prevBtn.disabled = idx >= daySummaries.length - 1;
+    if (nextBtn) nextBtn.disabled = idx <= 0;
+}
+
+async function shiftDay(dir) {
+    if (searchMode || !activeMonth || !daySummaries.length) return;
+    const days = daySummaries.map(d => d.day);
+    let idx = activeDay ? days.indexOf(activeDay) : -1;
+    if (idx < 0) {
+        if (dir > 0) return;
+        idx = 0;
+    } else {
+        idx -= dir;
+    }
+    if (idx < 0 || idx >= days.length) return;
+    await selectDay(days[idx]);
 }
 
 async function loadDaySummary(monthKey) {
-    daySummaries = [];
     if (!monthKey) {
+        daySummaries = [];
+        daySummaryCache = { month: null, days: [] };
         updateDayFilter();
         return;
     }
+    if (daySummaryCache.month === monthKey) {
+        daySummaries = daySummaryCache.days;
+        updateDayFilter();
+        return;
+    }
+    daySummaries = [];
     try {
         const resp = await fetch(`${serverBaseUrl}/api/photos?summary=1&month=${encodeURIComponent(monthKey)}`);
         if (resp.ok) {
             const data = await resp.json();
-            if (monthKey !== activeMonth) return; // month changed while loading
+            if (monthKey !== activeMonth) return;
             daySummaries = data.days || [];
+            daySummaryCache = { month: monthKey, days: daySummaries };
         }
     } catch (_) {
         daySummaries = [];
@@ -799,7 +1013,7 @@ async function selectDay(value) {
     const next = value || null;
     if (next === activeDay) return;
     activeDay = next;
-    feedCache = { items: [], total: 0, loading: false, hasMore: true };
+    resetPhotoWindow();
     updateDayFilter();
     syncFilterUrl(false);
     window.scrollTo({ top: 0, behavior: 'auto' });
@@ -814,26 +1028,93 @@ function syncHeaderOffset() {
 
 const onResizeFill = debounce(() => {
     syncHeaderOffset();
+    measuredRowH = 0;
     fillViewportIfNeeded();
 }, 150);
+
+function setMonthPickerVisible(on) {
+    const bar = document.getElementById('monthPickerBar');
+    const picker = document.getElementById('monthPicker');
+    if (bar) bar.classList.toggle('visible', on);
+    if (picker) picker.classList.toggle('visible', on);
+}
+
+function updateMonthNavButtons() {
+    const prevBtn = document.getElementById('monthPrevBtn');
+    const nextBtn = document.getElementById('monthNextBtn');
+    if (!prevBtn || !nextBtn) return;
+    const keys = monthSummaries.map(s => s.month);
+    if (!keys.length) {
+        prevBtn.disabled = true;
+        nextBtn.disabled = true;
+        return;
+    }
+    const idx = activeMonth ? keys.indexOf(activeMonth) : -1;
+    // Chips run All → newest → older, so ‹ is newer and › is older.
+    prevBtn.disabled = idx < 0;
+    nextBtn.disabled = idx >= keys.length - 1;
+}
+
+async function shiftMonth(dir) {
+    if (searchMode || !monthSummaries.length) return;
+    const keys = monthSummaries.map(s => s.month);
+    let idx = activeMonth ? keys.indexOf(activeMonth) : -1;
+    if (idx < 0) {
+        if (dir > 0) return;
+        idx = 0;
+    } else {
+        idx -= dir;
+        if (idx < 0) {
+            await selectMonth('all');
+            return;
+        }
+    }
+    if (idx < 0 || idx >= keys.length) return;
+    await selectMonth(keys[idx]);
+}
 
 function updateMonthPicker() {
     const picker = document.getElementById('monthPicker');
     if (!picker) return;
     if (searchMode || (monthSummaries.length < 1 && !totalPhotoCount && !feedCache.items.length)) {
-        picker.classList.remove('visible');
+        setMonthPickerVisible(false);
         picker.innerHTML = '';
+        monthPickerKey = '';
+        updateMonthNavButtons();
         return;
     }
-    const allActive = activeMonth === null;
-    let html = `<button type="button" class="month-chip${allActive ? ' active' : ''}" data-month="all" onclick="selectMonth('all')">All${totalPhotoCount ? `<span class="chip-count">${totalPhotoCount}</span>` : ''}</button>`;
-    html += monthSummaries.map(s => {
-        const active = s.month === activeMonth;
-        return `<button type="button" class="month-chip${active ? ' active' : ''}" data-month="${s.month}" onclick="selectMonth('${s.month}')">${getMonthLabel(s.month)}${s.count ? `<span class="chip-count">${s.count}</span>` : ''}</button>`;
-    }).join('');
-    picker.innerHTML = html;
-    picker.classList.add('visible');
+    const signature = `${totalPhotoCount}|${monthSummaries.map(s => `${s.month}:${s.count || 0}`).join(',')}`;
+    if (signature !== monthPickerKey) {
+        const keepScroll = picker.scrollLeft;
+        monthPickerKey = signature;
+        const allActive = activeMonth === null;
+        let html = `<button type="button" class="month-chip${allActive ? ' active' : ''}" data-month="all" onclick="selectMonth('all')">All${totalPhotoCount ? `<span class="chip-count">${totalPhotoCount}</span>` : ''}</button>`;
+        html += monthSummaries.map(s => {
+            const active = s.month === activeMonth;
+            return `<button type="button" class="month-chip${active ? ' active' : ''}" data-month="${s.month}" onclick="selectMonth('${s.month}')">${getMonthLabel(s.month)}${s.count ? `<span class="chip-count">${s.count}</span>` : ''}</button>`;
+        }).join('');
+        picker.innerHTML = html;
+        picker.scrollLeft = keepScroll;
+    } else {
+        picker.querySelectorAll('.month-chip').forEach(btn => {
+            const key = btn.dataset.month;
+            btn.classList.toggle('active', key === 'all' ? !activeMonth : key === activeMonth);
+        });
+    }
+    setMonthPickerVisible(true);
+    updateMonthNavButtons();
     syncHeaderOffset();
+}
+
+function scrollActiveMonthIntoView() {
+    const picker = document.getElementById('monthPicker');
+    const active = picker?.querySelector('.month-chip.active');
+    if (!active) return;
+    const pr = picker.getBoundingClientRect();
+    const r = active.getBoundingClientRect();
+    if (r.left < pr.left + 8 || r.right > pr.right - 8) {
+        active.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'auto' });
+    }
 }
 
 async function selectMonth(key) {
@@ -843,12 +1124,13 @@ async function selectMonth(key) {
     activeMonth = next;
     activeDay = null;
     daySummaries = [];
-    feedCache = { items: [], total: 0, loading: false, hasMore: true };
+    resetPhotoWindow();
     updateMonthPicker();
+    scrollActiveMonthIntoView();
     updateDayFilter();
     syncFilterUrl(false);
     window.scrollTo({ top: 0, behavior: 'auto' });
-    const days = loadDaySummary(next);
+    const days = next ? loadDaySummary(next) : Promise.resolve();
     await loadFeed(false);
     await days;
 }
@@ -879,11 +1161,57 @@ function releaseThumbSlot(img) {
     return true;
 }
 
-function queueThumbLoad(img) {
-    if (!img || !img.dataset.src) return;
+function thumbIsShown(img) {
+    return !!(img && img.classList.contains('is-loaded') && img.naturalWidth >= 8);
+}
+
+function thumbNeedsLoad(img) {
+    if (!img || !img.dataset.src) return false;
+    if (thumbLoadInFlight.has(img)) return false;
+    if (thumbIsShown(img)) return false;
+    return true;
+}
+
+function byDomOrder(a, b) {
+    if (a === b) return 0;
+    const pos = a.compareDocumentPosition(b);
+    if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+    if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+    return 0;
+}
+
+function queueThumbLoad(img, front = false) {
+    if (!thumbNeedsLoad(img)) return;
     if (img.dataset.thumbQueued === '1') return;
+    if (img.classList.contains('is-loaded') && img.naturalWidth < 8) {
+        img.classList.remove('is-loaded');
+        img.removeAttribute('src');
+    }
     img.dataset.thumbQueued = '1';
-    thumbLoadQueue.push(img);
+    if (front) thumbLoadQueue.unshift(img);
+    else thumbLoadQueue.push(img);
+    thumbLoadQueue.sort(byDomOrder);
+    processThumbQueue();
+}
+
+function retryPhotoThumb(img, retries) {
+    releaseThumbSlot(img);
+    if (retries < THUMB_RETRY_MAX && img.isConnected && img.dataset.src) {
+        img.dataset.thumbRetries = String(retries + 1);
+        img.dataset.thumbQueued = '0';
+        img.classList.remove('is-loaded');
+        img.removeAttribute('src');
+        setTimeout(() => queueThumbLoad(img), 150);
+    }
+    processThumbQueue();
+}
+
+function markPhotoThumbLoaded(img) {
+    img.classList.add('is-loaded');
+    img.removeAttribute('data-thumb-retries');
+    const vid = img.closest('.photo-card')?.dataset.vid;
+    if (vid && img.dataset.src) thumbSrcCache.set(decodeURIComponent(vid), img.dataset.src);
+    releaseThumbSlot(img);
     processThumbQueue();
 }
 
@@ -895,31 +1223,28 @@ function processThumbQueue() {
         if (!img) continue;
         img.dataset.thumbQueued = '0';
         if (!img.isConnected) continue;
+        if (thumbLoadInFlight.has(img)) continue;
         const src = img.dataset.src;
         if (!src) continue;
-        if (img.getAttribute('src') === src) continue;
+        if (thumbIsShown(img)) continue;
+        if (img.getAttribute('src') === src && img.naturalWidth >= 8) continue;
         thumbLoadInFlight.add(img);
-        // A request that never completes must not hold its slot forever.
+        const retries = parseInt(img.dataset.thumbRetries || '0', 10);
         thumbLoadTimers.set(img, setTimeout(() => {
             if (releaseThumbSlot(img)) processThumbQueue();
         }, THUMB_LOAD_TIMEOUT));
-        img.onload = () => {
-            releaseThumbSlot(img);
-            const ph = img.parentElement?.querySelector('.thumbnail-placeholder');
-            if (ph) ph.style.display = 'none';
-            processThumbQueue();
-        };
-        img.onerror = () => {
-            releaseThumbSlot(img);
-            img.removeAttribute('data-src');
-            img.style.display = 'none';
-            const ph = img.parentElement?.querySelector('.thumbnail-placeholder');
-            if (ph) ph.style.display = 'flex';
-            processThumbQueue();
-        };
         img.decoding = 'async';
-        if (thumbLoadInFlight.size <= 8) img.fetchPriority = 'high';
+        img.onload = () => {
+            if (!img.isConnected) {
+                if (releaseThumbSlot(img)) processThumbQueue();
+                return;
+            }
+            if (img.naturalWidth >= 8) markPhotoThumbLoaded(img);
+            else retryPhotoThumb(img, retries);
+        };
+        img.onerror = () => retryPhotoThumb(img, retries);
         img.src = src;
+        if (img.complete && img.naturalWidth >= 8) markPhotoThumbLoaded(img);
     }
 }
 
@@ -963,9 +1288,12 @@ function observeThumbs(root) {
     const scope = root && root.querySelectorAll ? root : document;
     const imgs = scope.querySelectorAll('img.thumb-lazy[data-src]');
     imgs.forEach(img => thumbObserver.observe(img));
-    let n = 0;
+    const extra = 240;
     imgs.forEach(img => {
-        if (n < 48) { queueThumbLoad(img); n += 1; }
+        if (!thumbNeedsLoad(img)) return;
+        const box = img.getBoundingClientRect();
+        if (box.bottom < -extra || box.top > window.innerHeight + extra) return;
+        queueThumbLoad(img);
     });
 }
 
@@ -1010,8 +1338,8 @@ function renderGrid() {
         stats.textContent = '';
         return;
     }
-    stats.textContent = feedCache.hasMore
-        ? `${feedCache.items?.length || 0} loaded — scroll for more`
+    stats.textContent = feedCache.total
+        ? `${(feedCache.offset || 0) + 1}–${(feedCache.offset || 0) + (feedCache.items?.length || 0)} of ${feedCache.total}`
         : `${feedCache.items?.length || 0} photos`;
     updateMonthPicker();
     updateDayFilter();
@@ -1053,7 +1381,10 @@ function renderGrouped() {
         loading = !!feedCache.loading;
     }
 
-    let html = `<div class="month-section" data-month="${key}"><div class="month-grid">`;
+    const spacers = (!searchMode && items.length) ? windowSpacers(items.length) : { top: 0, bot: 0 };
+    let html = `<div class="month-section" data-month="${key}">`;
+    if (spacers.top) html += `<div class="virt-spacer" style="height:${Math.round(spacers.top)}px"></div>`;
+    html += `<div class="month-grid">`;
     if (loading && !items.length) {
         html += '<div class="month-loading" style="grid-column:1/-1"><div class="loading-spinner"></div></div>';
     } else if (!items.length) {
@@ -1064,7 +1395,9 @@ function renderGrouped() {
     } else {
         items.forEach(photo => { html += buildPhotoCardHtml(photo); });
     }
-    html += '</div></div>';
+    html += '</div>';
+    if (spacers.bot) html += `<div class="virt-spacer" style="height:${Math.round(spacers.bot)}px"></div>`;
+    html += '</div>';
 
     window._visiblePhotos = items.slice();
     grid.innerHTML = html;
@@ -1103,21 +1436,9 @@ async function maybeLoadMore() {
     return after > before;
 }
 
-/** Keep fetching until the page can scroll (or nothing left). Needed on tall screens. */
-let fillViewportRunning = false;
 async function fillViewportIfNeeded() {
-    if (fillViewportRunning) return;
-    fillViewportRunning = true;
-    try {
-        for (let i = 0; i < 25; i++) {
-            if (!viewportNeedsMore() || !feedHasMore()) break;
-            const loaded = await maybeLoadMore();
-            if (!loaded) break;
-            await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-        }
-    } finally {
-        fillViewportRunning = false;
-    }
+    if (searchMode) return;
+    await ensureWindow();
 }
 
 function onScrollPage() {
@@ -1125,16 +1446,22 @@ function onScrollPage() {
     scrollTicking = true;
     requestAnimationFrame(() => {
         scrollTicking = false;
-        maybeLoadMore().then(loaded => {
-            if (loaded) fillViewportIfNeeded();
-        });
+        if (searchMode) maybeLoadMore();
+        else ensureWindow();
     });
 }
 
 function buildPhotoCardHtml(photo) {
     const vid = encodeURIComponent(photo.path || photo.name);
+    const thumb = getThumbSrc(photo);
+    const cached = thumbSrcCache.get(photo.path);
+    const srcAttr = cached ? ` src="${cached}"` : '';
+    const loadedClass = cached ? ' is-loaded' : '';
     return `<div class="photo-card" data-vid="${vid}" onclick="openLightbox('${vid}')">
-        <img class="thumb-lazy" data-src="${getThumbSrc(photo)}" alt="${escapeHtml(photo.name)}">
+        <div class="thumbnail-container">
+            <div class="thumbnail-placeholder"></div>
+            <img class="thumb-lazy${loadedClass}" data-src="${thumb}"${srcAttr} alt="${escapeHtml(photo.name)}">
+        </div>
         <div class="photo-overlay">
             <div class="photo-actions">
                 <button class="action-btn" onclick="showInfoFor(event,'${vid}')" title="Info">ⓘ</button>
@@ -1150,17 +1477,24 @@ function getLightboxPhotos() {
     return slideshowActive ? slideshowPlaylist : (window._visiblePhotos || filteredPhotos);
 }
 
+function showLightboxPhoto(photo) {
+    if (!photo) return;
+    document.getElementById('lightboxImg').src = getFullSrc(photo);
+    document.getElementById('lightboxTitle').textContent = photo.name;
+    showLightboxChrome(true);
+    hideInfo();
+}
+
 function openLightbox(vid) {
     if (slideshowActive) stopSlideshow(false);
     thumbLoadPaused = true;
     const photo = getPhotoByVid(vid); if (!photo) return;
-    currentPhotoIndex = (window._visiblePhotos||filteredPhotos).indexOf(photo);
-    document.getElementById('lightboxImg').src = getFullSrc(photo);
-    document.getElementById('lightboxTitle').textContent = photo.name;
+    const vis = window._visiblePhotos || filteredPhotos;
+    currentPhotoIndex = vis.indexOf(photo);
+    lightboxIndex = (feedCache.offset || 0) + Math.max(0, currentPhotoIndex);
+    showLightboxPhoto(photo);
     document.getElementById('lightbox').classList.add('active');
     document.body.style.overflow = 'hidden';
-    showLightboxChrome(true);
-    hideInfo();
 }
 
 function closeLightbox() {
@@ -1173,18 +1507,54 @@ function closeLightbox() {
     processThumbQueue();
 }
 
-function navPhoto(dir) {
-    const photos = getLightboxPhotos(); if(!photos.length) return;
-    let i = currentPhotoIndex + dir;
-    if (i<0) i=photos.length-1; if (i>=photos.length) i=0;
-    currentPhotoIndex = i;
-    document.getElementById('lightboxImg').src = getFullSrc(photos[i]);
-    document.getElementById('lightboxTitle').textContent = photos[i].name;
-    showLightboxChrome(true);
-    hideInfo();
-    if (slideshowActive && !slideshowPaused) {
-        clearSlideshowTimers();
-        scheduleSlideshowAdvance();
+async function navPhoto(dir) {
+    if (slideshowActive) {
+        const photos = getLightboxPhotos();
+        if (!photos.length) return;
+        let i = currentPhotoIndex + dir;
+        if (i < 0) i = photos.length - 1;
+        if (i >= photos.length) i = 0;
+        currentPhotoIndex = i;
+        showLightboxPhoto(photos[i]);
+        if (!slideshowPaused) {
+            clearSlideshowTimers();
+            scheduleSlideshowAdvance();
+        }
+        return;
+    }
+    if (searchMode) {
+        const photos = searchResults.items || [];
+        if (!photos.length) return;
+        let i = currentPhotoIndex + dir;
+        if (i < 0) i = photos.length - 1;
+        if (i >= photos.length) i = 0;
+        currentPhotoIndex = i;
+        lightboxIndex = i;
+        showLightboxPhoto(photos[i]);
+        return;
+    }
+    const total = feedCache.total || 0;
+    if (!total) return;
+    let next = lightboxIndex + dir;
+    if (next < 0) next = total - 1;
+    if (next >= total) next = 0;
+    const vis = window._visiblePhotos || [];
+    const local = next - (feedCache.offset || 0);
+    if (local >= 0 && local < vis.length) {
+        lightboxIndex = next;
+        currentPhotoIndex = local;
+        showLightboxPhoto(vis[local]);
+        return;
+    }
+    try {
+        const page = await fetchPhotoPage(next, 1);
+        const photo = page.items[0];
+        if (!photo) return;
+        lightboxIndex = next;
+        currentPhotoIndex = 0;
+        showLightboxPhoto(photo);
+    } catch (err) {
+        console.warn('Next photo failed', err);
     }
 }
 
@@ -1227,13 +1597,6 @@ async function fetchMonthPlaylist(monthKey) {
         const haveAll = feedCache.hasMore === false
             || (feedCache.total > 0 && feedCache.items.length >= feedCache.total);
         if (haveAll) return feedCache.items.slice();
-    }
-    if (monthKey === activeMonth && feedCache.items.length) {
-        const summary = activeDay
-            ? daySummaries.find(d => d.day === activeDay)
-            : monthSummaries.find(s => s.month === monthKey);
-        if (summary && feedCache.items.length >= summary.count) return feedCache.items.slice();
-        if (feedCache.hasMore === false) return feedCache.items.slice();
     }
     const params = {};
     if (monthKey && monthKey !== 'all') params.month = monthKey;
@@ -1736,7 +2099,7 @@ window.addEventListener('scroll', onScrollPage, { passive: true });
 window.addEventListener('resize', onResizeFill);
 window.addEventListener('popstate', async () => {
     if (slideshowActive) stopSlideshow(true);
-    feedCache = { items: [], total: 0, loading: false, hasMore: true };
+    resetPhotoWindow();
     searchResults = { items: [], total: 0, loading: false, hasMore: false };
     const input = document.getElementById('searchInput');
     if (input && !readFilterUrl().q) input.value = '';
@@ -1747,6 +2110,17 @@ window.addEventListener('popstate', async () => {
     else await loadFeed(false);
 });
 syncHeaderOffset();
+
+(function bindRemixNav() {
+    try { sessionStorage.setItem('comfyRemixFrom', 'photos.html'); } catch (_) {}
+    const path = sessionStorage.getItem('comfyRemixPath');
+    const a = document.getElementById('remixNav');
+    if (a && path) a.href = 'run.html?path=' + encodeURIComponent(path);
+    try {
+        const st = JSON.parse(sessionStorage.getItem('comfyRemixState') || '{}');
+        if (st.runActive && a) a.classList.add('remix-live');
+    } catch (_) {}
+})();
 </script>
 </body>
 </html>

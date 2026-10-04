@@ -168,6 +168,16 @@
         }
 
         #sortOrder option, #dayFilter option { background: #1a1a1a; color: #ccc; }
+        .day-stepper { display: none; align-items: center; gap: 2px; }
+        .day-stepper.visible { display: inline-flex; }
+        .day-step {
+            width: 32px; height: 34px; padding: 0;
+            border: 1px solid #2a2a2a; border-radius: 17px;
+            background: #1a1a1a; color: #ccc; font-size: 1.15rem; line-height: 1;
+            cursor: pointer;
+        }
+        .day-step:hover { background: #252525; color: #fff; }
+        .day-step:disabled { opacity: 0.35; cursor: default; }
 
         .nav { display: flex; gap: 4px; }
         .nav a {
@@ -256,24 +266,46 @@
             align-items: start;
         }
 
-        .month-picker {
+        .month-picker-bar {
             position: sticky;
             top: var(--header-h, 56px);
             z-index: 90;
             display: none;
-            gap: 6px;
-            padding: 8px 16px;
+            align-items: center;
+            gap: 4px;
+            padding: 6px 8px;
             max-width: 1800px;
             margin: 0 auto;
-            overflow-x: auto;
             background: rgba(10, 10, 10, 0.92);
             backdrop-filter: blur(8px);
             border-bottom: 1px solid #1a1a1a;
+        }
+        .month-picker-bar.visible { display: flex; }
+        .month-picker {
+            display: flex;
+            flex: 1;
+            min-width: 0;
+            gap: 6px;
+            overflow-x: auto;
             -webkit-overflow-scrolling: touch;
             scrollbar-width: none;
         }
         .month-picker::-webkit-scrollbar { display: none; }
-        .month-picker.visible { display: flex; }
+        .month-nav {
+            flex: 0 0 auto;
+            width: 36px;
+            height: 36px;
+            padding: 0;
+            border: 1px solid #2a2a2a;
+            border-radius: 18px;
+            background: #1a1a1a;
+            color: #eee;
+            font-size: 1.3rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+        .month-nav:hover { background: #252525; color: #fff; }
+        .month-nav:disabled { opacity: 0.3; cursor: default; }
         .month-chip {
             flex: 0 0 auto;
             border: 1px solid #2a2a2a;
@@ -831,6 +863,7 @@
             #sortOrder, #dayFilter {
                 flex: 1;
             }
+            .day-stepper { flex: 1; min-width: 0; }
             .video-grid {
                 padding: 6px 10px 40px;
             }
@@ -1033,13 +1066,18 @@
     <nav class="nav">
         <a href="index.html" class="active">Videos</a>
         <a href="photos.html">Photos</a>
+        <a href="run.html" id="remixNav">Remix</a>
     </nav>
     <div class="logo"></div>
     <div class="controls">
         <input type="text" id="searchInput" placeholder="Search...">
-        <select id="dayFilter" onchange="selectDay(this.value)" style="display:none" aria-label="Filter by day">
-            <option value="">All days</option>
-        </select>
+        <div class="day-stepper" id="dayStepper">
+            <button type="button" class="day-step" id="dayPrevBtn" onclick="shiftDay(-1)" title="Older day" aria-label="Older day">‹</button>
+            <select id="dayFilter" onchange="selectDay(this.value)" aria-label="Filter by day">
+                <option value="">All days</option>
+            </select>
+            <button type="button" class="day-step" id="dayNextBtn" onclick="shiftDay(1)" title="Newer day" aria-label="Newer day">›</button>
+        </div>
         <select id="sortOrder" onchange="sortAndRender()">
             <option value="newest">Newest</option>
             <option value="oldest">Oldest</option>
@@ -1059,7 +1097,11 @@
 
 <div class="stats" id="stats"></div>
 <div id="appBuild" style="padding:0 20px 8px;font-size:0.65rem;color:#444;letter-spacing:0.02em"></div>
-<div class="month-picker" id="monthPicker" aria-label="Choose month"></div>
+<div class="month-picker-bar" id="monthPickerBar">
+    <button type="button" class="month-nav" id="monthPrevBtn" onclick="shiftMonth(1)" title="Newer month" aria-label="Newer month">‹</button>
+    <div class="month-picker" id="monthPicker" aria-label="Choose month"></div>
+    <button type="button" class="month-nav" id="monthNextBtn" onclick="shiftMonth(-1)" title="Older month" aria-label="Older month">›</button>
+</div>
 
 <div class="video-grid" id="videoGrid">
     <div class="empty-state">
@@ -1124,6 +1166,7 @@
         </div>
         <div class="modal-chrome-cluster">
             <button type="button" class="modal-close modal-close--pause" id="slideshowPauseBtn" style="display:none" onclick="toggleSlideshowPause()" title="Pause slideshow" aria-label="Pause slideshow">⏸</button>
+            <button type="button" class="modal-close modal-close--info" onclick="openRemixFromModal()" title="Remix on Colab" aria-label="Remix on Colab">↻</button>
             <button type="button" class="modal-close modal-close--info" onclick="toggleVideoInfo()" title="Info" aria-label="Video info">ⓘ</button>
             <button type="button" class="modal-close modal-close--delete" onclick="deleteFromModal()" title="Delete" aria-label="Delete">🗑</button>
             <button type="button" class="modal-close modal-close--close" onclick="closeModal()" title="Close" aria-label="Close">✕</button>
@@ -1164,6 +1207,8 @@ let thumbQueue = [];
 let thumbActive = 0;
 let activeMonth = null; // null = All (continuous chronological feed)
 let activeDay = null;   // null = every day in the selected month
+let monthPickerKey = '';
+let dayFilterKey = '';
 let monthSummaries = [], daySummaries = [], totalVideoCount = 0;
 let feedCache = { items: [], total: 0, loading: false, hasMore: true };
 let searchMode = false;
@@ -1561,19 +1606,53 @@ function getDayLabel(key) {
 
 function updateDayFilter() {
     const sel = document.getElementById('dayFilter');
+    const stepper = document.getElementById('dayStepper');
+    const prevBtn = document.getElementById('dayPrevBtn');
+    const nextBtn = document.getElementById('dayNextBtn');
     if (!sel) return;
-    if (searchMode || !activeMonth || !daySummaries.length) {
-        sel.style.display = 'none';
+    if (searchMode || !activeMonth) {
+        if (stepper) stepper.classList.remove('visible');
         sel.innerHTML = '<option value="">All days</option>';
+        dayFilterKey = '';
+        if (prevBtn) prevBtn.disabled = true;
+        if (nextBtn) nextBtn.disabled = true;
         return;
     }
-    const monthTotal = daySummaries.reduce((sum, d) => sum + (d.count || 0), 0);
-    sel.innerHTML = `<option value="">All days${monthTotal ? ` (${monthTotal})` : ''}</option>` +
-        daySummaries.map(d =>
-            `<option value="${d.day}"${d.day === activeDay ? ' selected' : ''}>${getDayLabel(d.day)}${d.count ? ` (${d.count})` : ''}</option>`
-        ).join('');
+    if (stepper) stepper.classList.add('visible');
+    if (!daySummaries.length) {
+        sel.innerHTML = '<option value="">All days</option>';
+        dayFilterKey = '';
+        if (prevBtn) prevBtn.disabled = true;
+        if (nextBtn) nextBtn.disabled = true;
+        return;
+    }
+    const daysKey = daySummaries.map(d => `${d.day}:${d.count || 0}`).join(',');
+    if (daysKey !== dayFilterKey) {
+        dayFilterKey = daysKey;
+        const monthTotal = daySummaries.reduce((sum, d) => sum + (d.count || 0), 0);
+        sel.innerHTML = `<option value="">All days${monthTotal ? ` (${monthTotal})` : ''}</option>` +
+            daySummaries.map(d =>
+                `<option value="${d.day}">${getDayLabel(d.day)}${d.count ? ` (${d.count})` : ''}</option>`
+            ).join('');
+    }
     sel.value = activeDay || '';
-    sel.style.display = '';
+    const idx = activeDay ? daySummaries.findIndex(d => d.day === activeDay) : -1;
+    if (prevBtn) prevBtn.disabled = idx >= daySummaries.length - 1;
+    if (nextBtn) nextBtn.disabled = idx <= 0;
+}
+
+async function shiftDay(dir) {
+    if (searchMode || !activeMonth || !daySummaries.length) return;
+    const days = daySummaries.map(d => d.day);
+    let idx = activeDay ? days.indexOf(activeDay) : -1;
+    if (idx < 0) {
+        if (dir > 0) return;
+        idx = 0;
+    } else {
+        idx -= dir;
+    }
+    if (idx < 0 || idx >= days.length) return;
+    await selectDay(days[idx]);
 }
 
 async function loadDaySummary(monthKey) {
@@ -1618,23 +1697,89 @@ const onResizeFill = debounce(() => {
     fillViewportIfNeeded();
 }, 150);
 
+function setMonthPickerVisible(on) {
+    const bar = document.getElementById('monthPickerBar');
+    const picker = document.getElementById('monthPicker');
+    if (bar) bar.classList.toggle('visible', on);
+    if (picker) picker.classList.toggle('visible', on);
+}
+
+function updateMonthNavButtons() {
+    const prevBtn = document.getElementById('monthPrevBtn');
+    const nextBtn = document.getElementById('monthNextBtn');
+    if (!prevBtn || !nextBtn) return;
+    const keys = monthSummaries.map(s => s.month);
+    if (!keys.length) {
+        prevBtn.disabled = true;
+        nextBtn.disabled = true;
+        return;
+    }
+    const idx = activeMonth ? keys.indexOf(activeMonth) : -1;
+    // Chips run All → newest → older, so ‹ is newer and › is older.
+    prevBtn.disabled = idx < 0;
+    nextBtn.disabled = idx >= keys.length - 1;
+}
+
+async function shiftMonth(dir) {
+    if (searchMode || !monthSummaries.length) return;
+    const keys = monthSummaries.map(s => s.month);
+    let idx = activeMonth ? keys.indexOf(activeMonth) : -1;
+    if (idx < 0) {
+        if (dir > 0) return;
+        idx = 0;
+    } else {
+        idx -= dir;
+        if (idx < 0) {
+            await selectMonth('all');
+            return;
+        }
+    }
+    if (idx < 0 || idx >= keys.length) return;
+    await selectMonth(keys[idx]);
+}
+
 function updateMonthPicker() {
     const picker = document.getElementById('monthPicker');
     if (!picker) return;
     if (searchMode || (monthSummaries.length < 1 && !totalVideoCount && !feedCache.items.length)) {
-        picker.classList.remove('visible');
+        setMonthPickerVisible(false);
         picker.innerHTML = '';
+        monthPickerKey = '';
+        updateMonthNavButtons();
         return;
     }
-    const allActive = activeMonth === null;
-    let html = `<button type="button" class="month-chip${allActive ? ' active' : ''}" data-month="all" onclick="selectMonth('all')">All${totalVideoCount ? `<span class="chip-count">${totalVideoCount}</span>` : ''}</button>`;
-    html += monthSummaries.map(s => {
-        const active = s.month === activeMonth;
-        return `<button type="button" class="month-chip${active ? ' active' : ''}" data-month="${s.month}" onclick="selectMonth('${s.month}')">${getMonthLabel(s.month)}${s.count ? `<span class="chip-count">${s.count}</span>` : ''}</button>`;
-    }).join('');
-    picker.innerHTML = html;
-    picker.classList.add('visible');
+    const signature = `${totalVideoCount}|${monthSummaries.map(s => `${s.month}:${s.count || 0}`).join(',')}`;
+    if (signature !== monthPickerKey) {
+        const keepScroll = picker.scrollLeft;
+        monthPickerKey = signature;
+        const allActive = activeMonth === null;
+        let html = `<button type="button" class="month-chip${allActive ? ' active' : ''}" data-month="all" onclick="selectMonth('all')">All${totalVideoCount ? `<span class="chip-count">${totalVideoCount}</span>` : ''}</button>`;
+        html += monthSummaries.map(s => {
+            const active = s.month === activeMonth;
+            return `<button type="button" class="month-chip${active ? ' active' : ''}" data-month="${s.month}" onclick="selectMonth('${s.month}')">${getMonthLabel(s.month)}${s.count ? `<span class="chip-count">${s.count}</span>` : ''}</button>`;
+        }).join('');
+        picker.innerHTML = html;
+        picker.scrollLeft = keepScroll;
+    } else {
+        picker.querySelectorAll('.month-chip').forEach(btn => {
+            const key = btn.dataset.month;
+            btn.classList.toggle('active', key === 'all' ? !activeMonth : key === activeMonth);
+        });
+    }
+    setMonthPickerVisible(true);
+    updateMonthNavButtons();
     syncHeaderOffset();
+}
+
+function scrollActiveMonthIntoView() {
+    const picker = document.getElementById('monthPicker');
+    const active = picker?.querySelector('.month-chip.active');
+    if (!active) return;
+    const pr = picker.getBoundingClientRect();
+    const r = active.getBoundingClientRect();
+    if (r.left < pr.left + 8 || r.right > pr.right - 8) {
+        active.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'auto' });
+    }
 }
 
 async function selectMonth(key) {
@@ -1646,6 +1791,7 @@ async function selectMonth(key) {
     daySummaries = [];
     feedCache = { items: [], total: 0, loading: false, hasMore: true };
     updateMonthPicker();
+    scrollActiveMonthIntoView();
     updateDayFilter();
     syncFilterUrl(false);
     window.scrollTo({ top: 0, behavior: 'auto' });
@@ -1984,6 +2130,7 @@ function buildVideoCardHtml(video) {
             <div class="play-overlay"><div class="play-btn"></div></div>
             <div class="video-overlay">
                 <div class="video-actions">
+                    <button type="button" class="action-btn" data-action="remix" data-path="${pathEnc}" title="Remix">↻</button>
                     <button type="button" class="action-btn" data-action="info" data-path="${pathEnc}" title="Info">ⓘ</button>
                     <button type="button" class="action-btn action-btn--delete" data-action="delete" data-path="${pathEnc}" title="Delete">✕</button>
                 </div>
@@ -2627,12 +2774,18 @@ function closeModal() {
     processThumbLoadQueue();
 }
 
+function openRemixFromModal() {
+    const video = modalPlaylist[currentVideoIndex];
+    if (!video) return;
+    window.location.href = 'run.html?path=' + encodeURIComponent(video.path);
+}
+
 function toggleVideoInfo() {
     const panel = document.getElementById('videoInfoPanel');
     if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
     const video = modalPlaylist[currentVideoIndex];
     if (!video) return;
-    panel.innerHTML = `<strong>Name:</strong> ${escapeHtml(video.name)} &nbsp;&nbsp; <strong>Size:</strong> ${formatSize(video.size)} &nbsp;&nbsp; <strong>Modified:</strong> ${video.date.toLocaleString()}`;
+    panel.innerHTML = `<strong>Name:</strong> ${escapeHtml(video.name)} &nbsp;&nbsp; <strong>Size:</strong> ${formatSize(video.size)} &nbsp;&nbsp; <strong>Modified:</strong> ${video.date.toLocaleString()} &nbsp;&nbsp; <a href="run.html?path=${encodeURIComponent(video.path)}" style="color:#e60023">Remix</a>`;
     panel.style.display = 'block';
     setTimeout(() => { panel.style.display = 'none'; }, 5000);
 }
@@ -3034,9 +3187,11 @@ document.getElementById('videoGrid').addEventListener('click', (e) => {
             const video = getVideoByPath(pathEnc);
             if (!video) return;
             const panel = document.getElementById('videoInfoPanel');
-            panel.innerHTML = `<strong>Name:</strong> ${escapeHtml(video.name)} &nbsp;&nbsp; <strong>Size:</strong> ${formatSize(video.size)} &nbsp;&nbsp; <strong>Duration:</strong> ${video.duration ? formatDuration(video.duration) : '?'} &nbsp;&nbsp; <strong>Modified:</strong> ${video.date.toLocaleString()}`;
+            panel.innerHTML = `<strong>Name:</strong> ${escapeHtml(video.name)} &nbsp;&nbsp; <strong>Size:</strong> ${formatSize(video.size)} &nbsp;&nbsp; <strong>Duration:</strong> ${video.duration ? formatDuration(video.duration) : '?'} &nbsp;&nbsp; <strong>Modified:</strong> ${video.date.toLocaleString()} &nbsp;&nbsp; <a href="run.html?path=${pathEnc}" style="color:#e60023">Remix</a>`;
             panel.style.display = 'block';
             setTimeout(() => { panel.style.display = 'none'; }, 5000);
+        } else if (btn.dataset.action === 'remix') {
+            window.location.href = 'run.html?path=' + pathEnc;
         } else if (btn.dataset.action === 'delete') {
             deleteVideoByPath(e, pathEnc);
         }
@@ -3087,6 +3242,17 @@ window.addEventListener('popstate', async () => {
 });
 syncHeaderOffset();
 loadFromServer();
+
+(function bindRemixNav() {
+    try { sessionStorage.setItem('comfyRemixFrom', 'index.html'); } catch (_) {}
+    const path = sessionStorage.getItem('comfyRemixPath');
+    const a = document.getElementById('remixNav');
+    if (a && path) a.href = 'run.html?path=' + encodeURIComponent(path);
+    try {
+        const st = JSON.parse(sessionStorage.getItem('comfyRemixState') || '{}');
+        if (st.runActive && a) a.classList.add('remix-live');
+    } catch (_) {}
+})();
 
 document.addEventListener('visibilitychange', () => {
     const modalOpen = document.getElementById('modalOverlay').classList.contains('active');

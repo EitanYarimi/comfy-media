@@ -80,5 +80,25 @@ class WarmRequestTests(unittest.TestCase):
         self.assertIn("reset ? 'reset=1&' : ''", src)
 
 
+class DateNavTests(unittest.TestCase):
+    def pages(self):
+        for name in PAGES:
+            yield name, (ROOT / name).read_text()
+
+    def test_month_step_buttons_exist(self):
+        for name, src in self.pages():
+            self.assertIn('id="monthPrevBtn"', src, name)
+            self.assertIn('id="monthNextBtn"', src, name)
+            self.assertIn('function shiftMonth', src, name)
+            self.assertIn('onclick="shiftMonth(1)"', src, name)
+            self.assertIn('onclick="shiftMonth(-1)"', src, name)
+
+    def test_day_step_buttons_exist(self):
+        for name, src in self.pages():
+            self.assertIn('id="dayPrevBtn"', src, name)
+            self.assertIn('id="dayNextBtn"', src, name)
+            self.assertIn('function shiftDay', src, name)
+
+
 if __name__ == '__main__':
     unittest.main()

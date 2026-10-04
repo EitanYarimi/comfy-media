@@ -1,0 +1,2200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta http-equiv="Cache-Control" content="no-cache">
+    <title>Remix · ComfyUI</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif; background: #0a0a0a; color: #e0e0e0; min-height: 100vh; }
+        header { background: #111; padding: 10px 16px; display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 100; border-bottom: 1px solid #1e1e1e; flex-wrap: wrap; }
+        .nav { display: flex; gap: 4px; }
+        .nav a { padding: 6px 12px; border-radius: 5px; font-size: 0.8rem; color: #888; text-decoration: none; }
+        .nav a:hover { background: #1a1a1a; color: #ccc; }
+        .nav a.active { background: #e60023; color: #fff; }
+        .nav a.remix-live { box-shadow: inset 0 -2px 0 #e60023; }
+        .wrap { max-width: 920px; margin: 0 auto; padding: 20px 16px 64px; }
+        h1 { font-size: 1.15rem; margin-bottom: 6px; }
+        .muted { color: #777; font-size: 0.8rem; margin-bottom: 16px; }
+        .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+        label { display: block; font-size: 0.75rem; color: #999; margin-bottom: 6px; }
+        input[type=text], input[type=number], input[type=url], textarea, select {
+            width: 100%; padding: 8px 12px; border: 1px solid #2a2a2a; border-radius: 10px;
+            background: #141414; color: #e0e0e0; font-size: 0.85rem; font-family: inherit;
+        }
+        textarea { min-height: 110px; resize: vertical; line-height: 1.4; }
+        textarea.prompt {
+            min-height: 220px; font-size: 1.02rem; line-height: 1.5;
+            padding: 12px 14px; border-color: #333;
+        }
+        details.section-box.prompts-section {
+            border-color: #2c2c2c; background: #141414; padding: 12px 14px 14px;
+        }
+        details.section-box.prompts-section > summary {
+            color: #ddd; font-size: 0.82rem; margin-bottom: 8px;
+        }
+        details.field.prompt-field {
+            border-color: #2a2a2a; background: #1a1a1a; margin-bottom: 14px;
+        }
+        details.field.prompt-field > summary {
+            font-size: 0.92rem; color: #fff; font-weight: 600; align-items: center;
+        }
+        .role-tag {
+            font-size: 0.62rem; letter-spacing: 0.06em; text-transform: uppercase;
+            padding: 2px 6px; border-radius: 6px; border: 1px solid #333; color: #aaa; flex: 0 0 auto;
+        }
+        .prompt-field.role-positive .role-tag { color: #7dce82; border-color: #2a4a2c; }
+        .prompt-field.role-negative .role-tag { color: #f07178; border-color: #4a2020; }
+        details.field { margin-bottom: 10px; border: 1px solid #1e1e1e; border-radius: 10px; padding: 0; background: #101010; }
+        details.field > summary {
+            cursor: pointer; list-style: none; padding: 10px 12px;
+            font-size: 0.78rem; color: #ccc; display: flex; gap: 10px; align-items: baseline;
+        }
+        details.field > summary::-webkit-details-marker { display: none; }
+        details.field > summary::before { content: '▸'; color: #666; width: 12px; flex: 0 0 12px; }
+        details.field[open] > summary::before { content: '▾'; }
+        details.field .field-preview { color: #666; font-weight: 400; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        details.field[open] .field-preview { display: none; }
+        details.field .field-body { padding: 0 12px 12px; }
+        details.section-box { margin: 16px 0; border: 1px solid #1e1e1e; border-radius: 12px; padding: 8px 12px; }
+        details.section-box > summary { cursor: pointer; color: #888; font-size: 0.75rem; letter-spacing: 0.04em; text-transform: uppercase; }
+        .stop-hint { font-size: 0.72rem; color: #666; margin: 0 0 8px; }
+        .outputs {
+            display: flex; flex-direction: column; gap: 16px;
+            margin-top: 22px;
+        }
+        .output-pair .preview-label { font-size: 0.72rem; color: #888; margin-bottom: 8px; }
+        .output-pair-row { display: flex; flex-wrap: nowrap; gap: 14px; align-items: stretch; }
+        .output-slot {
+            position: relative; margin: 0;
+            background: #101010; border: 1px solid #222; border-radius: 14px;
+            overflow: hidden; cursor: zoom-in;
+            display: flex; flex-direction: column;
+        }
+        .output-slot .media-frame {
+            flex: 1; min-height: 180px; display: flex;
+            align-items: center; justify-content: center;
+            background: #0b0b0b;
+        }
+        .output-slot.still { width: min(58vw, 440px); max-width: 440px; height: 228px; }
+        .output-slot.still img {
+            display: block; max-width: 100%; max-height: 180px;
+            width: auto; height: auto; object-fit: contain;
+            pointer-events: none; background: transparent;
+        }
+        .output-slot.video { width: 148px; flex: 0 0 148px; height: 228px; }
+        .output-slot.video video {
+            display: block; width: 100%; height: 180px;
+            object-fit: cover; pointer-events: none; background: #0b0b0b;
+        }
+        .output-slot.placeholder { cursor: default; }
+        .output-slot.placeholder.video { width: 148px; flex: 0 0 148px; height: 228px; }
+        .output-slot.placeholder .ph-box {
+            width: calc(100% - 16px); height: 164px; margin: 8px;
+            border: 1px dashed #333; border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+            color: #666; font-size: 0.72rem; letter-spacing: 0.02em;
+            background: #0d0d0d;
+        }
+        .output-slot figcaption, .output-card figcaption {
+            font-size: 0.68rem; color: #777; padding: 6px 10px 10px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .output-slot .thumb-play {
+            position: absolute; top: 0; left: 0; right: 0; height: 180px;
+            display: flex; align-items: center; justify-content: center;
+            color: #fff; font-size: 1.4rem; text-shadow: 0 1px 8px #000;
+            pointer-events: none; background: linear-gradient(transparent 40%, rgba(0,0,0,.35));
+        }
+        .media-frame.load-fail::after {
+            content: 'Image unavailable'; color: #666; font-size: 0.72rem;
+        }
+        img.broken { display: none !important; }
+        .expand-btn {
+            position: absolute; top: 8px; right: 8px; z-index: 2;
+            padding: 4px 8px; border: 1px solid #333; border-radius: 8px;
+            background: rgba(0,0,0,.7); color: #eee; font-size: 0.7rem; cursor: pointer;
+        }
+        .expand-btn:hover { background: rgba(40,40,40,.9); }
+        .media-lightbox {
+            position: fixed; inset: 0; z-index: 400;
+            background: rgba(0,0,0,.9);
+            display: flex; align-items: center; justify-content: center;
+            padding: 28px 16px 16px;
+        }
+        .media-lightbox[hidden] { display: none; }
+        .media-lightbox .lb-stage { max-width: 96vw; max-height: 92vh; }
+        .media-lightbox img, .media-lightbox video {
+            max-width: 96vw; max-height: 92vh; object-fit: contain;
+            background: #000; border-radius: 8px;
+        }
+        .media-lightbox .lb-close {
+            position: absolute; top: 12px; right: 14px;
+            padding: 6px 12px; border: 1px solid #333; border-radius: 8px;
+            background: #1a1a1a; color: #eee; cursor: pointer; font-size: 0.8rem;
+        }
+        .runs-wrap { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+        .runs-wrap label { margin: 0; white-space: nowrap; }
+        #runCount { width: 4.4rem; padding: 8px; }
+        .check-wrap {
+            display: flex; align-items: center; gap: 6px; margin: 0;
+            font-size: 0.75rem; color: #999; white-space: nowrap; cursor: pointer;
+        }
+        .check-wrap input[type=checkbox] { width: auto; margin: 0; accent-color: #e60023; }
+        .url-input { flex: 1; min-width: 220px; }
+        .btn { padding: 8px 14px; border: 1px solid #2a2a2a; border-radius: 20px; background: #1a1a1a; color: #ccc; font-size: 0.8rem; cursor: pointer; }
+        .btn:hover { background: #252525; }
+        .btn--primary { background: #e60023; border-color: #e60023; color: #fff; }
+        .btn--primary:hover { background: #cc001f; }
+        .btn--stop { color: #f07178; border-color: #4a2020; }
+        .btn--stop:not(:disabled):hover { background: #2a1212; color: #ffd0d3; }
+        .standby-list { margin: 0 0 10px; }
+        .standby-item {
+            display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+            padding: 8px 10px; margin-bottom: 6px; border: 1px dashed #333;
+            border-radius: 10px; background: #121212; font-size: 0.78rem; color: #bbb;
+        }
+        .standby-item strong { color: #e0e0e0; }
+        .standby-item .wait { color: #c9a227; }
+        .run-tabs {
+            display: flex; gap: 6px; flex-wrap: wrap;
+            margin: 8px 0 10px; padding-bottom: 2px;
+        }
+        .run-tab {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 6px 10px; border: 1px solid #2a2a2a; border-radius: 10px;
+            background: #141414; color: #bbb; font-size: 0.75rem; cursor: pointer;
+        }
+        .run-tab:hover { background: #1c1c1c; color: #eee; }
+        .run-tab.active { border-color: #e60023; color: #fff; background: #1a1012; }
+        .run-tab .tab-hint { font-size: 0.62rem; letter-spacing: 0.04em; text-transform: uppercase; color: #777; }
+        .run-tab.hint-running .tab-hint { color: #e6c06e; }
+        .run-tab.hint-done .tab-hint { color: #7dce82; }
+        .run-tab.hint-error .tab-hint, .run-tab.hint-stopped .tab-hint { color: #f07178; }
+        .run-tab .tab-seed { color: #888; font-variant-numeric: tabular-nums; }
+        .status { font-size: 0.8rem; color: #aaa; min-height: 1.2em; }
+        .status.ok { color: #7dce82; }
+        .status.err { color: #f07178; }
+        .field { margin-bottom: 14px; }
+        .section-title { font-size: 0.72rem; letter-spacing: 0.04em; text-transform: uppercase; color: #666; margin: 22px 0 10px; }
+        details.advanced { margin-top: 12px; border: 1px solid #1e1e1e; border-radius: 12px; padding: 10px 12px; }
+        details.advanced summary { cursor: pointer; color: #888; font-size: 0.8rem; }
+        .paste { margin-top: 12px; }
+        .empty { padding: 24px; color: #888; }
+        .run-panel { margin-top: 22px; border: 1px solid #1e1e1e; border-radius: 12px; padding: 12px 14px; background: #101010; }
+        .run-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 0.75rem; color: #888; margin-bottom: 8px; }
+        .run-meta strong { color: #ccc; font-weight: 600; }
+        .bar { height: 6px; background: #1a1a1a; border-radius: 4px; overflow: hidden; margin: 8px 0 10px; }
+        .bar-fill { height: 100%; width: 0%; background: #e60023; transition: width 0.15s linear; }
+        .run-log {
+            margin-top: 8px; max-height: 280px; overflow: auto;
+            background: #0a0a0a; border: 1px solid #1a1a1a; border-radius: 8px;
+            padding: 10px 12px; font-size: 0.72rem; line-height: 1.45;
+            color: #bbb; white-space: pre-wrap; word-break: break-word;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+        .run-log .t { color: #555; }
+        .run-log .err { color: #f07178; }
+        .run-log .ok { color: #7dce82; }
+        .run-log .node { color: #8ab4f8; }
+    </style>
+</head>
+<body>
+<header>
+    <nav class="nav">
+        <a href="index.html" id="galleryBack">← Videos</a>
+        <a href="photos.html">Photos</a>
+        <a href="run.html" class="active" id="remixNav">Remix</a>
+    </nav>
+</header>
+<div class="wrap">
+    <h1>Remix on Colab ComfyUI</h1>
+    <p class="muted" id="sourceLabel">Load a clip from the gallery, edit prompts, then queue on the Colab URL you paste.</p>
+
+    <label for="colabUrl">Colab ComfyUI URL</label>
+    <div class="row">
+        <input class="url-input" type="url" id="colabUrl" placeholder="https://….trycloudflare.com" autocomplete="off">
+        <div class="runs-wrap">
+            <label for="runCount">Runs</label>
+            <input type="number" id="runCount" min="1" max="20" value="1" inputmode="numeric" title="Queue this prompt multiple times">
+        </div>
+        <label class="check-wrap" for="randomSeed" title="New seed on every run, including each run in a batch">
+            <input type="checkbox" id="randomSeed" checked>
+            Random seed
+        </label>
+        <button type="button" class="btn" id="testBtn" onclick="testColab()">Test</button>
+        <button type="button" class="btn btn--primary" id="runBtn" onclick="runPrompt()">Run</button>
+        <button type="button" class="btn btn--stop" id="stopBtn" onclick="stopRun()" title="Stop the in-progress run. Other tabs keep their stills and videos." disabled>Stop</button>
+        <button type="button" class="btn" id="cancelBtn" onclick="cancelStandby()" title="Cancel the next remix waiting in standby" disabled>Cancel</button>
+    </div>
+    <div class="status" id="colabStatus"></div>
+
+    <div id="formRoot"></div>
+    <div class="run-panel" id="runPanel">
+        <div class="run-panel-head">
+            <div class="section-title">Run</div>
+            <button type="button" class="btn btn--stop" id="stopBtnPanel" onclick="stopRun()" title="Stop the in-progress run. Other tabs keep their stills and videos." disabled>Stop</button>
+        </div>
+        <div class="run-tabs" id="runTabs" hidden></div>
+        <p class="muted stop-hint">Run while busy puts the next remix on standby. Cancel drops standby. Stop interrupts the job on Colab.</p>
+        <div class="standby-list" id="standbyList" hidden></div>
+        <div class="run-meta" id="runMeta"></div>
+        <div class="bar"><div class="bar-fill" id="runBar"></div></div>
+        <div class="status" id="progress"></div>
+        <pre class="run-log" id="runLog"></pre>
+    </div>
+    <div class="section-title" id="outputsTitle" hidden>Outputs</div>
+    <div class="outputs" id="outputs"></div>
+</div>
+<div id="mediaLightbox" class="media-lightbox" hidden>
+    <button type="button" class="lb-close" id="lightboxClose" aria-label="Close preview">Close</button>
+    <div class="lb-stage" id="mediaLightboxStage"></div>
+</div>
+<script>
+const COLAB_KEY = 'comfyColabUrl';
+const PATH_KEY = 'comfyRemixPath';
+const STATE_KEY = 'comfyRemixState';
+const FROM_KEY = 'comfyRemixFrom';
+const serverBaseUrl = window.location.origin;
+let workflow = { prompt: null, fields: [], source: null, error: null, path: '', name: '' };
+let clientId = (crypto.randomUUID && crypto.randomUUID()) || String(Date.now());
+let pollTimer = null;
+let runSocket = null;
+let runStartedAt = 0;
+let runPromptId = '';
+let runNode = '';
+let runQueueLeft = null;
+let historyMsgCount = 0;
+let runActive = false;
+let runStopped = false;
+let pollWaitResolve = null;
+let logEntries = [];
+let lastOutputs = [];
+let runCount = 1;
+let runIndex = 0;
+let runTotal = 1;
+let livePreviewUrl = '';
+let livePreviewLogged = false;
+let runTabs = [];
+let activeTabId = '';
+let execTabId = '';
+let tabSeq = 0;
+let wsWanted = false;
+let wsReconnectTimer = null;
+let standbyJobs = [];
+let standbySeq = 0;
+let runLoopBusy = false;
+
+function qs(name) {
+    return new URLSearchParams(window.location.search).get(name) || '';
+}
+
+function currentPath() {
+    return qs('path') || workflow.path || sessionStorage.getItem(PATH_KEY) || '';
+}
+
+function persistRemix() {
+    try {
+        if (workflow.prompt) {
+            try { workflow.prompt = readFieldsIntoPrompt(); } catch (_) {}
+        }
+        const path = currentPath();
+        if (path) {
+            sessionStorage.setItem(PATH_KEY, path);
+            workflow.path = path;
+        }
+        const fill = document.getElementById('runBar');
+        const progress = document.getElementById('progress');
+        sessionStorage.setItem(STATE_KEY, JSON.stringify({
+            path,
+            workflow,
+            clientId,
+            runPromptId,
+            runStartedAt,
+            runActive,
+            runStopped,
+            runNode,
+            historyMsgCount,
+            logEntries: logEntries.slice(-200),
+            lastOutputs,
+            runTabs: serializeRunTabs(),
+            activeTabId,
+            execTabId,
+            tabSeq,
+            runCount: readRunCount(),
+            runIndex,
+            runTotal,
+            randomSeed: isRandomSeedOn(),
+            standbyJobs,
+            standbySeq,
+            statusText: progress ? progress.textContent : '',
+            statusKind: progress && progress.classList.contains('err') ? 'err'
+                : (progress && progress.classList.contains('ok') ? 'ok' : ''),
+            barPct: fill ? parseFloat(fill.style.width) || 0 : 0,
+        }));
+        const remixNav = document.getElementById('remixNav');
+        if (remixNav && path) remixNav.href = 'run.html?path=' + encodeURIComponent(path);
+        if (remixNav) remixNav.classList.toggle('remix-live', !!runActive || standbyJobs.length > 0);
+    } catch (_) {}
+}
+
+function serializeRunTabs() {
+    return runTabs.map(t => ({
+        id: t.id,
+        n: t.n,
+        label: t.label,
+        hint: t.hint,
+        promptId: t.promptId,
+        seed: t.seed,
+        logEntries: (t.logEntries || []).slice(-200),
+        lastOutputs: t.lastOutputs || [],
+        statusText: t.statusText || '',
+        statusKind: t.statusKind || '',
+        barPct: t.barPct || 0,
+        runNode: t.runNode || '',
+        startedAt: t.startedAt || 0,
+        historyMsgCount: t.historyMsgCount || 0,
+    }));
+}
+
+function currentTab() {
+    return runTabs.find(t => t.id === activeTabId) || null;
+}
+
+function execTab() {
+    return runTabs.find(t => t.id === execTabId) || currentTab();
+}
+
+function renderTabStrip() {
+    const el = document.getElementById('runTabs');
+    if (!el) return;
+    el.hidden = !runTabs.length;
+    el.innerHTML = runTabs.map(t => {
+        const seed = t.seed != null ? `<span class="tab-seed">${escapeHtml(String(t.seed).slice(-6))}</span>` : '';
+        const cls = `run-tab hint-${escapeAttr(t.hint || 'queued')}${t.id === activeTabId ? ' active' : ''}`;
+        return `<button type="button" class="${cls}" data-tab="${escapeAttr(t.id)}">${escapeHtml(t.label || 'Run')}${seed}<span class="tab-hint">${escapeHtml(t.hint || '')}</span></button>`;
+    }).join('');
+}
+
+function appendLogDom(text, kind, timeStr) {
+    const el = document.getElementById('runLog');
+    if (!el) return;
+    const t = timeStr || new Date().toLocaleTimeString();
+    const cls = kind === 'err' ? 'err' : kind === 'ok' ? 'ok' : kind === 'node' ? 'node' : '';
+    const line = document.createElement('div');
+    if (cls) line.className = cls;
+    line.innerHTML = `<span class="t">${escapeHtml(t)}</span>  ${escapeHtml(text)}`;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+}
+
+function paintProgressDom(text, kind, barPct) {
+    const el = document.getElementById('progress');
+    if (el) {
+        el.textContent = text || '';
+        el.className = 'status' + (kind ? ' ' + kind : '');
+    }
+    const fill = document.getElementById('runBar');
+    if (fill && barPct != null) fill.style.width = barPct + '%';
+}
+
+function selectTab(id) {
+    const tab = runTabs.find(t => t.id === id);
+    if (!tab) return;
+    activeTabId = tab.id;
+    logEntries = tab.logEntries || [];
+    lastOutputs = tab.lastOutputs || [];
+    livePreviewUrl = tab.livePreviewUrl || '';
+    const live = runActive && execTabId && execTabId !== tab.id;
+    if (!live) {
+        runPromptId = tab.promptId || '';
+        runNode = tab.runNode || '';
+        historyMsgCount = tab.historyMsgCount || 0;
+        runStartedAt = tab.startedAt || runStartedAt;
+    }
+    renderTabStrip();
+    const el = document.getElementById('runLog');
+    if (el) el.textContent = '';
+    logEntries.forEach(item => appendLogDom(item.text, item.kind, item.t));
+    paintProgressDom(tab.statusText, tab.statusKind, tab.barPct);
+    paintOutputSurfaces(colabUrl());
+    updateRunMeta();
+}
+
+function beginRunTab() {
+    tabSeq += 1;
+    const tab = {
+        id: 'tab-' + tabSeq,
+        n: tabSeq,
+        label: 'Run ' + tabSeq,
+        hint: 'queued',
+        promptId: '',
+        seed: null,
+        logEntries: [],
+        lastOutputs: [],
+        livePreviewUrl: '',
+        statusText: '',
+        statusKind: '',
+        barPct: 0,
+        runNode: '',
+        startedAt: Date.now(),
+        historyMsgCount: 0,
+    };
+    runTabs.push(tab);
+    execTabId = tab.id;
+    activeTabId = tab.id;
+    logEntries = tab.logEntries;
+    lastOutputs = tab.lastOutputs;
+    livePreviewUrl = '';
+    livePreviewLogged = false;
+    runPromptId = '';
+    runNode = '';
+    historyMsgCount = 0;
+    runStartedAt = tab.startedAt;
+    const logEl = document.getElementById('runLog');
+    if (logEl) logEl.textContent = '';
+    const box = document.getElementById('outputs');
+    if (box) box.innerHTML = '';
+    const title = document.getElementById('outputsTitle');
+    if (title) title.hidden = true;
+    paintProgressDom('', '', 0);
+    renderTabStrip();
+    return tab;
+}
+
+function setTabHint(tab, hint) {
+    if (!tab) return;
+    tab.hint = hint;
+    renderTabStrip();
+}
+
+function bindGalleryBack() {
+    const from = sessionStorage.getItem(FROM_KEY) || 'index.html';
+    const a = document.getElementById('galleryBack');
+    if (!a) return;
+    if (from.indexOf('photos') >= 0) {
+        a.href = 'photos.html';
+        a.textContent = '← Photos';
+    } else {
+        a.href = 'index.html';
+        a.textContent = '← Videos';
+    }
+}
+
+function setStatus(el, text, kind) {
+    if (el && el.id === 'progress') {
+        const tab = execTab();
+        if (tab) {
+            tab.statusText = text || '';
+            tab.statusKind = kind || '';
+        }
+        if (tab && tab.id !== activeTabId) {
+            renderTabStrip();
+            return;
+        }
+    }
+    if (!el) return;
+    el.textContent = text || '';
+    el.className = 'status' + (kind ? ' ' + kind : '');
+}
+
+function normalizeColabUrl(raw) {
+    let url = (raw || '').trim().replace(/\/+$/, '');
+    if (!url) return '';
+    if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+    return url;
+}
+
+function colabUrl() {
+    const url = normalizeColabUrl(document.getElementById('colabUrl').value);
+    document.getElementById('colabUrl').value = url;
+    if (url) localStorage.setItem(COLAB_KEY, url);
+    return url;
+}
+
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function escapeAttr(s) { return escapeHtml(s).replace(/\n/g, ' '); }
+
+function fieldControl(field) {
+    const val = field.value == null ? '' : field.value;
+    const common = `data-node="${escapeAttr(field.node_id)}" data-key="${escapeAttr(field.key)}"`;
+    if (field.type === 'checkbox') {
+        return `<input type="checkbox" ${common} ${val ? 'checked' : ''}>`;
+    }
+    if (field.type === 'number') {
+        const extra = field.key === 'seed' ? ' class="seed-input"' : '';
+        return `<input type="number"${extra} ${common} step="1" value="${escapeAttr(val)}">`;
+    }
+    const cls = field.section === 'prompts' ? ' class="prompt"' : '';
+    if (field.type === 'textarea') {
+        const rows = field.section === 'prompts' ? 10 : 4;
+        return `<textarea ${common}${cls} rows="${rows}">${escapeHtml(String(val))}</textarea>`;
+    }
+    return `<input type="text" ${common} value="${escapeAttr(val)}">`;
+}
+
+function fieldSnippet(field) {
+    const raw = field.value == null ? '' : String(field.value).replace(/\s+/g, ' ').trim();
+    return raw.slice(0, 90);
+}
+
+function roleTag(role) {
+    if (role === 'positive') return 'Positive';
+    if (role === 'negative') return 'Negative';
+    return 'Prompt';
+}
+
+function renderField(field, open) {
+    const preview = fieldSnippet(field);
+    const isPrompt = field.section === 'prompts';
+    const cls = isPrompt ? ` field prompt-field role-${escapeAttr(field.role || 'prompt')}` : ' field';
+    const tag = isPrompt ? `<span class="role-tag">${escapeHtml(roleTag(field.role))}</span>` : '';
+    return `<details class="${cls.trim()}"${open ? ' open' : ''}>
+        <summary>${tag}<span>${escapeHtml(field.label)}</span>${preview ? `<span class="field-preview">${escapeHtml(preview)}</span>` : ''}</summary>
+        <div class="field-body">${fieldControl(field)}</div>
+    </details>`;
+}
+
+function renderForm() {
+    const root = document.getElementById('formRoot');
+    const prompts = workflow.fields.filter(f => f.section === 'prompts');
+    const widgets = workflow.fields.filter(f => f.section === 'widgets');
+    const advanced = workflow.fields.filter(f => f.section === 'advanced');
+    let html = '';
+    if (workflow.error && !workflow.prompt) {
+        html += `<div class="empty">${escapeHtml(workflow.error)}. Paste a ComfyUI API prompt JSON below.</div>`;
+        html += `<div class="paste"><label for="pasteJson">API prompt JSON</label><textarea id="pasteJson" placeholder='{"12":{"class_type":"CLIPTextEncode","inputs":{"text":"..."}}}'></textarea>
+            <div class="row" style="margin-top:8px"><button type="button" class="btn" onclick="applyPastedJson()">Use JSON</button></div></div>`;
+        root.innerHTML = html;
+        return;
+    }
+    if (prompts.length) {
+        html += `<details class="section-box prompts-section" open><summary>Prompts (${prompts.length})</summary>`;
+        prompts.forEach(f => { html += renderField(f, true); });
+        html += `</details>`;
+    }
+    if (widgets.length) {
+        html += `<details class="section-box"><summary>Settings (${widgets.length})</summary>`;
+        widgets.forEach(f => { html += renderField(f, false); });
+        html += `</details>`;
+    }
+    if (advanced.length) {
+        html += `<details class="section-box"><summary>Advanced (${advanced.length})</summary>`;
+        advanced.forEach(f => { html += renderField(f, false); });
+        html += `</details>`;
+    }
+    root.innerHTML = html || '<div class="empty">No editable fields in this prompt.</div>';
+}
+
+function applyPastedJson() {
+    const raw = document.getElementById('pasteJson')?.value || '';
+    let obj;
+    try { obj = JSON.parse(raw); } catch (err) {
+        setStatus(document.getElementById('progress'), 'Invalid JSON: ' + err.message, 'err');
+        return;
+    }
+    const prompt = obj.prompt && typeof obj.prompt === 'object' ? obj.prompt : obj;
+    if (!prompt || typeof prompt !== 'object' || Array.isArray(prompt)) {
+        setStatus(document.getElementById('progress'), 'JSON is not a ComfyUI API prompt', 'err');
+        return;
+    }
+    workflow.prompt = prompt;
+    workflow.error = null;
+    workflow.source = 'paste';
+    workflow.fields = buildFieldsClient(prompt);
+    renderForm();
+    persistRemix();
+}
+
+function isLinkValue(v) {
+    return Array.isArray(v) && v.length === 2 && (typeof v[0] === 'string' || typeof v[0] === 'number') && typeof v[1] === 'number';
+}
+
+function parseSerializedLink(v) {
+    if (typeof v !== 'string') return null;
+    const m = v.trim().match(/^(\d+(?::\d+)+),(\d+)$/);
+    if (!m) return null;
+    return [m[1], Number(m[2])];
+}
+
+function isStringPrimitive(ct) {
+    return String(ct || '').startsWith('PrimitiveString');
+}
+
+function isPromptNodeType(ct) {
+    const c = ct || '';
+    return /CLIPTextEncode|TextEncode|PromptEncode|WildcardEncode|CLIPText|Hunyuan|WanVideo|WanText|\bVideo/i.test(c);
+}
+
+function isVideoPromptContext(ct, title) {
+    return /video|wan|hunyuan|i2v|t2v|ltx/i.test(`${ct || ''} ${title || ''}`);
+}
+
+function isJunkPromptValue(value) {
+    if (typeof value === 'boolean' || typeof value === 'number') return true;
+    if (Array.isArray(value)) return true;
+    if (value == null) return false;
+    if (typeof value !== 'string') return true;
+    const s = value.trim();
+    if (!s) return false;
+    if (/^\d+:\d+(,\d+)*$/.test(s)) return true;
+    if (s.length < 24 && /^\d+([.:]\d+){1,4}$/.test(s)) return true;
+    return false;
+}
+
+function isClipEncodeName(ct, title, label) {
+    const blob = `${ct || ''} ${title || ''} ${label || ''}`.toLowerCase();
+    return blob.includes('cliptextencode') || blob.includes('clip text encode');
+}
+
+function isPromptInputKey(key) {
+    return /^(text|text_g|text_l|prompt|value|positive|negative|positive_prompt|negative_prompt|wildcard|text_positive|text_negative)$/i.test(key || '');
+}
+
+function treatValueAsPrompt(key, value, id, ct, title, posIds, negIds) {
+    if (isJunkPromptValue(value) || parseSerializedLink(value)) return false;
+    if (key !== 'value') return true;
+    if (typeof value === 'boolean' || typeof value === 'number') return false;
+    if (/^Primitive(Int|Boolean|Float)/.test(ct || '')) return false;
+    if (posIds.has(String(id)) || negIds.has(String(id))) return true;
+    if (isStringPrimitive(ct)) return typeof value === 'string';
+    if (isPromptNodeType(ct) || isVideoPromptContext(ct, title)) return true;
+    if (/prompt|positive|negative|video/i.test(title || '')) return true;
+    return typeof value === 'string' && value.length > 40;
+}
+
+function collectLinkedIds(prompt, startIds) {
+    const out = new Set((startIds || []).map(String));
+    const q = [...out];
+    let hops = 0;
+    while (q.length && hops < 8) {
+        const n = q.length;
+        for (let i = 0; i < n; i++) {
+            const node = prompt[q.shift()];
+            const inputs = node?.inputs || {};
+            Object.values(inputs).forEach(v => {
+                if (!isLinkValue(v)) return;
+                const id = String(v[0]);
+                if (out.has(id)) return;
+                out.add(id);
+                q.push(id);
+            });
+        }
+        hops += 1;
+    }
+    return out;
+}
+
+function promptRoleFor(id, key, title, posIds, negIds, ct) {
+    if (posIds.has(String(id))) return 'positive';
+    if (negIds.has(String(id))) return 'negative';
+    const blob = `${key || ''} ${title || ''} ${ct || ''}`.toLowerCase();
+    if (blob.includes('negative') || /(^|_)neg($|_)/.test(blob)) return 'negative';
+    if (blob.includes('positive') || /(^|_)pos($|_)/.test(blob)) return 'positive';
+    if (/^text_[gl]$/i.test(key || '')) return 'positive';
+    if (/^value$/i.test(key || '') && (isPromptNodeType(ct) || isVideoPromptContext(ct, title) || /prompt|video/i.test(title || ''))) {
+        return 'positive';
+    }
+    if (/^text$/i.test(key || '') && (isVideoPromptContext(ct, title) || /^prompt$/i.test((title || '').trim()))) {
+        return 'positive';
+    }
+    return 'prompt';
+}
+
+function isGenericPromptTitle(title) {
+    const t = (title || '').trim();
+    if (!t) return true;
+    const low = t.toLowerCase();
+    if (low.includes('clip text encode') || low.replace(/\s+/g, '').includes('cliptextencode')) return true;
+    return /^(prompt|value|positive|negative)$/i.test(t);
+}
+
+function isImageEncodeField(ct, key) {
+    return /CLIPTextEncode/i.test(ct || '') && /^(text|text_g|text_l|prompt|positive_prompt|negative_prompt)$/i.test(key || '');
+}
+
+function promptFieldLabel(role, title, id, key, ct, image) {
+    const video = isVideoPromptContext(ct, title) || /^value$/i.test(key || '');
+    const useImage = !!image && isImageEncodeField(ct, key) && !video;
+    const roleName = role === 'positive'
+        ? (video ? 'Video positive' : (useImage ? 'Image positive' : 'Positive'))
+        : role === 'negative'
+            ? (video ? 'Video negative' : (useImage ? 'Image negative' : 'Negative'))
+            : (video ? 'Video prompt' : (useImage ? 'Image prompt' : 'Prompt'));
+    const t = (title || '').trim();
+    if (t && !isGenericPromptTitle(t) && t.toLowerCase().includes(roleName.toLowerCase())) return t;
+    if (t && !isGenericPromptTitle(t)) return `${roleName} · ${t}`;
+    return roleName;
+}
+
+function graphHasVideoPrompt(fields) {
+    return fields.some(f => {
+        if (f.section !== 'prompts') return false;
+        const ct = f.class_type || '';
+        if (String(f.key) === 'value' && !isJunkPromptValue(f.value)) return true;
+        if (isVideoPromptContext(ct, f.label || '')) return true;
+        return /PrimitiveString/i.test(ct);
+    });
+}
+
+function demoteStockClipTextFields(fields) {
+    const hasVideo = graphHasVideoPrompt(fields);
+    fields.forEach(f => {
+        if (f.section !== 'prompts') return;
+        if (isJunkPromptValue(f.value)) {
+            f.section = 'advanced';
+            return;
+        }
+        const clip = isClipEncodeName(f.class_type, '', f.label);
+        const key = String(f.key || '');
+        if (clip && !/^(text|text_g|text_l|value|prompt|positive|negative|positive_prompt|negative_prompt)$/i.test(key)) {
+            f.section = 'advanced';
+            f.label = 'CLIP Text Encode · ' + key;
+            return;
+        }
+        if (clip && (hasVideo || /clip text encode/i.test(f.label || ''))) {
+            f.label = promptFieldLabel(f.role, '', f.node_id, key, f.class_type, hasVideo);
+        }
+    });
+    return fields;
+}
+
+function dedupePromptLabels(fields) {
+    const seen = {};
+    fields.forEach(f => {
+        if (f.section !== 'prompts') return;
+        const k = f.label;
+        seen[k] = (seen[k] || 0) + 1;
+    });
+    fields.forEach(f => {
+        if (f.section !== 'prompts') return;
+        if (seen[f.label] > 1) f.label += ' · #' + f.node_id;
+    });
+}
+
+function buildFieldsClient(prompt) {
+    const posSeeds = [];
+    const negSeeds = [];
+    Object.values(prompt).forEach(node => {
+        const ct = node?.class_type || '';
+        if (!ct.includes('Sampler') && !ct.includes('KSampler')) return;
+        const p = node.inputs?.positive, n = node.inputs?.negative;
+        if (isLinkValue(p)) posSeeds.push(String(p[0]));
+        if (isLinkValue(n)) negSeeds.push(String(n[0]));
+    });
+    const posIds = collectLinkedIds(prompt, posSeeds);
+    const negIds = collectLinkedIds(prompt, negSeeds);
+    const fields = [];
+    Object.entries(prompt).forEach(([id, node]) => {
+        const ct = node?.class_type || '';
+        const title = node?._meta?.title || '';
+        const inputs = node?.inputs || {};
+        const promptNode = isPromptNodeType(ct);
+        const promptKeys = Object.keys(inputs).filter(key => {
+            const value = inputs[key];
+            if (isLinkValue(value)) return false;
+            if (parseSerializedLink(value)) return false;
+            if (typeof value === 'boolean' || typeof value === 'number') return false;
+            if (isJunkPromptValue(value)) return false;
+            if (!isPromptInputKey(key)) return false;
+            return treatValueAsPrompt(key, value, id, ct, title, posIds, negIds);
+        });
+        promptKeys.forEach(key => {
+            if (isLinkValue(inputs[key])) return;
+            const role = promptRoleFor(id, key, title, posIds, negIds, ct);
+            fields.push({
+                node_id: String(id), key, label: promptFieldLabel(role, title, id, key, ct), role,
+                type: 'textarea', section: 'prompts', value: inputs[key] == null ? '' : inputs[key], class_type: ct,
+            });
+        });
+        const used = new Set(promptKeys);
+        if ((promptNode || isStringPrimitive(ct)) && promptKeys.length) {
+            return;
+        }
+        const clipNode = isClipEncodeName(ct, title, '');
+        const advanced = clipNode || /VAE|ControlNet|IPAdapter|InstantID|Preview|SaveImage|SaveVideo|VHS_|LoadImage|LoadVideo/.test(ct);
+        Object.entries(inputs).forEach(([key, value]) => {
+            if (used.has(key) || isLinkValue(value) || parseSerializedLink(value)) return;
+            fields.push({
+                node_id: String(id), key, label: `${title || ct} · ${key}`, role: key,
+                type: typeof value === 'number' ? 'number' : (typeof value === 'boolean' ? 'checkbox' : (String(value).length > 80 ? 'textarea' : 'text')),
+                section: advanced ? 'advanced' : 'widgets', value, class_type: ct,
+            });
+        });
+    });
+    const rank = { positive: 0, negative: 1, prompt: 2 };
+    const kindRank = (f) => {
+        const label = f.label || '';
+        if (label.startsWith('Image')) return 0;
+        if (label.startsWith('Video') || /^value$/i.test(f.key || '')) return 1;
+        return 0;
+    };
+    const keyRank = (k) => (/^(text|text_g|text_l)$/i.test(k) ? 0 : /^value$/i.test(k) || /prompt/i.test(k) ? 1 : 2);
+    dedupePromptLabels(fields);
+    demoteStockClipTextFields(fields);
+    fields.sort((a, b) => {
+        if (a.section !== b.section) {
+            const order = { prompts: 0, widgets: 1, advanced: 2 };
+            return (order[a.section] ?? 9) - (order[b.section] ?? 9);
+        }
+        const rd = (rank[a.role] ?? 9) - (rank[b.role] ?? 9);
+        if (rd) return rd;
+        const kd = kindRank(a) - kindRank(b);
+        if (kd) return kd;
+        const kr = keyRank(a.key) - keyRank(b.key);
+        if (kr) return kr;
+        return String(a.node_id).localeCompare(String(b.node_id), undefined, { numeric: true });
+    });
+    dedupePromptLabels(fields);
+    demoteStockClipTextFields(fields);
+    fields.sort((a, b) => {
+        if (a.section !== b.section) {
+            const order = { prompts: 0, widgets: 1, advanced: 2 };
+            return (order[a.section] ?? 9) - (order[b.section] ?? 9);
+        }
+        const rd = (rank[a.role] ?? 9) - (rank[b.role] ?? 9);
+        if (rd) return rd;
+        const kd = keyRank(a.key) - keyRank(b.key);
+        if (kd) return kd;
+        return String(a.node_id).localeCompare(String(b.node_id), undefined, { numeric: true });
+    });
+    return fields;
+}
+
+function readFieldsIntoPrompt() {
+    const next = JSON.parse(JSON.stringify(workflow.prompt));
+    document.querySelectorAll('[data-node][data-key]').forEach(el => {
+        const node = next[el.dataset.node];
+        if (!node || !node.inputs) return;
+        let val;
+        if (el.type === 'checkbox') val = el.checked;
+        else if (el.type === 'number') {
+            val = el.value === '' ? 0 : Number(el.value);
+        } else val = el.value;
+        node.inputs[el.dataset.key] = val;
+    });
+    return next;
+}
+
+async function loadWorkflow() {
+    bindGalleryBack();
+    let path = qs('path') || sessionStorage.getItem(PATH_KEY) || '';
+    const label = document.getElementById('sourceLabel');
+    let saved = null;
+    try { saved = JSON.parse(sessionStorage.getItem(STATE_KEY) || 'null'); } catch (_) {}
+
+    if (path && !qs('path')) {
+        history.replaceState(null, '', 'run.html?path=' + encodeURIComponent(path));
+    }
+
+    function overlaySavedRun() {
+        if (!saved) return;
+        if (saved.path && path && saved.path !== path) return;
+        if (saved.clientId) clientId = saved.clientId;
+        runPromptId = saved.runPromptId || '';
+        runStartedAt = saved.runStartedAt || runStartedAt;
+        runActive = !!saved.runActive && !saved.runStopped;
+        runStopped = !!saved.runStopped || (!runActive && /stopped/i.test(saved.statusText || ''));
+        runNode = saved.runNode || '';
+        historyMsgCount = saved.historyMsgCount || 0;
+        lastOutputs = saved.lastOutputs || [];
+        runCount = Math.min(20, Math.max(1, Number(saved.runCount) || 1));
+        runIndex = Number(saved.runIndex) || 0;
+        runTotal = Math.min(20, Math.max(1, Number(saved.runTotal) || runCount));
+        const countEl = document.getElementById('runCount');
+        if (countEl) countEl.value = String(runCount);
+        const seedEl = document.getElementById('randomSeed');
+        if (seedEl) seedEl.checked = saved.randomSeed !== false;
+        if (Array.isArray(saved.standbyJobs)) standbyJobs = saved.standbyJobs;
+        standbySeq = Number(saved.standbySeq) || standbyJobs.length;
+        renderStandby();
+        if (Array.isArray(saved.runTabs) && saved.runTabs.length) {
+            runTabs = saved.runTabs.map(t => Object.assign({ livePreviewUrl: '', logEntries: [], lastOutputs: [] }, t));
+            tabSeq = Math.max(Number(saved.tabSeq) || 0, ...runTabs.map(t => Number(t.n) || 0));
+            activeTabId = saved.activeTabId && runTabs.some(t => t.id === saved.activeTabId)
+                ? saved.activeTabId : runTabs[runTabs.length - 1].id;
+            execTabId = saved.execTabId && runTabs.some(t => t.id === saved.execTabId) ? saved.execTabId : '';
+            if (runActive) {
+                const live = runTabs.find(t => t.promptId && t.promptId === runPromptId) || runTabs[runTabs.length - 1];
+                if (live) execTabId = live.id;
+            }
+            selectTab(activeTabId);
+        } else if ((saved.lastOutputs && saved.lastOutputs.length) || (saved.logEntries && saved.logEntries.length)) {
+            const stopped = !!saved.runStopped || /stopped/i.test(saved.statusText || '');
+            runTabs = [{
+                id: 'tab-1',
+                n: 1,
+                label: 'Run 1',
+                hint: stopped ? 'stopped' : (saved.statusKind === 'err' ? 'error' : 'done'),
+                promptId: saved.runPromptId || '',
+                seed: null,
+                logEntries: saved.logEntries || [],
+                lastOutputs: saved.lastOutputs || [],
+                livePreviewUrl: '',
+                statusText: saved.statusText || '',
+                statusKind: saved.statusKind || '',
+                barPct: saved.barPct || 0,
+                runNode: saved.runNode || '',
+                startedAt: saved.runStartedAt || 0,
+                historyMsgCount: saved.historyMsgCount || 0,
+            }];
+            tabSeq = 1;
+            activeTabId = 'tab-1';
+            execTabId = runActive ? 'tab-1' : '';
+            selectTab(activeTabId);
+        } else {
+            const el = document.getElementById('runLog');
+            if (el) el.textContent = '';
+            logEntries = [];
+            (saved.logEntries || []).forEach(item => logLine(item.text, item.kind, item.t, true));
+            logEntries = (saved.logEntries || []).slice();
+            if (saved.statusText) paintProgressDom(saved.statusText, saved.statusKind, saved.barPct);
+            if (saved.barPct) document.getElementById('runBar').style.width = saved.barPct + '%';
+            if (lastOutputs.length) {
+                const base = colabUrl();
+                if (base) showOutputs(base, lastOutputs, true);
+            }
+        }
+        setRunButtons(runActive);
+        updateRunMeta();
+    }
+
+    if (!path) {
+        if (saved && saved.workflow && saved.workflow.prompt) {
+            workflow = saved.workflow;
+            overlaySavedRun();
+            label.textContent = workflow.name || 'Restored session · paste JSON';
+            renderForm();
+            persistRemix();
+            if (runActive && (runPromptId || runIndex < runTotal)) resumeRun();
+            return;
+        }
+        label.textContent = 'No clip selected. Open Remix from a video, or paste API JSON.';
+        workflow.error = 'No clip selected';
+        renderForm();
+        return;
+    }
+
+    label.textContent = 'Loading workflow from ' + path;
+    try {
+        const resp = await fetch(`${serverBaseUrl}/api/workflow?path=${encodeURIComponent(path)}`);
+        if (resp.status === 404) {
+            workflow.error = 'File not found';
+            workflow.path = path;
+            sessionStorage.setItem(PATH_KEY, path);
+            if (saved && saved.workflow && saved.workflow.prompt && saved.path === path) {
+                workflow = saved.workflow;
+                overlaySavedRun();
+                renderForm();
+            } else {
+                renderForm();
+            }
+            return;
+        }
+        const data = await resp.json();
+        workflow = data;
+        workflow.path = path;
+        if (saved && saved.path === path && saved.workflow && saved.workflow.prompt) {
+            workflow.prompt = saved.workflow.prompt;
+        }
+        if (workflow.prompt) {
+            workflow.fields = buildFieldsClient(workflow.prompt);
+        }
+        label.textContent = (workflow.name || path) + (workflow.source ? ` · ${workflow.source}` : '');
+        renderForm();
+        overlaySavedRun();
+        persistRemix();
+        if (runActive && (runPromptId || runIndex < runTotal)) resumeRun();
+    } catch (err) {
+        workflow.error = String(err.message || err);
+        renderForm();
+    }
+}
+
+async function resumeRun() {
+    const base = colabUrl();
+    const el = document.getElementById('progress');
+    if (!base || (!runPromptId && runIndex >= runTotal)) { runActive = false; setRunButtons(false); persistRemix(); return; }
+    runStopped = false;
+    runLoopBusy = true;
+    logLine('resumed after leaving the page');
+    setRunButtons(true);
+    connectRunSocket(base);
+    try {
+        if (runPromptId) await pollHistory(base, runPromptId);
+        const prompt = workflow.prompt;
+        if (!runStopped && prompt && runIndex < runTotal) {
+            for (let i = runIndex + 1; i <= runTotal; i++) {
+                if (runStopped) break;
+                await executeOneRun(base, prompt, i);
+            }
+        }
+        if (!runStopped) finishBatchOk();
+    } catch (err) {
+        if (!runStopped) {
+            logLine(String(err.message || err), 'err');
+            setStatus(el, runPrefix() + String(err.message || err), 'err');
+        }
+    } finally {
+        runActive = false;
+        runLoopBusy = false;
+        setRunButtons(false);
+        closeRunSocket();
+        updateRunMeta();
+        persistRemix();
+        if (!runStopped) drainStandby();
+    }
+}
+
+function fmtBytes(n) {
+    const v = Number(n);
+    if (!v) return '';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0, x = v;
+    while (x >= 1024 && i < units.length - 1) { x /= 1024; i += 1; }
+    return x.toFixed(i ? 1 : 0) + ' ' + units[i];
+}
+
+function elapsedText() {
+    if (!runStartedAt) return '';
+    const s = Math.max(0, Math.round((Date.now() - runStartedAt) / 1000));
+    const m = Math.floor(s / 60);
+    return m ? `${m}m ${s % 60}s` : `${s}s`;
+}
+
+function nodeLabel(id) {
+    if (id == null || id === '') return '';
+    const node = workflow.prompt?.[String(id)];
+    const title = node?._meta?.title;
+    const ct = node?.class_type || '';
+    return [title || ct || 'node', `#${id}`].filter(Boolean).join(' ');
+}
+
+function updateRunMeta() {
+    const bits = [];
+    bits.push(`tab <strong>${escapeHtml((currentTab() && currentTab().label) || '—')}</strong>`);
+    if (runActive && execTab() && currentTab() && execTab().id !== currentTab().id) {
+        bits.push(`live <strong>${escapeHtml(execTab().label)}</strong>`);
+    }
+    if (runTotal > 1) bits.push(`batch <strong>${escapeHtml(runIndex + ' / ' + runTotal)}</strong>`);
+    if (runPromptId) bits.push(`id <strong>${escapeHtml(runPromptId.slice(0, 8))}</strong>`);
+    if (runNode) bits.push(`node <strong>${escapeHtml(nodeLabel(runNode))}</strong>`);
+    if (runQueueLeft != null) bits.push(`queue <strong>${escapeHtml(runQueueLeft)}</strong>`);
+    if (runStartedAt) bits.push(`elapsed <strong>${escapeHtml(elapsedText())}</strong>`);
+    bits.push(`ws <strong>${runSocket && runSocket.readyState === 1 ? 'on' : 'off'}</strong>`);
+    document.getElementById('runMeta').innerHTML = bits.join('');
+}
+
+function setBar(value, max) {
+    const fill = document.getElementById('runBar');
+    const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
+    const tab = execTab();
+    if (tab) tab.barPct = pct;
+    if (tab && tab.id !== activeTabId) return;
+    if (!fill) return;
+    fill.style.width = pct + '%';
+}
+
+function logLine(text, kind, timeStr, skipPersist) {
+    const t = timeStr || new Date().toLocaleTimeString();
+    const item = { t, text, kind: kind || '' };
+    if (!skipPersist) {
+        const tab = execTab();
+        if (tab) {
+            tab.logEntries = (tab.logEntries || []).concat(item).slice(-200);
+            logEntries = tab.logEntries;
+        } else {
+            logEntries.push(item);
+        }
+    }
+    const tab = execTab();
+    if (skipPersist || !tab || tab.id === activeTabId) appendLogDom(text, kind, t);
+    if (!skipPersist) persistRemix();
+}
+
+function clearRunLog() {
+    const el = document.getElementById('runLog');
+    if (el) el.textContent = '';
+    setBar(0, 1);
+    runPromptId = '';
+    runNode = '';
+    runQueueLeft = null;
+    historyMsgCount = 0;
+    logEntries = [];
+    lastOutputs = [];
+    clearLivePreview();
+    const box = document.getElementById('outputs');
+    if (box) box.innerHTML = '';
+    const title = document.getElementById('outputsTitle');
+    if (title) title.hidden = true;
+    runStartedAt = Date.now();
+    updateRunMeta();
+}
+
+function closeRunSocket() {
+    wsWanted = false;
+    if (wsReconnectTimer) {
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
+    }
+    if (runSocket) {
+        try { runSocket.onclose = null; runSocket.close(); } catch (_) {}
+        runSocket = null;
+    }
+}
+
+function isNetworkFetchError(err) {
+    const msg = String((err && err.message) || err || '');
+    return (err && err.name === 'TypeError') || /failed to fetch|networkerror|load failed|network request failed/i.test(msg);
+}
+
+function shouldRetryHttp(status) {
+    return status === 408 || status === 429
+        || status === 500 || status === 502 || status === 503 || status === 504
+        || status === 520 || status === 522 || status === 524;
+}
+
+function colabRetryDelay(attempt) {
+    return Math.min(8000, Math.round(500 * Math.pow(1.6, Math.max(0, attempt - 1))));
+}
+
+async function colabFetch(url, opts, meta) {
+    const tries = (meta && meta.tries) || 8;
+    const label = (meta && meta.label) || url;
+    const noun = (meta && meta.statusNoun) || 'history';
+    let lastErr = null;
+    for (let i = 1; i <= tries; i++) {
+        if (runStopped) throw new Error('stopped');
+        try {
+            const resp = await fetch(url, Object.assign({ mode: 'cors' }, opts || {}));
+            if (resp.ok || !shouldRetryHttp(resp.status) || i === tries) return resp;
+            lastErr = new Error('HTTP ' + resp.status);
+            logLine(`${label} HTTP ${resp.status} · retry ${i}/${tries}`);
+            setStatus(document.getElementById('progress'), runPrefix() + `Colab unreachable, retrying ${noun}…`);
+            ensureRunSocket(colabUrl());
+            await waitPollDelay(colabRetryDelay(i));
+        } catch (err) {
+            lastErr = err;
+            if (runStopped) throw err;
+            if (!isNetworkFetchError(err) || i === tries) throw err;
+            logLine(`${label} unreachable (${err.message || err}) · retry ${i}/${tries}`);
+            setStatus(document.getElementById('progress'), runPrefix() + `Colab unreachable, retrying ${noun}…`);
+            ensureRunSocket(colabUrl());
+            await waitPollDelay(colabRetryDelay(i));
+        }
+    }
+    throw lastErr || new Error(`Colab unreachable after ${tries} tries: ${label}`);
+}
+
+function setRunButtons(active) {
+    const busy = active === undefined ? !!runActive : !!active;
+    const runBtn = document.getElementById('runBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const stopPanel = document.getElementById('stopBtnPanel');
+    const cancelBtn = document.getElementById('cancelBtn');
+    if (runBtn) runBtn.disabled = false;
+    if (stopBtn) stopBtn.disabled = !busy;
+    if (stopPanel) stopPanel.disabled = !busy;
+    if (cancelBtn) cancelBtn.disabled = !standbyJobs.length;
+}
+
+function snapshotJob() {
+    const prompt = readFieldsIntoPrompt();
+    standbySeq += 1;
+    const name = (workflow.name || currentPath() || 'Remix').split('/').pop();
+    return {
+        id: 'sb-' + standbySeq,
+        name,
+        path: currentPath(),
+        prompt,
+        runCount: readRunCount(),
+        randomSeed: isRandomSeedOn(),
+    };
+}
+
+function renderStandby() {
+    const box = document.getElementById('standbyList');
+    if (!box) return;
+    if (!standbyJobs.length) {
+        box.hidden = true;
+        box.innerHTML = '';
+        setRunButtons();
+        return;
+    }
+    box.hidden = false;
+    box.innerHTML = standbyJobs.map((job, i) => {
+        const runs = job.runCount > 1 ? ` · ${job.runCount} runs` : '';
+        return `<div class="standby-item">
+            <span class="wait">Standby ${i + 1}</span>
+            <strong>${escapeHtml(job.name || 'Remix')}</strong>
+            <span>${runs.replace(/^ · /, '')}</span>
+            <button type="button" class="btn btn--stop" data-cancel-standby="${escapeAttr(job.id)}">Cancel</button>
+        </div>`;
+    }).join('');
+    setRunButtons();
+}
+
+function enqueueStandby() {
+    if (!workflow.prompt) return;
+    const job = snapshotJob();
+    standbyJobs.push(job);
+    logLine(`standby ${standbyJobs.length}: ${job.name}` + (job.runCount > 1 ? ` · ${job.runCount} runs` : ''));
+    setStatus(document.getElementById('progress'), `Standby · ${standbyJobs.length} waiting after the current remix`);
+    renderStandby();
+    persistRemix();
+}
+
+function cancelStandby(id) {
+    if (!standbyJobs.length) return;
+    if (!id) id = standbyJobs[0].id;
+    const idx = standbyJobs.findIndex(j => j.id === id);
+    if (idx < 0) return;
+    const [job] = standbyJobs.splice(idx, 1);
+    logLine(`cancelled standby: ${job.name}`);
+    setStatus(document.getElementById('progress'), standbyJobs.length
+        ? `Standby · ${standbyJobs.length} waiting`
+        : (runActive ? 'Standby cancelled' : 'Standby cancelled'));
+    renderStandby();
+    persistRemix();
+}
+
+function drainStandby() {
+    if (runActive || runLoopBusy || !standbyJobs.length) return;
+    const next = standbyJobs.shift();
+    renderStandby();
+    persistRemix();
+    startQueuedJob(next);
+}
+
+function waitPollDelay(ms) {
+    return new Promise(resolve => {
+        pollWaitResolve = resolve;
+        pollTimer = setTimeout(() => {
+            pollTimer = null;
+            pollWaitResolve = null;
+            resolve();
+        }, ms);
+    });
+}
+
+function abortPollWait() {
+    if (pollTimer) {
+        clearTimeout(pollTimer);
+        pollTimer = null;
+    }
+    if (pollWaitResolve) {
+        const resolve = pollWaitResolve;
+        pollWaitResolve = null;
+        resolve();
+    }
+}
+
+async function interruptColab(base) {
+    if (!base) return;
+    const opts = { method: 'POST', mode: 'cors' };
+    await Promise.all([
+        colabFetch(base + '/interrupt', opts, { label: '/interrupt', statusNoun: 'interrupt', tries: 3 }).catch(() => {}),
+        colabFetch(base + '/queue', {
+            method: 'POST',
+            mode: 'cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clear: true }),
+        }, { label: '/queue clear', statusNoun: 'interrupt', tries: 3 }).catch(() => {}),
+    ]);
+}
+
+async function stopRun() {
+    if (runStopped && !runActive) return;
+    runStopped = true;
+    abortPollWait();
+    const el = document.getElementById('progress');
+    logLine('stop requested');
+    setStatus(el, 'Stopping…');
+    const stopBtn = document.getElementById('stopBtn');
+    const stopPanel = document.getElementById('stopBtnPanel');
+    if (stopBtn) stopBtn.disabled = true;
+    if (stopPanel) stopPanel.disabled = true;
+    try {
+        await interruptColab(colabUrl());
+    } catch (_) {}
+    closeRunSocket();
+    runActive = false;
+    setStatus(el, 'Stopped', 'err');
+    logLine('stopped', 'err');
+    const tab = execTab();
+    if (tab) setTabHint(tab, 'stopped');
+    setRunButtons(false);
+    updateRunMeta();
+    persistRemix();
+}
+
+function wsUrl(httpBase) {
+    try {
+        const u = new URL(httpBase);
+        u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+        u.pathname = '/ws';
+        u.search = 'clientId=' + encodeURIComponent(clientId);
+        u.hash = '';
+        return u.toString();
+    } catch (_) {
+        return '';
+    }
+}
+
+function handleWsMessage(msg, base) {
+    const type = msg.type;
+    const data = msg.data || {};
+    if (type === 'status') {
+        runQueueLeft = data.status?.exec_info?.queue_remaining;
+        updateRunMeta();
+        if (runQueueLeft != null) logLine(`queue remaining: ${runQueueLeft} (shared Colab queue)`);
+        return;
+    }
+    const liveId = (execTab() && execTab().promptId) || runPromptId;
+    if (liveId && data.prompt_id && String(data.prompt_id) !== String(liveId)) return;
+    if (type === 'execution_start') {
+        logLine('execution started', 'ok');
+        setStatus(document.getElementById('progress'), 'Running…');
+        const tab = execTab();
+        if (tab) setTabHint(tab, 'running');
+        return;
+    }
+    if (type === 'execution_cached') {
+        const n = (data.nodes || []).length;
+        logLine(`cached nodes: ${n}`);
+        return;
+    }
+    if (type === 'executing') {
+        if (data.node == null) {
+            runNode = '';
+            logLine('graph finished', 'ok');
+        } else {
+            runNode = String(data.node);
+            logLine(`executing ${nodeLabel(runNode)}`, 'node');
+            const tab = execTab();
+            if (tab) tab.runNode = runNode;
+            setStatus(document.getElementById('progress'), runPrefix() + 'Running ' + nodeLabel(runNode));
+        }
+        updateRunMeta();
+        return;
+    }
+    if (type === 'progress') {
+        const value = data.value ?? 0;
+        const max = data.max ?? 0;
+        setBar(value, max);
+        if (data.node != null) runNode = String(data.node);
+        const label = max ? `${value}/${max}` : String(value);
+        setStatus(document.getElementById('progress'), runPrefix() + `${nodeLabel(runNode) || 'progress'} ${label}`);
+        updateRunMeta();
+        return;
+    }
+    if (type === 'executed') {
+        const files = filesFromExecuted(data);
+        const stills = files.filter(f => !isVideoFile(f.filename));
+        logLine(`executed ${nodeLabel(data.node)}${files.length ? ' · ' + files.map(f => f.filename).join(', ') : ''}`, 'ok');
+        if (files.length) showOutputs(colabUrl() || base, files);
+        if (stills.length) setStatus(document.getElementById('progress'), runPrefix() + 'Preview still · video still encoding');
+        return;
+    }
+    if (type === 'execution_error') {
+        const tb = Array.isArray(data.traceback) ? data.traceback.join('\n') : (data.traceback || '');
+        const msg = data.exception_message || data.exception_type || 'execution_error';
+        logLine(`${data.node_type || ''} #${data.node_id || ''} ${msg}`, 'err');
+        if (tb) logLine(tb, 'err');
+        setStatus(document.getElementById('progress'), msg, 'err');
+        const tab = execTab();
+        if (tab) setTabHint(tab, 'error');
+        return;
+    }
+    if (type === 'execution_interrupted') {
+        abortPollWait();
+        if (runStopped) return;
+        runStopped = true;
+        runActive = false;
+        logLine('interrupted', 'err');
+        setStatus(document.getElementById('progress'), 'Interrupted', 'err');
+        const tab = execTab();
+        if (tab) setTabHint(tab, 'stopped');
+        setRunButtons(false);
+        persistRemix();
+    }
+}
+
+function ensureRunSocket(base) {
+    if (!base || !wsWanted || runStopped) return;
+    if (runSocket && (runSocket.readyState === 0 || runSocket.readyState === 1)) return;
+    connectRunSocket(base);
+}
+
+function connectRunSocket(base) {
+    wsWanted = true;
+    if (wsReconnectTimer) {
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
+    }
+    if (runSocket && (runSocket.readyState === 0 || runSocket.readyState === 1)) return;
+    if (runSocket) {
+        try { runSocket.onclose = null; runSocket.close(); } catch (_) {}
+        runSocket = null;
+    }
+    const url = wsUrl(base);
+    if (!url || !window.WebSocket) {
+        logLine('websocket unavailable; polling history only');
+        return;
+    }
+    try {
+        runSocket = new WebSocket(url);
+        runSocket.binaryType = 'arraybuffer';
+    } catch (err) {
+        logLine('websocket failed: ' + err.message, 'err');
+        return;
+    }
+    runSocket.onopen = () => { logLine('websocket connected', 'ok'); updateRunMeta(); };
+    runSocket.onclose = () => {
+        runSocket = null;
+        updateRunMeta();
+        if (wsWanted && runActive && !runStopped) {
+            logLine('websocket dropped · reconnecting');
+            wsReconnectTimer = setTimeout(() => ensureRunSocket(base), 1000);
+        }
+    };
+    runSocket.onerror = () => { logLine('websocket error (CORS or tunnel). Still polling /history.'); };
+    runSocket.onmessage = (ev) => {
+        if (ev.data instanceof ArrayBuffer || (typeof Blob !== 'undefined' && ev.data instanceof Blob)) {
+            handleWsBinary(ev.data);
+            return;
+        }
+        if (typeof ev.data !== 'string') return;
+        let msg;
+        try { msg = JSON.parse(ev.data); } catch (_) { return; }
+        handleWsMessage(msg, base);
+    };
+}
+
+function formatSystemStats(data) {
+    const sys = data.system || {};
+    const parts = [];
+    if (sys.comfyui_version) parts.push('ComfyUI ' + sys.comfyui_version);
+    if (sys.pytorch_version) parts.push('torch ' + sys.pytorch_version);
+    if (sys.ram_total) parts.push('RAM ' + fmtBytes(sys.ram_free || 0) + ' free / ' + fmtBytes(sys.ram_total));
+    const gpu = (data.devices || [])[0];
+    if (gpu) {
+        const name = gpu.name || gpu.type || 'GPU';
+        const vram = gpu.vram_total ? `${fmtBytes(gpu.vram_free)} free / ${fmtBytes(gpu.vram_total)}` : '';
+        parts.push(name + (vram ? ' ' + vram : ''));
+    }
+    return parts.join(' · ') || 'ok';
+}
+
+async function testColab() {
+    const base = colabUrl();
+    const el = document.getElementById('colabStatus');
+    if (!base) { setStatus(el, 'Paste a Colab / Cloudflare URL first', 'err'); return; }
+    setStatus(el, 'Checking…');
+    try {
+        const resp = await fetch(base + '/system_stats', { mode: 'cors' });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        setStatus(el, 'Connected · ' + formatSystemStats(data), 'ok');
+        logLine('system_stats: ' + formatSystemStats(data), 'ok');
+        try {
+            const q = await fetch(base + '/queue', { mode: 'cors' });
+            if (q.ok) {
+                const queue = await q.json();
+                const running = (queue.queue_running || []).length;
+                const pending = (queue.queue_pending || []).length;
+                logLine(`queue: ${running} running, ${pending} pending`);
+            }
+        } catch (_) {}
+    } catch (err) {
+        setStatus(el, 'Cannot reach ComfyUI. Enable CORS (--enable-cors-header \'*\') and open the URL in a tab first if Cloudflare shows a warning. ' + err.message, 'err');
+    }
+}
+
+function normalizeOutputFile(item) {
+    if (!item) return null;
+    if (typeof item === 'string') {
+        return { filename: item, subfolder: '', type: 'output' };
+    }
+    if (Array.isArray(item) && typeof item[0] === 'string') {
+        return { filename: item[0], subfolder: item[1] || '', type: item[2] || 'output' };
+    }
+    if (typeof item !== 'object') return null;
+    const filename = item.filename || item.name || item.file || item.image;
+    if (!filename || typeof filename !== 'string') return null;
+    return {
+        filename,
+        subfolder: item.subfolder || '',
+        type: item.type || item.folder_type || 'output',
+    };
+}
+
+function outputFiles(outputs) {
+    const files = [];
+    const seen = new Set();
+    function add(item) {
+        const file = normalizeOutputFile(item);
+        if (!file) return;
+        const k = `${file.type}/${file.subfolder}/${file.filename}`;
+        if (seen.has(k)) return;
+        seen.add(k);
+        files.push(file);
+    }
+    function fromBucket(obj) {
+        if (!obj || typeof obj !== 'object') return;
+        ['images', 'gifs', 'videos', 'video', 'animated', 'previews'].forEach(key => {
+            const list = obj[key];
+            if (Array.isArray(list)) list.forEach(add);
+            else add(list);
+        });
+        if (obj.ui) fromBucket(obj.ui);
+        if (obj.output) fromBucket(obj.output);
+    }
+    fromBucket(outputs);
+    Object.values(outputs || {}).forEach(nodeOut => {
+        if (Array.isArray(nodeOut)) nodeOut.forEach(add);
+        else fromBucket(nodeOut);
+    });
+    return files;
+}
+
+function filesFromExecuted(data) {
+    const files = [];
+    const seen = new Set();
+    function take(list) {
+        (list || []).forEach(item => {
+            const file = normalizeOutputFile(item);
+            if (!file) return;
+            const k = `${file.type}/${file.subfolder}/${file.filename}`;
+            if (seen.has(k)) return;
+            seen.add(k);
+            files.push(file);
+        });
+    }
+    take(outputFiles(data && (data.output || data.outputs || data)));
+    const out = data && data.output;
+    if (out && Array.isArray(out.images)) take(out.images);
+    if (out && out.ui && Array.isArray(out.ui.images)) take(out.ui.images);
+    if (data && Array.isArray(data.images)) take(data.images);
+    if (Array.isArray(out)) take(out);
+    return files;
+}
+
+function viewUrl(base, file) {
+    const q = new URLSearchParams({
+        filename: file.filename,
+        subfolder: file.subfolder || '',
+        type: file.type || 'output',
+    });
+    return `${base}/view?${q}`;
+}
+
+function isVideoFile(name) {
+    return /\.(mp4|webm|mov|mkv)$/i.test(name || '');
+}
+
+function fileKey(file) {
+    return `${file.runIndex || 0}/${file.type || 'output'}/${file.subfolder || ''}/${file.filename}`;
+}
+
+function tagRun(files) {
+    const tab = execTab();
+    const n = tab ? tab.n : (runIndex || 1);
+    return (files || []).map(f => Object.assign({}, f, { runIndex: f.runIndex || n }));
+}
+
+function mediaTag(base, file, slot) {
+    const url = viewUrl(base || colabUrl(), file);
+    const name = file.filename || '';
+    const video = isVideoFile(name);
+    const kind = video ? 'video' : 'image';
+    const slotCls = slot || (video ? 'video' : 'still');
+    const media = video
+        ? `<div class="media-frame"><video src="${url}" playsinline muted preload="metadata"></video></div><span class="thumb-play" aria-hidden="true">▶</span>`
+        : `<div class="media-frame"><img src="${url}" alt="${escapeHtml(name)}" onerror="retryOutputImg(this)"></div>`;
+    return `<figure class="output-card output-slot ${slotCls}" data-src="${escapeAttr(url)}" data-kind="${kind}">
+        ${media}
+        <button type="button" class="expand-btn" data-src="${escapeAttr(url)}" data-kind="${kind}" aria-label="View bigger">Expand</button>
+        <figcaption>${escapeHtml(name)}</figcaption>
+    </figure>`;
+}
+
+function retryOutputImg(img) {
+    if (!img) return;
+    if (!img.dataset.retried) {
+        img.dataset.retried = '1';
+        try {
+            const u = new URL(img.src, window.location.href);
+            if ((u.searchParams.get('type') || 'output') === 'output') {
+                u.searchParams.set('type', 'temp');
+                img.src = u.toString();
+                return;
+            }
+        } catch (_) {}
+    }
+    img.classList.add('broken');
+    const frame = img.closest('.media-frame');
+    if (frame) frame.classList.add('load-fail');
+}
+
+function videoPlaceholder() {
+    return `<div class="output-slot placeholder video" aria-label="Video encoding"><div class="ph-box">Encoding video…</div><figcaption>Video</figcaption></div>`;
+}
+
+function stillPlaceholder() {
+    return `<div class="output-slot placeholder still" aria-label="Waiting for still"><div class="media-frame ph-box">Waiting…</div><figcaption>Still</figcaption></div>`;
+}
+
+function liveStillTag() {
+    const tab = currentTab();
+    const url = (tab && tab.livePreviewUrl) || livePreviewUrl;
+    if (!url) return stillPlaceholder();
+    return `<figure class="output-card output-slot still live" data-src="${escapeAttr(url)}" data-kind="image">
+        <div class="media-frame"><img src="${escapeAttr(url)}" alt="Live preview"></div>
+        <button type="button" class="expand-btn" data-src="${escapeAttr(url)}" data-kind="image" aria-label="View bigger">Expand</button>
+        <figcaption>Live preview</figcaption>
+    </figure>`;
+}
+
+function clearLivePreview() {
+    const tab = execTab();
+    if (tab && tab.livePreviewUrl) {
+        try { URL.revokeObjectURL(tab.livePreviewUrl); } catch (_) {}
+        tab.livePreviewUrl = '';
+    }
+    if (livePreviewUrl) {
+        try { URL.revokeObjectURL(livePreviewUrl); } catch (_) {}
+        livePreviewUrl = '';
+    }
+    livePreviewLogged = false;
+}
+
+function showLivePreview(blob) {
+    if (!blob) return;
+    const tab = execTab() || currentTab();
+    if (tab && tab.livePreviewUrl) {
+        try { URL.revokeObjectURL(tab.livePreviewUrl); } catch (_) {}
+    } else if (livePreviewUrl) {
+        try { URL.revokeObjectURL(livePreviewUrl); } catch (_) {}
+    }
+    const url = URL.createObjectURL(blob);
+    if (tab) tab.livePreviewUrl = url;
+    if (!tab || tab.id === activeTabId) livePreviewUrl = url;
+    if (!livePreviewLogged) {
+        logLine('live preview frame', 'ok');
+        livePreviewLogged = true;
+    }
+    if (tab) setTabHint(tab, 'running');
+    setStatus(document.getElementById('progress'), runPrefix() + 'Live preview');
+    if (!tab || tab.id === activeTabId) paintOutputSurfaces(colabUrl());
+}
+
+function sniffImageMime(bytes) {
+    if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return 'image/jpeg';
+    if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'image/png';
+    if (bytes.length >= 4 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) return 'image/webp';
+    return '';
+}
+
+async function handleWsBinary(data) {
+    try {
+        const buf = data instanceof ArrayBuffer ? data : await data.arrayBuffer();
+        if (!buf || buf.byteLength < 4) return;
+        const bytes = new Uint8Array(buf);
+        const view = new DataView(buf);
+        let mime = sniffImageMime(bytes);
+        let start = 0;
+        if (!mime && buf.byteLength >= 8) {
+            const eventType = view.getUint32(0, false);
+            const imageType = view.getUint32(4, false);
+            const types = { 1: 'image/jpeg', 2: 'image/png', 3: 'image/webp' };
+            if (eventType === 1 && types[imageType]) {
+                mime = types[imageType];
+                start = 8;
+            } else {
+                const m4 = sniffImageMime(bytes.subarray(4));
+                const m8 = sniffImageMime(bytes.subarray(8));
+                mime = m4 || m8;
+                if (m4) start = 4;
+                else if (m8) start = 8;
+            }
+        }
+        if (!mime) return;
+        const payload = start ? buf.slice(start) : buf;
+        showLivePreview(new Blob([payload], { type: mime }));
+    } catch (_) {}
+}
+
+function renderOutputPairs(base) {
+    const tab = currentTab();
+    const outputs = (tab ? tab.lastOutputs : lastOutputs) || [];
+    const live = (tab && tab.livePreviewUrl) || livePreviewUrl;
+    const byRun = new Map();
+    outputs.forEach(f => {
+        const key = 1;
+        if (!byRun.has(key)) byRun.set(key, { images: [], videos: [] });
+        if (isVideoFile(f.filename)) byRun.get(key).videos.push(f);
+        else byRun.get(key).images.push(f);
+    });
+    if (!byRun.size && live) {
+        byRun.set(1, { images: [], videos: [] });
+    }
+    const keys = [...byRun.keys()].sort((a, b) => a - b);
+    return keys.map(key => {
+        const group = byRun.get(key);
+        const stills = group.images.length
+            ? group.images.map(f => mediaTag(base, f, 'still')).join('')
+            : liveStillTag();
+        const vids = group.videos.length
+            ? group.videos.map(f => mediaTag(base, f, 'video')).join('')
+            : videoPlaceholder();
+        return `<div class="output-pair" data-run="${tab ? tab.n : key}"><div class="output-pair-row">${stills}${vids}</div></div>`;
+    }).join('');
+}
+
+function muteOutputVideos(root) {
+    (root || document).querySelectorAll('video').forEach(v => {
+        v.muted = true;
+        v.defaultMuted = true;
+        v.setAttribute('muted', '');
+        v.controls = false;
+    });
+}
+
+function paintOutputSurfaces(base) {
+    const viewBase = base || colabUrl();
+    const tab = currentTab();
+    const outputs = (tab ? tab.lastOutputs : lastOutputs) || [];
+    const live = (tab && tab.livePreviewUrl) || livePreviewUrl;
+    const box = document.getElementById('outputs');
+    const title = document.getElementById('outputsTitle');
+    const hasAnything = outputs.length || live;
+    if (box) {
+        lastOutputs = outputs;
+        livePreviewUrl = live || '';
+        box.innerHTML = hasAnything ? renderOutputPairs(viewBase) : '';
+        muteOutputVideos(box);
+    }
+    if (title) title.hidden = !hasAnything;
+}
+
+function showOutputs(base, files, skipPersist) {
+    const tab = execTab() || currentTab();
+    const incoming = tagRun(files);
+    const store = (tab ? tab.lastOutputs : lastOutputs) || [];
+    const byKey = new Map(store.map(f => [fileKey(f), f]));
+    incoming.forEach(f => {
+        if (f && f.filename) byKey.set(fileKey(f), f);
+    });
+    const merged = [...byKey.values()];
+    if (tab) tab.lastOutputs = merged;
+    const hasStill = merged.some(f => !isVideoFile(f.filename));
+    if (hasStill) {
+        if (tab && tab.livePreviewUrl) {
+            try { URL.revokeObjectURL(tab.livePreviewUrl); } catch (_) {}
+            tab.livePreviewUrl = '';
+        }
+        if (!tab || tab.id === activeTabId) {
+            if (livePreviewUrl && livePreviewUrl !== (tab && tab.livePreviewUrl)) {
+                try { URL.revokeObjectURL(livePreviewUrl); } catch (_) {}
+            }
+            livePreviewUrl = '';
+        }
+    }
+    if (!tab || tab.id === activeTabId) {
+        lastOutputs = merged;
+        paintOutputSurfaces(base || colabUrl());
+    }
+    if (tab && tab.hint !== 'stopped' && tab.hint !== 'error') setTabHint(tab, 'running');
+    renderTabStrip();
+    if (!skipPersist) persistRemix();
+}
+
+function openMediaLightbox(src, kind) {
+    const box = document.getElementById('mediaLightbox');
+    const stage = document.getElementById('mediaLightboxStage');
+    if (!box || !stage || !src) return;
+    stage.innerHTML = '';
+    if (kind === 'video' || isVideoFile(src)) {
+        const v = document.createElement('video');
+        v.src = src;
+        v.controls = true;
+        v.playsInline = true;
+        v.muted = true;
+        v.defaultMuted = true;
+        v.setAttribute('muted', '');
+        v.autoplay = true;
+        stage.appendChild(v);
+        v.play().catch(() => {});
+    } else {
+        const img = document.createElement('img');
+        img.src = src;
+        img.alt = 'Preview';
+        stage.appendChild(img);
+    }
+    box.hidden = false;
+    document.body.style.overflow = 'hidden';
+}
+
+function closeMediaLightbox() {
+    const box = document.getElementById('mediaLightbox');
+    const stage = document.getElementById('mediaLightboxStage');
+    if (!box || box.hidden) return;
+    const live = stage && stage.querySelector('video');
+    if (live) {
+        live.pause();
+        live.removeAttribute('src');
+        live.load();
+    }
+    if (stage) stage.innerHTML = '';
+    box.hidden = true;
+    document.body.style.overflow = '';
+}
+
+function mediaSrcFrom(el) {
+    if (!el) return '';
+    if (el.dataset && el.dataset.src) return el.dataset.src;
+    return el.currentSrc || el.src || '';
+}
+
+function onOutputMediaClick(e) {
+    const expand = e.target.closest('.expand-btn');
+    if (expand) {
+        e.preventDefault();
+        e.stopPropagation();
+        openMediaLightbox(expand.dataset.src, expand.dataset.kind);
+        return;
+    }
+    const card = e.target.closest('.output-card[data-src]');
+    if (card) {
+        e.preventDefault();
+        openMediaLightbox(card.dataset.src, card.dataset.kind);
+        return;
+    }
+    const media = e.target.closest('#outputs img, #outputs video');
+    if (!media) return;
+    e.preventDefault();
+    openMediaLightbox(mediaSrcFrom(media), media.tagName === 'VIDEO' ? 'video' : 'image');
+}
+
+async function fetchQueue(base) {
+    try {
+        const resp = await colabFetch(base + '/queue', { mode: 'cors' }, {
+            label: '/queue', statusNoun: 'queue', tries: 3,
+        });
+        if (!resp.ok) return;
+        const queue = await resp.json();
+        const running = queue.queue_running || [];
+        const pending = queue.queue_pending || [];
+        runQueueLeft = pending.length + running.length;
+        updateRunMeta();
+    } catch (_) {}
+}
+
+function logHistoryStatus(status) {
+    const messages = status.messages || [];
+    const fresh = messages.slice(historyMsgCount);
+    historyMsgCount = messages.length;
+    const live = runSocket && runSocket.readyState === 1;
+    fresh.forEach(item => {
+        const kind = Array.isArray(item) ? item[0] : '';
+        const payload = Array.isArray(item) ? item[1] : item;
+        if (kind === 'execution_error') {
+            logLine('history error: ' + (payload?.exception_message || JSON.stringify(payload).slice(0, 400)), 'err');
+            return;
+        }
+        if (live) return;
+        if (kind === 'executing' && payload?.node) logLine('history: executing ' + nodeLabel(payload.node), 'node');
+        else if (kind === 'executed') logLine('history: executed ' + nodeLabel(payload?.node), 'ok');
+        else if (kind) logLine('history: ' + kind);
+    });
+}
+
+function isRandomSeedOn() {
+    const el = document.getElementById('randomSeed');
+    return el ? !!el.checked : true;
+}
+
+function randomSeedValue() {
+    return Math.floor(Math.random() * 0x100000000);
+}
+
+function applyRandomSeeds(promptObj) {
+    const target = promptObj || workflow.prompt;
+    if (!isRandomSeedOn() || !target) return [];
+    const assigned = [];
+    Object.entries(target).forEach(([id, node]) => {
+        const val = node?.inputs?.seed;
+        if (Array.isArray(val)) return;
+        if (typeof val === 'number') {
+            if (!Number.isFinite(val)) return;
+        } else if (typeof val === 'string') {
+            if (!/^-?\d+$/.test(val)) return;
+        } else return;
+        const n = randomSeedValue();
+        node.inputs.seed = n;
+        assigned.push({ id, seed: n });
+        const el = document.querySelector(`[data-node="${id}"][data-key="seed"]`);
+        if (el) {
+            el.value = String(n);
+            const preview = el.closest('details.field') && el.closest('details.field').querySelector('.field-preview');
+            if (preview) preview.textContent = String(n);
+        }
+    });
+    return assigned;
+}
+
+function readRunCount() {
+    const el = document.getElementById('runCount');
+    const n = parseInt(el && el.value, 10);
+    return Math.min(20, Math.max(1, Number.isFinite(n) ? n : 1));
+}
+
+function runPrefix() {
+    return runTotal > 1 ? `Run ${runIndex} of ${runTotal} · ` : '';
+}
+
+function finishBatchOk() {
+    const el = document.getElementById('progress');
+    const secs = elapsedText();
+    const tab = execTab();
+    const outs = (tab ? tab.lastOutputs : lastOutputs) || [];
+    const n = outs.length;
+    const msg = runTotal > 1
+        ? `Done · ${runTotal} runs · ${n} output(s) · ${secs}`
+        : (n ? `Done · ${n} output(s) · ${secs}` : `Done · ${secs}`);
+    setStatus(el, msg, 'ok');
+    logLine(`finished ${runTotal} run(s) in ${secs}` + (n ? ` · ${outs.map(f => f.filename).join(', ')}` : ''), 'ok');
+    setBar(1, 1);
+    if (tab && tab.hint !== 'stopped' && tab.hint !== 'error') setTabHint(tab, 'done');
+}
+
+async function executeOneRun(base, prompt, i) {
+    if (runStopped) return;
+    const tab = beginRunTab();
+    runIndex = i;
+    historyMsgCount = 0;
+    runNode = '';
+    runPromptId = '';
+    setBar(0, 1);
+    const el = document.getElementById('progress');
+    setTabHint(tab, 'running');
+    setStatus(el, runPrefix() + 'Queueing…');
+    const payload = JSON.parse(JSON.stringify(prompt));
+    const rolled = applyRandomSeeds(payload);
+    if (rolled.length) {
+        tab.seed = rolled[0].seed;
+        renderTabStrip();
+        logLine(`run ${i} of ${runTotal} seed ${rolled.map(s => `#${s.id}=${s.seed}`).join(', ')}`);
+    }
+    logLine(`run ${i} of ${runTotal} POST ${base}/prompt (${Object.keys(payload).length} nodes)`);
+    persistRemix();
+    try {
+        if (runStopped) return;
+        const resp = await colabFetch(base + '/prompt', {
+            method: 'POST',
+            mode: 'cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: payload, client_id: clientId }),
+        }, { label: '/prompt', statusNoun: 'prompt', tries: 6 });
+        if (runStopped) return;
+        const body = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+            if (body.node_errors) logLine(JSON.stringify(body.node_errors, null, 2), 'err');
+            const detail = body.error || (body.node_errors ? JSON.stringify(body.node_errors) : ('HTTP ' + resp.status));
+            throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+        }
+        const promptId = body.prompt_id;
+        if (!promptId) throw new Error('No prompt_id from ComfyUI');
+        runPromptId = promptId;
+        tab.promptId = promptId;
+        const number = body.number != null ? ` queue #${body.number}` : '';
+        logLine(`run ${i} of ${runTotal} prompt_id ${promptId}${number}`, 'ok');
+        updateRunMeta();
+        persistRemix();
+        if (runStopped) return;
+        await pollHistory(base, promptId);
+        if (runStopped) {
+            setTabHint(tab, 'stopped');
+            return;
+        }
+        logLine(`run ${i} of ${runTotal} complete`, 'ok');
+        setTabHint(tab, 'done');
+        setBar(i, runTotal);
+    } catch (err) {
+        setTabHint(tab, 'error');
+        if (runStopped) return;
+        if (runTotal > 1) throw new Error(`Run ${i} of ${runTotal} failed: ${err.message || err}`);
+        throw err;
+    }
+}
+
+async function pollHistory(base, promptId) {
+    const el = document.getElementById('progress');
+    const histUrl = `${base}/history/${promptId}`;
+    const tick = async () => {
+        if (runStopped) return true;
+        ensureRunSocket(base);
+        await fetchQueue(base);
+        if (runStopped) return true;
+        const resp = await colabFetch(histUrl, { mode: 'cors' }, {
+            label: '/history/' + promptId, statusNoun: 'history', tries: 8,
+        });
+        if (resp.status === 404) {
+            setStatus(el, runPrefix() + (runNode ? ('Running ' + nodeLabel(runNode)) : 'Queued…'));
+            updateRunMeta();
+            return false;
+        }
+        if (!resp.ok) throw new Error('history HTTP ' + resp.status);
+        let data;
+        try { data = await resp.json(); } catch (err) {
+            throw isNetworkFetchError(err) ? err : new Error('history JSON unreadable');
+        }
+        const entry = data[promptId];
+        if (!entry) {
+            setStatus(el, runPrefix() + (runNode ? ('Running ' + nodeLabel(runNode)) : 'Queued…'));
+            updateRunMeta();
+            return false;
+        }
+        const status = entry.status || {};
+        logHistoryStatus(status);
+        if (status.status_str === 'error' || (Array.isArray(status.messages) && status.messages.some(m => m[0] === 'execution_error'))) {
+            if (runStopped) return true;
+            const errMsg = status.messages?.find(m => m[0] === 'execution_error');
+            const detail = errMsg?.[1]?.exception_message || JSON.stringify(status.messages || status).slice(0, 600);
+            throw new Error(detail);
+        }
+        const files = outputFiles(entry.outputs);
+        if (files.length) {
+            showOutputs(base, files);
+            const stills = files.filter(f => !isVideoFile(f.filename));
+            if (stills.length && !status.completed) {
+                setStatus(el, runPrefix() + 'Preview still · video still encoding');
+            }
+        }
+        if (status.completed) {
+            const secs = elapsedText();
+            logLine(`${runPrefix()}finished in ${secs}` + (files.length ? ` · ${files.map(f => f.filename).join(', ')}` : ''), 'ok');
+            setStatus(el, runPrefix() + `finished · ${secs}`);
+            if (runTotal > 1) setBar(runIndex, runTotal);
+            else setBar(1, 1);
+            return true;
+        }
+        const hasStill = files.some(f => !isVideoFile(f.filename));
+        const hasVideo = files.some(f => isVideoFile(f.filename));
+        if (hasStill && !hasVideo) {
+            setStatus(el, runPrefix() + 'Preview still · video still encoding');
+        } else {
+            setStatus(el, runPrefix() + (runNode ? ('Running ' + nodeLabel(runNode)) : 'Running…'));
+        }
+        updateRunMeta();
+        return false;
+    };
+    for (let i = 0; i < 600; i++) {
+        if (runStopped) return;
+        try {
+            if (await tick()) return;
+        } catch (err) {
+            if (runStopped) return;
+            const msg = String((err && err.message) || err || '');
+            if (msg === 'stopped') return;
+            const retryable = isNetworkFetchError(err)
+                || /unreachable|failed to fetch|history JSON unreadable|history HTTP (404|408|429|5\d\d)/i.test(msg);
+            if (!retryable) throw err;
+            logLine(`history poll: ${msg} · will keep retrying`);
+            setStatus(el, runPrefix() + 'Colab unreachable, retrying history…');
+            ensureRunSocket(base);
+        }
+        const tab = execTab();
+        const outs = (tab ? tab.lastOutputs : lastOutputs) || [];
+        const hasStill = (tab && tab.livePreviewUrl) || livePreviewUrl || outs.some(f => !isVideoFile(f.filename));
+        await waitPollDelay(hasStill ? 1500 : 400);
+        if (runStopped) return;
+    }
+    throw new Error('Timed out waiting for ComfyUI (15 min)');
+}
+
+async function runPrompt() {
+    const el = document.getElementById('progress');
+    const base = colabUrl();
+    if (!base) { setStatus(el, 'Paste a Colab URL first', 'err'); return; }
+    if (!workflow.prompt) { setStatus(el, 'No prompt loaded', 'err'); return; }
+    if (runActive || runLoopBusy) {
+        enqueueStandby();
+        return;
+    }
+    await startQueuedJob(snapshotJob());
+}
+
+async function startQueuedJob(job) {
+    const el = document.getElementById('progress');
+    const base = colabUrl();
+    if (!base) { setStatus(el, 'Paste a Colab URL first', 'err'); return; }
+    if (!job || !job.prompt) { setStatus(el, 'No prompt loaded', 'err'); return; }
+    const prompt = job.prompt;
+    const seedEl = document.getElementById('randomSeed');
+    if (seedEl && job.randomSeed != null) seedEl.checked = !!job.randomSeed;
+    runTotal = Math.min(20, Math.max(1, Number(job.runCount) || 1));
+    runCount = runTotal;
+    runIndex = 0;
+    runStopped = false;
+    runActive = true;
+    runLoopBusy = true;
+    setRunButtons(true);
+    persistRemix();
+    connectRunSocket(base);
+    logLine(`starting ${job.name || 'remix'}` + (runTotal > 1 ? ` · ${runTotal} runs` : ''));
+    setStatus(el, runTotal > 1 ? `Run 1 of ${runTotal} · Queueing…` : 'Queueing…');
+    try {
+        for (let i = 1; i <= runTotal; i++) {
+            if (runStopped) break;
+            await executeOneRun(base, prompt, i);
+        }
+        if (!runStopped) finishBatchOk();
+    } catch (err) {
+        if (!runStopped) {
+            logLine(String(err.message || err), 'err');
+            setStatus(el, String(err.message || err), 'err');
+        }
+    } finally {
+        runActive = false;
+        runLoopBusy = false;
+        setRunButtons(false);
+        closeRunSocket();
+        updateRunMeta();
+        persistRemix();
+        if (!runStopped) drainStandby();
+    }
+}
+
+document.getElementById('colabUrl').value = localStorage.getItem(COLAB_KEY) || '';
+document.getElementById('runCount').addEventListener('change', persistRemix);
+document.getElementById('randomSeed').addEventListener('change', persistRemix);
+document.getElementById('runTabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-tab]');
+    if (!btn) return;
+    selectTab(btn.getAttribute('data-tab'));
+    persistRemix();
+});
+document.getElementById('standbyList').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-cancel-standby]');
+    if (!btn) return;
+    cancelStandby(btn.getAttribute('data-cancel-standby'));
+});
+document.getElementById('outputs').addEventListener('click', onOutputMediaClick);
+document.getElementById('lightboxClose').addEventListener('click', closeMediaLightbox);
+document.getElementById('mediaLightbox').addEventListener('click', (e) => {
+    if (e.target.id === 'mediaLightbox') closeMediaLightbox();
+});
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeMediaLightbox();
+});
+window.addEventListener('pagehide', persistRemix);
+window.addEventListener('visibilitychange', () => { if (document.hidden) persistRemix(); });
+loadWorkflow();
+</script>
+</body>
+</html>

@@ -60,6 +60,22 @@ Do **not** edit **LOOK**, **ROOM**, or **PEOPLE**. Only the three **ACTION** box
 - **`IPAdapter model not found`** — old graph. Re-import this JSON. InstantID does not use `models/ipadapter/`. It uses `models/instantid/ip-adapter.bin` (same as your LinkedIn workflow).
 - **`Failed to find ... Depth-Anything-V2-Large` / `/tmp/ckpts`** — do not use DepthAnythingV2 on Colab. This file’s sofa preprocessor is MiDaS.
 
+## Remix from the gallery (ComfyUI API)
+
+The gallery **Remix** page (`run.html`) sends the clip’s API prompt to whatever ComfyUI URL you paste (Colab + cloudflared/ngrok). The site does not store that URL.
+
+Start ComfyUI with CORS open so the gallery origin can call it:
+
+```bash
+python main.py --listen --port 8188 --enable-cors-header '*'
+```
+
+Then expose port 8188 and paste the public URL (for example `https://….trycloudflare.com`) into Remix. Use **Test** before **Run**.
+
+If Cloudflare shows a browser warning page, open that URL in a tab first; otherwise `fetch()` fails.
+
+Most MP4s do not embed a ComfyUI prompt. Prefer a sidecar next to the clip (`clip.mp4.json` or `clip.json`) containing the API prompt, or paste the JSON on the Remix page.
+
 ## If identity or room slips
 
 - Faces drift: raise ApplyInstantID `ip_weight` from 0.8 toward 1.0, or feed a tight face crop as the InstantID image.

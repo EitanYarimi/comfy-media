@@ -5,6 +5,7 @@ import os
 import sys
 import unittest
 from datetime import datetime
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -60,6 +61,7 @@ class DaySummaryTests(unittest.TestCase):
 class DayFilterTests(unittest.TestCase):
     def setUp(self):
         video_server._media_by_month['videos'] = None
+        video_server._media_by_day['videos'] = None
         self.items = [
             item('a.mp4', 2026, 9, 4),
             item('b.mp4', 2026, 9, 4, hour=8),
@@ -69,6 +71,7 @@ class DayFilterTests(unittest.TestCase):
 
     def tearDown(self):
         video_server._media_by_month['videos'] = None
+        video_server._media_by_day['videos'] = None
 
     def test_filter_by_day_inside_month(self):
         got = video_server.filter_media_items(
@@ -86,6 +89,21 @@ class DayFilterTests(unittest.TestCase):
         )
         self.assertEqual([i['name'] for i in got], ['b.mp4'])
 
+    def test_photo_catalog_returns_the_whole_month(self):
+        photos = [
+            item('a.png', 2026, 9, 4),
+            item('b.png', 2026, 9, 1),
+            item('c.png', 2026, 8, 30),
+        ]
+        video_server._media_by_month['photos'] = None
+        video_server._media_by_day['photos'] = None
+        with mock.patch.object(video_server, 'get_photos_cached', return_value=photos):
+            catalog = video_server.photo_month_catalog('2026-09')
+        self.assertTrue(catalog['catalog'])
+        self.assertEqual(catalog['total'], 2)
+        self.assertEqual({p['name'] for p in catalog['photos']}, {'a.png', 'b.png'})
+        self.assertEqual([d['day'] for d in catalog['days']], ['2026-09-04', '2026-09-01'])
+
     def test_paginate_respects_day(self):
         total, page = video_server.paginate_media(
             self.items, month='2026-09', day='2026-09-04', offset=0, limit=1, kind='videos'
@@ -99,6 +117,41 @@ class DayFilterTests(unittest.TestCase):
         )
         month_only = video_server.filter_media_items(self.items, month='2026-09', kind='videos')
         self.assertEqual(len(month_only), 3)
+
+    def test_month_and_day_maps_are_built_together(self):
+        video_server._set_month_index('videos', self.items)
+        self.assertEqual(
+            sorted(p['name'] for p in video_server._media_by_month['videos']['2026-09']),
+            ['a.mp4', 'b.mp4', 'c.mp4'],
+        )
+        self.assertEqual(
+            sorted(p['name'] for p in video_server._media_by_day['videos']['2026-09-04']),
+            ['a.mp4', 'b.mp4'],
+        )
+        self.assertEqual(
+            video_server.indexed_day_summary('videos', '2026-09'),
+            [{'day': '2026-09-04', 'count': 2}, {'day': '2026-09-01', 'count': 1}],
+        )
+
+    def test_photo_focus_uses_the_month_map(self):
+        photos = [
+            item('a.png', 2026, 9, 4),
+            item('b.png', 2026, 9, 1),
+            item('c.png', 2026, 8, 30),
+        ]
+        video_server._set_month_index('photos', photos)
+        video_server.set_photo_focus('2026-08', None)
+        with mock.patch.object(video_server, 'get_photos_cached', return_value=photos):
+            focused, gen = video_server._focused_photo_items()
+        self.assertEqual([p['name'] for p in focused], ['c.png'])
+        self.assertGreater(gen, 0)
+        video_server.set_photo_focus('2026-09', '2026-09-04')
+        with mock.patch.object(video_server, 'get_photos_cached', return_value=photos):
+            focused, _gen = video_server._focused_photo_items()
+        self.assertEqual([p['name'] for p in focused], ['a.png'])
+        video_server._media_by_month['photos'] = None
+        video_server._media_by_day['photos'] = None
+        video_server.set_photo_focus(None, None)
 
 
 class QueryParsingTests(unittest.TestCase):

@@ -147,6 +147,9 @@ def _warn_local_media_root(script_dir, media_root):
 CACHE_ROOT = _default_cache_root()
 THUMB_CACHE_DIR = CACHE_ROOT / 'thumbs'
 STREAM_CACHE_DIR = CACHE_ROOT / 'streams'
+PHOTO_SRC_CACHE_DIR = CACHE_ROOT / 'photo_src'
+PHOTO_SRC_CACHE_MAX_BYTES = 4 * 1024 ** 3
+_src_trim_calls = 0
 
 # Older versions stored caches inside Google Drive; still read them so the
 # thousands of already-generated thumbnails stay usable.
@@ -184,6 +187,9 @@ _drive_prefix_warming = set()
 _photo_cache = {'data': None, 'time': 0.0}
 _video_cache = {'data': None, 'time': 0.0}
 _media_by_month = {'videos': None, 'photos': None}
+_media_by_day = {'videos': None, 'photos': None}
+_photo_focus_lock = threading.Lock()
+_photo_focus = {'month': None, 'day': None, 'gen': 0}
 _index_refresh_lock = threading.Lock()
 _refresh_flags = {'videos': False, 'photos': False}
 _refresh_flags_lock = threading.Lock()
@@ -368,6 +374,37 @@ def send_http_json(handler, status, obj, extra_headers=None):
     )
 
 
+APP_HTML_PAGES = {
+    '/': 'index.html',
+    '/index.html': 'index.html',
+    '/photos.html': 'photos.html',
+    '/run.html': 'run.html',
+}
+
+
+def serve_app_html(handler, bare_path):
+    """Serve gallery HTML from the app folder, not MEDIA_ROOT cwd."""
+    name = APP_HTML_PAGES.get(bare_path)
+    if not name:
+        return False
+    html_path = Path(__file__).resolve().parent / name
+    if not html_path.is_file():
+        send_http_bytes(
+            handler, 404, f'Missing app file {name}\n'.encode(), 'text/plain; charset=utf-8'
+        )
+        return True
+    data = html_path.read_bytes()
+    handler.send_response(200)
+    handler.send_header('Content-Type', 'text/html; charset=utf-8')
+    handler.send_header('Content-Length', str(len(data)))
+    handler.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
+    handler.send_header('X-Comfy-App-Dir', str(html_path.parent))
+    handler.end_headers()
+    if handler.command != 'HEAD':
+        safe_write(handler.wfile, data)
+    return True
+
+
 def send_login_page(handler, status=200):
     send_http_bytes(
         handler,
@@ -398,6 +435,7 @@ def vthumb_available():
 _vthumb_semaphore = threading.Semaphore(3)
 _drive_thumb_semaphore = threading.Semaphore(3)
 _photo_thumb_semaphore = threading.Semaphore(8)
+_hydrate_semaphore = threading.Semaphore(8)
 DRIVE_GRID_THUMB_SIZE = 220
 _photo_ondemand = 0
 _photo_ondemand_lock = threading.Lock()
@@ -451,12 +489,30 @@ def _save_disk_index(path, items, months):
         pass
 
 
-def _build_month_index(items):
+def _build_time_indexes(items):
+    """Month and day maps so a filter never walks the whole library."""
     by_month = {}
-    for item in items:
-        key = item_month_key(item['modified'])
-        by_month.setdefault(key, []).append(item)
-    return by_month
+    by_day = {}
+    for item in items or []:
+        mk = item_month_key(item['modified'])
+        dk = item_day_key(item['modified'])
+        by_month.setdefault(mk, []).append(item)
+        by_day.setdefault(dk, []).append(item)
+    return by_month, by_day
+
+
+def _build_month_index(items):
+    return _build_time_indexes(items)[0]
+
+
+def _set_month_index(kind, items):
+    if items is None:
+        _media_by_month[kind] = None
+        _media_by_day[kind] = None
+        return
+    by_month, by_day = _build_time_indexes(items)
+    _media_by_month[kind] = by_month
+    _media_by_day[kind] = by_day
 
 
 def _refresh_in_progress(kind):
@@ -497,7 +553,7 @@ def _commit_scan(kind, items):
     months = media_month_summary(items)
     cache['data'] = items
     cache['time'] = time.time()
-    _media_by_month[kind] = _build_month_index(items)
+    _set_month_index(kind, items)
     path = VIDEO_INDEX_PATH if kind == 'videos' else PHOTO_INDEX_PATH
     _save_disk_index(path, items, months)
     if kind == 'videos':
@@ -538,7 +594,7 @@ def _load_local_media(kind, force=False):
                 cached = kept
                 cache['data'] = kept
                 cache['time'] = saved or now
-                _media_by_month[kind] = _build_month_index(kept)
+                _set_month_index(kind, kept)
             else:
                 print(f'   {kind[:-1].title()} index entries missing on disk — rescanning…')
 
@@ -557,7 +613,7 @@ def get_photos_cached(force=False):
         photos = get_drive_storage().scan_photos(refresh=force)
         _photo_cache['data'] = photos
         _photo_cache['time'] = time.time()
-        _media_by_month['photos'] = _build_month_index(photos)
+        _set_month_index('photos', photos)
         return photos
     return _load_local_media('photos', force=force)
 
@@ -566,6 +622,7 @@ def invalidate_photo_cache():
     _photo_cache['data'] = None
     _photo_cache['time'] = 0.0
     _media_by_month['photos'] = None
+    _media_by_day['photos'] = None
 
 
 def get_videos_cached(force=False):
@@ -574,7 +631,7 @@ def get_videos_cached(force=False):
         videos = get_drive_storage().scan_videos()
         _video_cache['data'] = videos
         _video_cache['time'] = time.time()
-        _media_by_month['videos'] = _build_month_index(videos)
+        _set_month_index('videos', videos)
         return videos
     return _load_local_media('videos', force=force)
 
@@ -583,6 +640,7 @@ def invalidate_video_cache():
     _video_cache['data'] = None
     _video_cache['time'] = 0.0
     _media_by_month['videos'] = None
+    _media_by_day['videos'] = None
 
 
 def invalidate_media_cache():
@@ -659,7 +717,7 @@ def _remove_indexed_media(rel_path):
             continue
         cache['data'] = kept
         cache['time'] = time.time()
-        _media_by_month[kind] = _build_month_index(kept)
+        _set_month_index(kind, kept)
         index_path = VIDEO_INDEX_PATH if kind == 'videos' else PHOTO_INDEX_PATH
         _save_disk_index(index_path, kept, media_month_summary(kept))
         if kind == 'videos':
@@ -1528,10 +1586,77 @@ def _single_flight_photo(cache_key, factory):
                 _thumb_inflight.pop(cache_key, None)
 
 
+def _src_cache_path(filepath):
+    key = hashlib.md5(os.path.abspath(str(filepath)).encode()).hexdigest()
+    suffix = Path(str(filepath)).suffix.lower() or '.bin'
+    return PHOTO_SRC_CACHE_DIR / (key + suffix)
+
+
+def _trim_src_cache():
+    try:
+        files = [p for p in PHOTO_SRC_CACHE_DIR.iterdir() if p.is_file() and not p.name.endswith('.part')]
+    except OSError:
+        return
+    try:
+        total = sum(p.stat().st_size for p in files)
+    except OSError:
+        return
+    if total <= PHOTO_SRC_CACHE_MAX_BYTES:
+        return
+    files.sort(key=lambda p: p.stat().st_mtime)
+    for path in files:
+        if total <= int(PHOTO_SRC_CACHE_MAX_BYTES * 0.8):
+            break
+        try:
+            size = path.stat().st_size
+            path.unlink()
+            total -= size
+        except OSError:
+            continue
+
+
+def hydrate_photo_source(filepath, wait=True):
+    """Copy a Drive PNG onto local SSD so PIL does not wait on File Provider.
+
+    wait=False is for ahead-of-scroll warming: skip rather than steal a
+    slot from a /thumb/ the browser is already waiting on.
+    """
+    dest = _src_cache_path(filepath)
+    global _src_trim_calls
+    try:
+        if dest.is_file() and dest.stat().st_size > 32:
+            return dest
+    except OSError:
+        pass
+    acquired = _hydrate_semaphore.acquire(timeout=None if wait else 0)
+    if not acquired:
+        return Path(filepath)
+    try:
+        try:
+            if dest.is_file() and dest.stat().st_size > 32:
+                return dest
+        except OSError:
+            pass
+        PHOTO_SRC_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + '.part')
+        with open(filepath, 'rb') as src, open(tmp, 'wb') as out:
+            shutil.copyfileobj(src, out, 1024 * 1024)
+        tmp.replace(dest)
+        _src_trim_calls += 1
+        if _src_trim_calls % 20 == 0:
+            _trim_src_cache()
+        return dest
+    except OSError:
+        return Path(filepath)
+    finally:
+        _hydrate_semaphore.release()
+
+
 def _render_photo_thumbnail(filepath, cache_key):
     try:
         from PIL import Image
-        img = Image.open(filepath)
+        source = hydrate_photo_source(filepath, wait=True)
+        img = Image.open(source)
         if getattr(img, 'format', None) == 'JPEG' and hasattr(img, 'draft'):
             try:
                 img.draft('RGB', PHOTO_THUMB_SIZE)
@@ -1651,6 +1776,50 @@ def queue_warm_paths(rel_paths, reset=False, front=False):
     return added
 
 
+def promote_warm_path(rel):
+    """Put a visible miss at the front, even if listing already queued it."""
+    if not rel:
+        return
+    with _warm_lock:
+        try:
+            _warm_queue.remove(rel)
+        except ValueError:
+            pass
+        _warm_seen.add(rel)
+        _warm_queue.insert(0, rel)
+        while len(_warm_queue) > WARM_QUEUE_LIMIT:
+            dropped = _warm_queue.pop()
+            if dropped != rel:
+                _warm_seen.discard(dropped)
+
+
+def lookup_photo_thumb(rel, src_mtime=None):
+    """Serve a cached still, or queue a miss. Never decode Drive on this thread.
+
+    Video /vthumb/ can ffmpeg a frame on the request because that is fast.
+    Opening a Drive PNG is not — it holds Chrome's 6 connections for seconds
+    and the grid looks frozen. Workers encode; the client retries with <img>.
+    If a worker is already encoding this file, wait briefly so the first
+    retry can return 200 instead of another 503.
+    """
+    cache_key = _cache_key_from_rel(rel, ':400webp')
+    found = get_disk_thumb(cache_key, src_mtime)
+    if found:
+        return found
+    queue_warm_paths([rel])
+    with _thumb_inflight_lock:
+        slot = _thumb_inflight.get(cache_key)
+    if slot is not None:
+        slot.event.wait(timeout=1.25)
+        return get_disk_thumb(cache_key, src_mtime)
+    return None
+
+
+def _warm_queue_pending():
+    with _warm_lock:
+        return bool(_warm_queue)
+
+
 def _next_warm_path():
     with _warm_lock:
         if not _warm_queue:
@@ -1661,19 +1830,18 @@ def _next_warm_path():
 
 
 def _drain_warm_queue():
-    """Thumbnail whatever the browser just asked for, newest request first."""
+    """Encode visible stills on worker threads so /thumb/ stays cache-only."""
     while True:
-        if _photo_ondemand_busy():
-            return
         rel = _next_warm_path()
         if rel is None:
             return
         with _active_streams_lock:
-            if _active_streams > 0:
-                queue_warm_paths([rel], reset=False, front=True)
-                return
+            streaming = _active_streams > 0
         rel_l = rel.lower()
         is_photo = Path(rel_l).suffix in IMAGE_EXTENSIONS
+        if streaming and not is_photo:
+            queue_warm_paths([rel], reset=False, front=True)
+            return
         variant = ':400webp' if is_photo else ':v400webp'
         if get_disk_thumb(_cache_key_from_rel(rel, variant)):
             continue
@@ -1683,12 +1851,27 @@ def _drain_warm_queue():
                 continue
         except OSError:
             continue
-        result = generate_media_thumbnail(filepath, background=True)
+        if is_photo:
+            # Blocking encode: marks ondemand so the library walk yields.
+            result = generate_photo_thumbnail(filepath)
+        else:
+            result = generate_media_thumbnail(filepath, background=True)
         if result:
             _prewarm_state['done'] += 1
-        elif is_photo and _photo_ondemand_busy():
+        elif is_photo:
             queue_warm_paths([rel], reset=False, front=True)
             return
+
+
+def _warm_photo_listing(page, offset, limit, month=None, q=None, day=None):
+    """Start Drive copies for the tiles in this response and aim prewarm at this view."""
+    set_photo_focus(month, day)
+    if STORAGE_MODE == 'drive' or not PREWARM_ENABLED:
+        return
+    paths = [item['path'] for item in (page or []) if item.get('path')]
+    if not paths:
+        return
+    queue_warm_paths(paths, reset=(offset == 0))
 
 
 def _warm_queue_worker():
@@ -1782,24 +1965,29 @@ def _prewarm_photos_worker(worker_id=0, worker_count=1):
     time.sleep(2 + worker_id)
     while True:
         try:
-            photos = get_photos_cached()
+            photos, focus_gen = _focused_photo_items()
         except OSError:
             time.sleep(60)
             continue
         pending = 0
         hits = 0
         seen = 0
+        interrupted = False
         _note_photo_slice(worker_id, 0, 0, total=len(photos))
         for position, item in enumerate(photos):
             _drain_warm_queue()
+            with _photo_focus_lock:
+                if _photo_focus.get('gen', 0) != focus_gen:
+                    interrupted = True
+                    break
             if position % worker_count != worker_id:
                 continue
             seen += 1
             rel = item.get('path') or ''
             while not _photo_thumb_on_disk(rel):
-                while _photo_ondemand_busy():
+                while _photo_ondemand_busy() or _warm_queue_pending():
                     _drain_warm_queue()
-                    time.sleep(0.15)
+                    time.sleep(0.05)
                 with _active_streams_lock:
                     streaming = _active_streams > 0
                 if streaming:
@@ -1829,8 +2017,13 @@ def _prewarm_photos_worker(worker_id=0, worker_count=1):
                 f'   [prewarm] photos {worker_id}: generated {pending} '
                 f'({hits}/{seen} cached in this slice)'
             )
+        if interrupted:
+            continue
         for _ in range(8):
             _drain_warm_queue()
+            with _photo_focus_lock:
+                if _photo_focus.get('gen', 0) != focus_gen:
+                    break
             time.sleep(2)
 
 
@@ -1903,6 +2096,516 @@ def extract_image_metadata(filepath):
         meta['error'] = str(e)
 
     return meta
+
+
+def _is_comfy_link(value):
+    return (
+        isinstance(value, list)
+        and len(value) == 2
+        and isinstance(value[0], (str, int))
+        and isinstance(value[1], int)
+    )
+
+
+def _parse_serialized_link(value):
+    """Subgraph widgets serialize links as '1011:266,0' instead of ['1011:266', 0]."""
+    if not isinstance(value, str):
+        return None
+    m = re.match(r'^(\d+(?::\d+)+),(\d+)$', value.strip())
+    if not m:
+        return None
+    return [m.group(1), int(m.group(2))]
+
+
+def _is_string_primitive(class_type):
+    ct = class_type or ''
+    return ct.startswith('PrimitiveString')
+
+
+def coerce_comfy_prompt(obj):
+    """Return a ComfyUI API prompt dict, or None."""
+    if isinstance(obj, str):
+        text = obj.strip()
+        if not text:
+            return None
+        try:
+            obj = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(obj, dict) or not obj:
+        return None
+    if any(isinstance(v, dict) and v.get('class_type') for v in obj.values()):
+        return obj
+    inner = obj.get('prompt')
+    if isinstance(inner, dict) and any(
+        isinstance(v, dict) and v.get('class_type') for v in inner.values()
+    ):
+        return inner
+    return None
+
+
+def _node_title(node):
+    meta = node.get('_meta') if isinstance(node, dict) else None
+    if isinstance(meta, dict) and meta.get('title'):
+        return str(meta['title'])
+    return ''
+
+
+def _is_sampler_node(class_type):
+    ct = class_type or ''
+    return 'KSampler' in ct or ct.endswith('Sampler') or 'SamplerCustom' in ct
+
+
+def _is_text_encode_node(class_type):
+    ct = class_type or ''
+    return (
+        'CLIPTextEncode' in ct
+        or 'TextEncode' in ct
+        or 'PromptEncode' in ct
+        or 'WildcardEncode' in ct
+        or 'CLIPText' in ct
+        or 'Hunyuan' in ct
+        or 'WanVideo' in ct
+        or 'WanText' in ct
+    )
+
+
+def _is_video_prompt_context(class_type, title):
+    blob = f'{class_type or ""} {title or ""}'.lower()
+    if any(skip in blob for skip in ('loadvideo', 'savevideo', 'previewvideo')):
+        if not any(keep in blob for keep in ('textencode', 'cliptext', 'promptencode')):
+            return False
+    return any(token in blob for token in ('video', 'wan', 'hunyuan', 'i2v', 't2v', 'ltx'))
+
+
+def _is_generic_prompt_title(title):
+    t = (title or '').strip()
+    if not t:
+        return True
+    low = t.lower()
+    if 'clip text encode' in low or 'cliptextencode' in low.replace(' ', ''):
+        return True
+    return bool(re.match(r'^(prompt|value|positive|negative)$', t, re.I))
+
+
+_JUNK_PROMPT_RE = re.compile(r'^\d+:\d+(?:,\d+)*$')
+_JUNK_SHORT_NUM_RE = re.compile(r'^\d+([.:]\d+){1,4}$')
+
+
+def _is_junk_prompt_value(value):
+    if value is None:
+        return False
+    if isinstance(value, bool) or isinstance(value, (int, float)):
+        return True
+    if isinstance(value, (list, tuple, dict)):
+        return True
+    if not isinstance(value, str):
+        return True
+    s = value.strip()
+    if not s:
+        return False
+    if _JUNK_PROMPT_RE.match(s):
+        return True
+    if len(s) < 24 and _JUNK_SHORT_NUM_RE.match(s):
+        return True
+    return False
+
+
+def _is_clip_encode_name(class_type='', title='', label=''):
+    blob = f'{class_type or ""} {title or ""} {label or ""}'.lower()
+    return 'cliptextencode' in class_type or 'clip text encode' in blob
+
+
+def _is_prompt_input_key(key, class_type='', title='', value=None, nid=None, pos_ids=None, neg_ids=None):
+    if _is_junk_prompt_value(value):
+        return False
+    if key in {
+        'text', 'text_g', 'text_l', 'prompt', 'positive', 'negative',
+        'positive_prompt', 'negative_prompt', 'wildcard',
+        'text_positive', 'text_negative',
+    }:
+        return True
+    if key != 'value':
+        return False
+    if isinstance(value, bool) or isinstance(value, (int, float)):
+        return False
+    if class_type.startswith('PrimitiveInt') or class_type.startswith('PrimitiveBoolean') or class_type.startswith('PrimitiveFloat'):
+        return False
+    pos_ids = pos_ids or set()
+    neg_ids = neg_ids or set()
+    nid = str(nid or '')
+    if nid in pos_ids or nid in neg_ids:
+        return True
+    if _is_string_primitive(class_type):
+        return isinstance(value, str)
+    if _is_text_encode_node(class_type) or _is_video_prompt_context(class_type, title):
+        return True
+    if title and re.search(r'prompt|positive|negative|video', title, re.I):
+        return True
+    return isinstance(value, str) and len(value) > 40
+
+
+def _collect_linked_ids(prompt, start_ids, hops=8):
+    found = {str(i) for i in start_ids}
+    queue = list(found)
+    depth = 0
+    while queue and depth < hops:
+        nxt = []
+        for nid in queue:
+            node = prompt.get(nid)
+            if node is None and nid.isdigit():
+                node = prompt.get(int(nid))
+            if not isinstance(node, dict):
+                continue
+            for value in (node.get('inputs') or {}).values():
+                if not _is_comfy_link(value):
+                    continue
+                sid = str(value[0])
+                if sid in found:
+                    continue
+                found.add(sid)
+                nxt.append(sid)
+        queue = nxt
+        depth += 1
+    return found
+
+
+def _prompt_role(nid, key, title, pos_ids, neg_ids, class_type=''):
+    if str(nid) in pos_ids:
+        return 'positive'
+    if str(nid) in neg_ids:
+        return 'negative'
+    blob = f'{key or ""} {title or ""} {class_type or ""}'.lower()
+    if 'negative' in blob or blob.endswith('neg'):
+        return 'negative'
+    if 'positive' in blob:
+        return 'positive'
+    if key in ('text_g', 'text_l'):
+        return 'positive'
+    if key == 'value' and (
+        _is_text_encode_node(class_type)
+        or _is_video_prompt_context(class_type, title)
+        or re.search(r'prompt|video', title or '', re.I)
+    ):
+        return 'positive'
+    if key == 'text' and (
+        _is_video_prompt_context(class_type, title)
+        or re.match(r'^prompt$', (title or '').strip(), re.I)
+    ):
+        return 'positive'
+    return 'prompt'
+
+
+def _is_image_encode_field(class_type='', key=''):
+    return 'CLIPTextEncode' in (class_type or '') and key in {
+        'text', 'text_g', 'text_l', 'prompt', 'positive_prompt', 'negative_prompt',
+    }
+
+
+def _prompt_label(role, title, nid, key, class_type='', image=False):
+    video = _is_video_prompt_context(class_type, title) or key == 'value'
+    use_image = image and _is_image_encode_field(class_type, key) and not video
+    if role == 'positive':
+        role_name = 'Video positive' if video else ('Image positive' if use_image else 'Positive')
+    elif role == 'negative':
+        role_name = 'Video negative' if video else ('Image negative' if use_image else 'Negative')
+    else:
+        role_name = 'Video prompt' if video else ('Image prompt' if use_image else 'Prompt')
+    title = (title or '').strip()
+    if title and not _is_generic_prompt_title(title) and role_name.lower() in title.lower():
+        return title
+    if title and not _is_generic_prompt_title(title):
+        return f'{role_name} · {title}'
+    return role_name
+
+
+def _is_stock_clip_text_field(field):
+    ct = field.get('class_type') or ''
+    if 'CLIPTextEncode' in ct:
+        return True
+    blob = f"{ct} {field.get('label') or ''}".lower()
+    return 'clip text encode' in blob
+
+
+def _graph_has_video_prompt(prompts):
+    for f in prompts:
+        ct = f.get('class_type') or ''
+        if f.get('key') == 'value' and not _is_junk_prompt_value(f.get('value')):
+            return True
+        if _is_video_prompt_context(ct, f.get('label') or ''):
+            return True
+        if 'PrimitiveString' in ct:
+            return True
+    return False
+
+
+def _demote_stock_clip_text_fields(prompts, advanced):
+    has_video = _graph_has_video_prompt(prompts)
+    kept = []
+    for field in prompts:
+        if _is_junk_prompt_value(field.get('value')):
+            field['section'] = 'advanced'
+            advanced.append(field)
+            continue
+        clip = _is_stock_clip_text_field(field)
+        key = field.get('key') or ''
+        if clip and key not in {
+            'text', 'text_g', 'text_l', 'value', 'prompt',
+            'positive', 'negative', 'positive_prompt', 'negative_prompt',
+        }:
+            field['section'] = 'advanced'
+            field['label'] = f"CLIP Text Encode · {key or 'text'}"
+            advanced.append(field)
+            continue
+        if clip and (
+            has_video
+            or 'clip text encode' in (field.get('label') or '').lower()
+        ):
+            field['label'] = _prompt_label(
+                field.get('role'), '', field.get('node_id'), key,
+                field.get('class_type') or '', image=has_video,
+            )
+        kept.append(field)
+    return kept, advanced
+
+
+def _dedupe_prompt_labels(fields):
+    counts = {}
+    for f in fields:
+        if f.get('section') == 'prompts':
+            counts[f['label']] = counts.get(f['label'], 0) + 1
+    for f in fields:
+        if f.get('section') == 'prompts' and counts.get(f['label'], 0) > 1:
+            f['label'] = f"{f['label']} · #{f['node_id']}"
+
+
+def _is_advanced_node(class_type):
+    ct = class_type or ''
+    needles = (
+        'VAE', 'ControlNet', 'IPAdapter', 'InstantID', 'InsightFace',
+        'Preview', 'SaveImage', 'SaveVideo', 'VHS_', 'LoadImage',
+        'LoadVideo', 'ConditioningCombine', 'ConditioningConcat',
+        'ConditioningSetArea',
+    )
+    return any(n in ct for n in needles)
+
+
+def _field_input_type(key, value):
+    if isinstance(value, bool):
+        return 'checkbox'
+    if isinstance(value, int):
+        return 'number'
+    if isinstance(value, float):
+        return 'number'
+    if key in ('seed', 'steps', 'cfg', 'denoise', 'width', 'height', 'batch_size'):
+        return 'number'
+    if isinstance(value, str) and len(value) > 80:
+        return 'textarea'
+    return 'text'
+
+
+def prompt_to_fields(prompt):
+    """Turn an API prompt into form fields. CLIPTextEncode first."""
+    if not isinstance(prompt, dict):
+        return []
+    pos_seeds = []
+    neg_seeds = []
+    for node in prompt.values():
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get('inputs') or {}
+        if not _is_sampler_node(node.get('class_type') or ''):
+            continue
+        pos = inputs.get('positive')
+        neg = inputs.get('negative')
+        if _is_comfy_link(pos):
+            pos_seeds.append(str(pos[0]))
+        if _is_comfy_link(neg):
+            neg_seeds.append(str(neg[0]))
+    pos_ids = _collect_linked_ids(prompt, pos_seeds)
+    neg_ids = _collect_linked_ids(prompt, neg_seeds)
+
+    prompts = []
+    widgets = []
+    advanced = []
+    for nid, node in prompt.items():
+        if not isinstance(node, dict):
+            continue
+        nid = str(nid)
+        ct = node.get('class_type') or ''
+        inputs = node.get('inputs') or {}
+        title = _node_title(node)
+        prompt_keys = []
+        for key, value in inputs.items():
+            if _is_comfy_link(value) or _parse_serialized_link(value):
+                continue
+            if isinstance(value, bool) or isinstance(value, (int, float)):
+                continue
+            if _is_prompt_input_key(key, class_type=ct, title=title, value=value, nid=nid, pos_ids=pos_ids, neg_ids=neg_ids):
+                prompt_keys.append(key)
+        used = set(prompt_keys)
+        for key in prompt_keys:
+            role = _prompt_role(nid, key, title, pos_ids, neg_ids, ct)
+            prompts.append({
+                'node_id': nid,
+                'key': key,
+                'label': _prompt_label(role, title, nid, key, ct),
+                'role': role,
+                'type': 'textarea',
+                'section': 'prompts',
+                'value': inputs.get(key, ''),
+                'class_type': ct,
+            })
+        if (_is_text_encode_node(ct) or _is_string_primitive(ct)) and prompt_keys:
+            continue
+        section = 'advanced' if (_is_advanced_node(ct) or _is_clip_encode_name(ct, title)) else 'widgets'
+        bucket = advanced if section == 'advanced' else widgets
+        for key, value in inputs.items():
+            if key in used or _is_comfy_link(value) or _parse_serialized_link(value):
+                continue
+            bucket.append({
+                'node_id': nid,
+                'key': key,
+                'label': f'{title or ct} · {key}',
+                'role': key,
+                'type': _field_input_type(key, value),
+                'section': section,
+                'value': value,
+                'class_type': ct,
+            })
+
+    role_rank = {'positive': 0, 'negative': 1, 'prompt': 2}
+    def _kind_rank(field):
+        label = field.get('label') or ''
+        if label.startswith('Image'):
+            return 0
+        if label.startswith('Video') or field.get('key') == 'value':
+            return 1
+        return 0
+    def _key_rank(field):
+        key = field.get('key') or ''
+        if key in ('text', 'text_g', 'text_l'):
+            return 0
+        if key == 'value':
+            return 1
+        if 'prompt' in key:
+            return 1
+        return 2
+    prompts, advanced = _demote_stock_clip_text_fields(prompts, advanced)
+    prompts.sort(key=lambda f: (
+        role_rank.get(f['role'], 9), _kind_rank(f), _key_rank(f), f['node_id'], f.get('key') or '',
+    ))
+    fields = prompts + widgets + advanced
+    _dedupe_prompt_labels(fields)
+    return fields
+
+
+def _read_json_file(path):
+    try:
+        return json.loads(Path(path).read_text(encoding='utf-8'))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+
+def _prompt_from_image_file(filepath):
+    meta = extract_image_metadata(filepath)
+    for key in ('prompt', 'workflow', 'parameters', 'userComment'):
+        prompt = coerce_comfy_prompt(meta.get(key))
+        if prompt:
+            return prompt, f'image:{key}'
+    return None, None
+
+
+def _prompt_from_sidecar(filepath):
+    path = Path(filepath)
+    candidates = [
+        Path(str(path) + '.json'),
+        path.with_suffix('.json'),
+        path.with_name(path.stem + '.prompt.json'),
+    ]
+    seen = set()
+    for candidate in candidates:
+        resolved = str(candidate)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if not candidate.is_file():
+            continue
+        prompt = coerce_comfy_prompt(_read_json_file(candidate))
+        if prompt:
+            return prompt, f'sidecar:{candidate.name}'
+    return None, None
+
+
+def _prompt_from_ffprobe(filepath):
+    if not _ffprobe_path:
+        return None, None
+    try:
+        result = subprocess.run(
+            [
+                _ffprobe_path, '-v', 'quiet', '-print_format', 'json',
+                '-show_format', '-show_streams', str(filepath),
+            ],
+            capture_output=True, text=True, timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None, None
+    if result.returncode != 0 or not result.stdout:
+        return None, None
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None, None
+    blobs = []
+    fmt = data.get('format') or {}
+    tags = fmt.get('tags') or {}
+    blobs.extend(tags.values())
+    for stream in data.get('streams') or []:
+        blobs.extend((stream.get('tags') or {}).values())
+    for blob in blobs:
+        prompt = coerce_comfy_prompt(blob)
+        if prompt:
+            return prompt, 'ffprobe'
+    return None, None
+
+
+def _prompt_from_sibling_image(filepath):
+    path = Path(filepath)
+    for suffix in ('.png', '.webp', '.jpg', '.jpeg'):
+        sibling = path.with_suffix(suffix)
+        if sibling.is_file():
+            prompt, source = _prompt_from_image_file(sibling)
+            if prompt:
+                return prompt, f'sibling:{sibling.name}'
+    return None, None
+
+
+def extract_comfy_workflow(filepath):
+    """Load API prompt + form fields from a media file. Missing prompt is not an error."""
+    path = Path(filepath)
+    suffix = path.suffix.lower()
+    prompt = None
+    source = None
+    if suffix in IMAGE_EXTENSIONS:
+        prompt, source = _prompt_from_image_file(path)
+        if not prompt:
+            prompt, source = _prompt_from_sidecar(path)
+    else:
+        prompt, source = _prompt_from_sidecar(path)
+        if not prompt:
+            prompt, source = _prompt_from_ffprobe(path)
+        if not prompt:
+            prompt, source = _prompt_from_sibling_image(path)
+    payload = {
+        'path': str(path),
+        'name': path.name,
+        'prompt': prompt,
+        'fields': prompt_to_fields(prompt) if prompt else [],
+        'source': source,
+    }
+    if not prompt:
+        payload['error'] = 'No ComfyUI prompt found in this file'
+    return payload
 
 
 def scan_videos(root_dir):
@@ -1980,14 +2683,36 @@ def media_day_summary(items, month=None):
     return [{'day': k, 'count': counts[k]} for k in sorted(counts.keys(), reverse=True)]
 
 
+def indexed_month_summary(kind, items=None):
+    index = _media_by_month.get(kind)
+    if not index and items is not None:
+        _set_month_index(kind, items)
+        index = _media_by_month.get(kind)
+    if not index:
+        return media_month_summary(items or [])
+    return [{'month': k, 'count': len(index[k])} for k in sorted(index.keys(), reverse=True)]
+
+
+def indexed_day_summary(kind, month, items=None):
+    if not month:
+        return None
+    by_month = _media_by_month.get(kind)
+    if not by_month and items is not None:
+        _set_month_index(kind, items)
+        by_month = _media_by_month.get(kind)
+    if not by_month:
+        return media_day_summary(items or [], month)
+    return media_day_summary(by_month.get(month) or [])
+
+
 def filter_media_items(items, month=None, q=None, kind='videos', day=None):
     """Return all items matching month/day/q filters (no pagination)."""
     filtered = items
     if month and not q:
         index = _media_by_month.get(kind)
         if index is None:
-            index = _build_month_index(items)
-            _media_by_month[kind] = index
+            _set_month_index(kind, items)
+            index = _media_by_month.get(kind) or {}
         filtered = index.get(month, [])
     else:
         if month:
@@ -1995,9 +2720,42 @@ def filter_media_items(items, month=None, q=None, kind='videos', day=None):
         if q:
             ql = q.lower()
             filtered = [i for i in filtered if ql in i['name'].lower()]
+    if day and not q:
+        day_index = _media_by_day.get(kind)
+        if day_index is None:
+            _set_month_index(kind, items)
+            day_index = _media_by_day.get(kind) or {}
+        filtered = day_index.get(day) or []
+        if month and not str(day).startswith(f'{month}-'):
+            return []
+        return filtered
     if day:
         filtered = [i for i in filtered if item_day_key(i['modified']) == day]
     return filtered
+
+
+def set_photo_focus(month=None, day=None):
+    """Aim background thumb workers at the month/day the grid is showing."""
+    month = month or None
+    day = day or None
+    with _photo_focus_lock:
+        if _photo_focus['month'] == month and _photo_focus['day'] == day:
+            return False
+        _photo_focus['month'] = month
+        _photo_focus['day'] = day
+        _photo_focus['gen'] += 1
+        return True
+
+
+def _focused_photo_items():
+    photos = get_photos_cached()
+    with _photo_focus_lock:
+        month = _photo_focus.get('month')
+        day = _photo_focus.get('day')
+        gen = _photo_focus.get('gen', 0)
+    if month or day:
+        return filter_media_items(photos, month=month, day=day, kind='photos'), gen
+    return photos, gen
 
 
 def pick_random_item(items, exclude_path=None):
@@ -2106,6 +2864,22 @@ def get_random_photo(exclude_path=None, month=None, q=None, day=None):
         'total': total,
         'indexing': indexing,
         'error': error,
+    }
+
+
+def photo_month_catalog(month, force=False):
+    """Every still in a month, plus per-day counts. One payload for the grid."""
+    photos = get_photos_cached(force=force)
+    items = filter_media_items(photos, month=month, kind='photos')
+    return {
+        'total': len(items),
+        'month': month,
+        'photos': items,
+        'days': media_day_summary(items, month),
+        'indexing': _refresh_in_progress('photos'),
+        'hasMore': False,
+        'error': None,
+        'catalog': True,
     }
 
 
@@ -2346,6 +3120,15 @@ def serve_media(handler, rel_path):
         return
     filepath = resolve_media_path(rel_path)
     if filepath:
+        suffix = Path(str(filepath)).suffix.lower()
+        if suffix in IMAGE_EXTENSIONS:
+            local = _src_cache_path(filepath)
+            try:
+                if local.is_file() and local.stat().st_size > 32:
+                    serve_ranged_file(handler, local)
+                    return
+            except OSError:
+                pass
         serve_ranged_file(handler, filepath)
         return
     handler.send_error(404)
@@ -2406,6 +3189,8 @@ class VideoHandler(SimpleHTTPRequestHandler):
             return
         if SITE_PASSWORD and not is_authed(self) and bare not in ('/login',):
             send_http_bytes(self, 401, UNAUTHORIZED_JSON, 'application/json')
+            return
+        if serve_app_html(self, bare):
             return
         path = unquote(self.path).split('?', 1)[0]
         rel = path.lstrip('/')
@@ -2481,31 +3266,15 @@ class VideoHandler(SimpleHTTPRequestHandler):
             return
 
         if SITE_PASSWORD and not is_authed(self):
-            if bare_path in ('/', '/index.html', '/photos.html'):
+            if bare_path in APP_HTML_PAGES:
                 send_login_page(self)
             else:
                 send_http_bytes(self, 401, UNAUTHORIZED_JSON, 'application/json')
             return
 
         # HTML apps — always from the app folder (never MEDIA_ROOT).
-        # MEDIA_ROOT is cwd and may contain an old index.html that would hide updates.
-        if bare_path in ('/', '/index.html', '/photos.html'):
-            html_name = 'photos.html' if bare_path == '/photos.html' else 'index.html'
-            script_dir = Path(__file__).resolve().parent
-            html_path = script_dir / html_name
-            if html_path.is_file():
-                data = html_path.read_bytes()
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/html; charset=utf-8')
-                self.send_header('Content-Length', str(len(data)))
-                self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
-                self.send_header('X-Comfy-App-Dir', str(script_dir))
-                self.end_headers()
-                safe_write(self.wfile, data)
-                return
-            if bare_path == '/':
-                super().do_GET()
-                return
+        if serve_app_html(self, bare_path):
+            return
 
         path = bare_path if bare_path != path else path
 
@@ -2595,8 +3364,8 @@ class VideoHandler(SimpleHTTPRequestHandler):
             if summary:
                 respond_json(self, {
                     'total': len(videos),
-                    'months': media_month_summary(videos),
-                    'days': media_day_summary(videos, month) if month else None,
+                    'months': indexed_month_summary('videos', videos),
+                    'days': indexed_day_summary('videos', month, videos) if month else None,
                     'ffmpeg': bool(_ffmpeg_path),
                     'vthumb': vthumb_available(),
                     'indexing': indexing,
@@ -2622,6 +3391,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
         if path.split('?', 1)[0] == '/api/photos':
             query = parse_qs(urlparse(self.path).query)
             force, summary, month, q, offset, limit, day = parse_media_api_query(query)
+            catalog = query.get('catalog', [''])[0].lower() in ('1', 'true', 'yes')
             if STORAGE_MODE == 'drive':
                 drive = get_drive_storage()
                 result = drive.list_photos(
@@ -2661,17 +3431,25 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 return
             photos = get_photos_cached(force=force)
             indexing = _refresh_in_progress('photos')
+            if catalog and month and not q:
+                payload = photo_month_catalog(month, force=force)
+                payload['indexing'] = indexing
+                respond_json(self, payload)
+                return
             if summary:
+                if month:
+                    set_photo_focus(month, None)
                 respond_json(self, {
                     'total': len(photos),
-                    'months': media_month_summary(photos),
-                    'days': media_day_summary(photos, month) if month else None,
+                    'months': indexed_month_summary('photos', photos),
+                    'days': indexed_day_summary('photos', month, photos) if month else None,
                     'indexing': indexing,
                     'hasMore': False,
                     'error': None,
                 })
                 return
             total, page = paginate_media(photos, month=month or None, q=q or None, offset=offset, limit=limit, kind='photos', day=day or None)
+            _warm_photo_listing(page, offset, limit, month=month, q=q, day=day)
             respond_json(self, {
                 'total': total,
                 'offset': offset,
@@ -2743,6 +3521,28 @@ class VideoHandler(SimpleHTTPRequestHandler):
             respond_json(self, result)
             return
 
+        if path.split('?', 1)[0] == '/api/workflow':
+            query = parse_qs(urlparse(self.path).query)
+            rel = unquote((query.get('path') or [''])[0]).lstrip('/')
+            if not rel or '..' in rel.split('/'):
+                send_http_json(self, 400, {'error': 'path required'})
+                return
+            if STORAGE_MODE == 'drive':
+                send_http_json(self, 501, {
+                    'error': 'Remix reads local files. Run the gallery locally, or add a sidecar JSON next to the clip.',
+                    'prompt': None,
+                    'fields': [],
+                    'source': None,
+                    'path': rel,
+                })
+                return
+            filepath = resolve_media_path(rel)
+            if not filepath or not filepath.is_file():
+                send_http_empty(self, 404)
+                return
+            respond_json(self, extract_comfy_workflow(filepath))
+            return
+
         # API endpoint: returns metadata from PNG/WebP (ComfyUI prompt, workflow, etc.)
         if path.startswith('/api/metadata/'):
             rel = unquote(path[14:])
@@ -2790,8 +3590,7 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 return
             query = parse_qs(urlparse(self.path).query)
             src_mtime = _mtime_from_query(query)
-            cache_key = _cache_key_from_rel(rel, ':400webp')
-            found = get_disk_thumb(cache_key, src_mtime)
+            found = lookup_photo_thumb(rel, src_mtime)
             if found:
                 data, mime = found
                 self.send_response(200)
@@ -2801,28 +3600,11 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 self.end_headers()
                 safe_write(self.wfile, data)
                 return
-            filepath = resolve_media_path(rel)
-            if filepath and filepath.is_file():
-                try:
-                    thumb = generate_photo_thumbnail(filepath)
-                    if not thumb:
-                        send_http_empty(self, 500)
-                        return
-                    data, mime = thumb
-                    self.send_response(200)
-                    self.send_header('Content-Type', mime)
-                    self.send_header('Content-Length', str(len(data)))
-                    self.send_header('Cache-Control', THUMB_CACHE_HEADER)
-                    self.end_headers()
-                    safe_write(self.wfile, data)
-                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-                    pass
-                except Exception:
-                    send_http_empty(self, 500)
-                return
-            else:
-                send_http_empty(self, 404)
-                return
+            send_http_empty(self, 503, extra_headers={
+                'Retry-After': '1',
+                'Cache-Control': 'no-store',
+            })
+            return
 
         # Video thumbnail endpoint: /vthumb/path/to/video.mp4
         if path.startswith('/vthumb/'):
@@ -3017,10 +3799,13 @@ if __name__ == '__main__':
                 threading.Thread(
                     target=_prewarm_photos_worker, args=(worker_id, photo_workers), daemon=True
                 ).start()
-            threading.Thread(target=_warm_queue_worker, daemon=True).start()
+            warm_workers = 8
+            for _ in range(warm_workers):
+                threading.Thread(target=_warm_queue_worker, daemon=True).start()
             print(
                 f'   Thumbnail prewarm: on, {prewarm_workers} video + {photo_workers} photo '
-                f'workers building the full photo cache (MEDIA_PREWARM=0 to disable)'
+                f'+ {warm_workers} visible-queue workers '
+                f'(MEDIA_PREWARM=0 to disable)'
             )
     print(f'   Press Ctrl+C to stop')
     try:

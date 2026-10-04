@@ -103,6 +103,7 @@ Requires Google Drive **desktop app** syncing `ComfyUI/` locally, plus `brew ins
 | `GET /api/photos?summary=1` | Photo count + months |
 | `GET /thumb/{path}` | Photo thumbnail (Drive, on demand) |
 | `GET /vthumb/{path}` | Video thumbnail (Drive, on demand) |
+| `GET /api/workflow?path=` | ComfyUI API prompt + form fields for Remix |
 | `GET /{path}` | Stream media (Range requests proxied to Drive) |
 
 Delete is disabled in cloud/Drive mode.
