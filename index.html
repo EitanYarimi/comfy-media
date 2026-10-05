@@ -729,6 +729,29 @@
             text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
         }
 
+        .remix-word { display: none; }
+        .viewer-remix {
+            display: none;
+            position: absolute;
+            z-index: 160;
+            top: calc(10px + env(safe-area-inset-top, 0px));
+            right: max(10px, env(safe-area-inset-right, 0px));
+            align-items: center;
+            justify-content: center;
+            min-height: 44px;
+            padding: 0 16px;
+            border: none;
+            border-radius: 22px;
+            background: #e60023;
+            color: #fff;
+            font: inherit;
+            font-size: 0.85rem;
+            font-weight: 700;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+
         .modal-overlay.chrome-hidden .modal-chrome,
         .modal-overlay.chrome-hidden .modal-nav,
         .modal-overlay.chrome-hidden .modal-title {
@@ -899,9 +922,20 @@
             .video-overlay .video-title-overlay {
                 pointer-events: none;
             }
-            /* Hide delete/info chips on small screens — tap opens the video instead */
+            /* Info and delete stay off the card. Remix stays tappable; the rest of the card still opens the video. */
             .video-actions {
+                display: flex;
+                pointer-events: none;
+            }
+            .video-actions .action-btn {
                 display: none;
+            }
+            .video-actions .action-btn[data-action="remix"] {
+                display: flex;
+                pointer-events: auto;
+                width: 36px;
+                height: 36px;
+                font-size: 0.95rem;
             }
             .video-title-overlay {
                 font-size: 0.6rem;
@@ -955,6 +989,22 @@
             .modal-close--fs,
             .modal-close--fit {
                 display: none;
+            }
+            .modal-close--remix {
+                width: auto;
+                min-width: 44px;
+                padding: 0 12px;
+                border-radius: 22px;
+                background: #e60023;
+                border-color: #e60023;
+                color: #fff;
+                font-size: 0.78rem;
+                font-weight: 700;
+            }
+            .modal-close--remix .remix-icon { display: none; }
+            .modal-close--remix .remix-word { display: inline; }
+            .modal-overlay.chrome-hidden .viewer-remix {
+                display: inline-flex;
             }
             #modalVideoWrap,
             .modal-video-wrap #modalVideo,
@@ -1048,6 +1098,11 @@
                 width: 22px;
                 height: 22px;
                 font-size: 0.55rem;
+            }
+            .action-btn[data-action="remix"] {
+                width: 36px;
+                height: 36px;
+                font-size: 0.95rem;
             }
             .thumbnail-placeholder {
                 font-size: 0.85rem;
@@ -1166,7 +1221,7 @@
         </div>
         <div class="modal-chrome-cluster">
             <button type="button" class="modal-close modal-close--pause" id="slideshowPauseBtn" style="display:none" onclick="toggleSlideshowPause()" title="Pause slideshow" aria-label="Pause slideshow">⏸</button>
-            <button type="button" class="modal-close modal-close--info" onclick="openRemixFromModal()" title="Remix on Colab" aria-label="Remix on Colab">↻</button>
+            <button type="button" class="modal-close modal-close--remix" onclick="openRemixFromModal()" title="Remix" aria-label="Remix"><span class="remix-icon" aria-hidden="true">↻</span><span class="remix-word">Remix</span></button>
             <button type="button" class="modal-close modal-close--info" onclick="toggleVideoInfo()" title="Info" aria-label="Video info">ⓘ</button>
             <button type="button" class="modal-close modal-close--delete" onclick="deleteFromModal()" title="Delete" aria-label="Delete">🗑</button>
             <button type="button" class="modal-close modal-close--close" onclick="closeModal()" title="Close" aria-label="Close">✕</button>
@@ -1181,6 +1236,7 @@
         <video id="prefetchVideo" muted playsinline webkit-playsinline preload="auto" style="display:none" aria-hidden="true"></video>
     </div>
     <div class="modal-title" id="modalTitle"></div>
+    <button type="button" class="viewer-remix" onclick="openRemixFromModal()">Remix</button>
 </div>
 
 <div id="videoInfoPanel" style="display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1a1a1a;border:1px solid #333;border-radius:16px;padding:14px 20px;font-size:0.75rem;color:#ccc;z-index:1100;max-width:90vw;line-height:1.8;box-shadow:0 12px 40px rgba(0,0,0,0.5)"></div>
@@ -2776,7 +2832,11 @@ function closeModal() {
 
 function openRemixFromModal() {
     const video = modalPlaylist[currentVideoIndex];
-    if (!video) return;
+    if (!video || !video.path) return;
+    try {
+        sessionStorage.setItem('comfyRemixPath', video.path);
+        sessionStorage.setItem('comfyRemixFrom', 'index.html');
+    } catch (_) {}
     window.location.href = 'run.html?path=' + encodeURIComponent(video.path);
 }
 

@@ -432,6 +432,15 @@ class FrontendRemixTests(unittest.TestCase):
         self.assertIn('run.html?path=', src)
         self.assertIn('id="remixNav"', src)
         self.assertIn('comfyRemixPath', src)
+        self.assertIn('class="viewer-remix"', src)
+        self.assertIn('data-action="remix"', src)
+        self.assertIn('.modal-overlay.chrome-hidden .viewer-remix', src)
+        photos = (Path(ROOT) / 'photos.html').read_text()
+        self.assertIn('function openRemixFromLightbox', photos)
+        self.assertIn('function openRemixPhoto', photos)
+        self.assertIn('class="viewer-remix"', photos)
+        self.assertIn('action-btn--remix', photos)
+        self.assertIn('.lightbox.chrome-hidden .viewer-remix', photos)
 
     def test_server_serves_run_html(self):
         src = (Path(ROOT) / 'video_server.py').read_text()

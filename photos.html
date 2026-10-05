@@ -266,6 +266,28 @@
         .lightbox-nav.next { right: 16px; }
         .lightbox-title { color: #888; margin-top: 12px; font-size: 0.85rem; text-align: center; transition: opacity 0.25s ease; }
         .lightbox.slideshow-mode .lightbox-title { color: #ccc; }
+        .remix-word { display: none; }
+        .viewer-remix {
+            display: none;
+            position: absolute;
+            z-index: 160;
+            top: calc(10px + env(safe-area-inset-top, 0px));
+            right: max(10px, env(safe-area-inset-right, 0px));
+            align-items: center;
+            justify-content: center;
+            min-height: 44px;
+            padding: 0 16px;
+            border: none;
+            border-radius: 22px;
+            background: #e60023;
+            color: #fff;
+            font: inherit;
+            font-size: 0.85rem;
+            font-weight: 700;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
         .lightbox.chrome-hidden .lb-chrome,
         .lightbox.chrome-hidden .lightbox-nav,
         .lightbox.chrome-hidden .lightbox-title { opacity: 0; pointer-events: none; }
@@ -315,8 +337,16 @@
             .photo-card { border-radius: 12px; }
             .photo-card:hover { transform: none; }
             .photo-overlay { opacity: 1; background: linear-gradient(180deg, transparent 60%, rgba(0,0,0,0.6) 100%); }
-            /* Hide delete/info chips on small screens — tap opens the photo instead */
-            .photo-actions { display: none; }
+            /* Info and delete stay off the card. Remix stays tappable; the rest of the card still opens the photo. */
+            .photo-actions { display: flex; pointer-events: none; }
+            .photo-actions .action-btn { display: none; pointer-events: none; }
+            .photo-actions .action-btn--remix {
+                display: flex;
+                pointer-events: auto;
+                width: 36px;
+                height: 36px;
+                font-size: 0.95rem;
+            }
             header { padding: 8px 12px; }
             #searchInput { width: 100%; order: -1; }
             .day-stepper { flex: 1; min-width: 0; }
@@ -358,6 +388,20 @@
                 border-color: rgba(255, 255, 255, 0.18);
                 color: #f2f2f2;
             }
+            .lb-btn--remix {
+                width: auto;
+                min-width: 44px;
+                padding: 0 12px;
+                border-radius: 22px;
+                background: #e60023;
+                border-color: #e60023;
+                color: #fff;
+                font-size: 0.78rem;
+                font-weight: 700;
+            }
+            .lb-btn--remix .remix-icon { display: none; }
+            .lb-btn--remix .remix-word { display: inline; }
+            .lightbox.chrome-hidden .viewer-remix { display: inline-flex; }
             .lightbox-nav {
                 width: 44px;
                 height: 64px;
@@ -442,6 +486,7 @@
         </div>
         <div class="lb-chrome-cluster">
             <button type="button" class="lb-btn" id="slideshowPauseBtn" style="display:none" onclick="toggleSlideshowPause()" title="Pause slideshow" aria-label="Pause slideshow">⏸</button>
+            <button type="button" class="lb-btn lb-btn--remix" onclick="openRemixFromLightbox()" title="Remix" aria-label="Remix"><span class="remix-icon" aria-hidden="true">↻</span><span class="remix-word">Remix</span></button>
             <button type="button" class="lb-btn" onclick="toggleInfo()" title="Info" aria-label="Photo info">ⓘ</button>
             <button type="button" class="lb-btn lb-btn--delete" onclick="deleteFromLightbox()" title="Delete" aria-label="Delete">🗑</button>
             <button type="button" class="lb-btn" onclick="closeLightbox()" title="Close" aria-label="Close">✕</button>
@@ -453,6 +498,7 @@
         <img id="lightboxImg" src="" alt="">
     </div>
     <div class="lightbox-title" id="lightboxTitle"></div>
+    <button type="button" class="viewer-remix" onclick="openRemixFromLightbox()">Remix</button>
 </div>
 <div id="infoPanel"></div>
 
@@ -1464,6 +1510,7 @@ function buildPhotoCardHtml(photo) {
         </div>
         <div class="photo-overlay">
             <div class="photo-actions">
+                <button type="button" class="action-btn action-btn--remix" onclick="openRemixPhoto(event,'${vid}')" title="Remix">↻</button>
                 <button class="action-btn" onclick="showInfoFor(event,'${vid}')" title="Info">ⓘ</button>
                 <button class="action-btn action-btn--delete" onclick="deletePhoto(event,'${vid}')" title="Delete">✕</button>
             </div>
@@ -1475,6 +1522,31 @@ function buildPhotoCardHtml(photo) {
 // ========== LIGHTBOX ==========
 function getLightboxPhotos() {
     return slideshowActive ? slideshowPlaylist : (window._visiblePhotos || filteredPhotos);
+}
+
+function goRemix(path) {
+    if (!path) return;
+    try {
+        sessionStorage.setItem('comfyRemixPath', path);
+        sessionStorage.setItem('comfyRemixFrom', 'photos.html');
+    } catch (_) {}
+    window.location.href = 'run.html?path=' + encodeURIComponent(path);
+}
+
+function openRemixPhoto(event, vid) {
+    if (event) {
+        event.stopPropagation();
+        event.preventDefault();
+    }
+    const photo = getPhotoByVid(vid);
+    if (!photo) return;
+    goRemix(photo.path);
+}
+
+function openRemixFromLightbox() {
+    const photo = getLightboxPhotos()[currentPhotoIndex];
+    if (!photo) return;
+    goRemix(photo.path);
 }
 
 function showLightboxPhoto(photo) {
