@@ -1111,6 +1111,98 @@ class DriveStorage:
         url = MEDIA_URL.format(file_id=file_id)
         return self.session.get(url, headers=headers, stream=True, timeout=timeout)
 
+    def download_bytes(self, file_id, max_bytes=8 * 1024 * 1024, range_header=None):
+        """Download a Drive file (or byte range) into memory.
+
+        Returns None when the file is missing or larger than max_bytes.
+        """
+        if not file_id or max_bytes <= 0:
+            return None
+        try:
+            resp = self.open_media(file_id, range_header=range_header, timeout=90)
+        except Exception:
+            return None
+        try:
+            status = getattr(resp, 'status_code', 0)
+            if status not in (200, 206):
+                return None
+            headers = getattr(resp, 'headers', None) or {}
+            length = headers.get('Content-Length')
+            try:
+                if length is not None and int(length) > max_bytes:
+                    return None
+            except (TypeError, ValueError):
+                pass
+            buf = bytearray()
+            for chunk in resp.iter_content(256 * 1024):
+                if not chunk:
+                    continue
+                if len(buf) + len(chunk) > max_bytes:
+                    return None
+                buf.extend(chunk)
+            return bytes(buf)
+        except Exception:
+            return None
+        finally:
+            close = getattr(resp, 'close', None)
+            if close:
+                try:
+                    close()
+                except Exception:
+                    pass
+
+    def find_named_files(self, file_id, names):
+        """Return {filename: {id, name, size, mime}} for names in the same folder."""
+        wanted = []
+        seen = set()
+        for name in names or []:
+            if name and name not in seen:
+                seen.add(name)
+                wanted.append(name)
+        if not file_id or not wanted:
+            return {}
+        try:
+            info = self.service.files().get(
+                fileId=file_id,
+                fields='parents',
+                supportsAllDrives=True,
+            ).execute()
+        except Exception:
+            return {}
+        parents = [_clean_id(p) for p in (info.get('parents') or []) if _clean_id(p)]
+        if not parents:
+            return {}
+        parent = parents[0]
+        clauses = []
+        for name in wanted:
+            safe = name.replace("'", "\\'")
+            clauses.append(f"name='{safe}'")
+        query = f"'{parent}' in parents and trashed=false and ({' or '.join(clauses)})"
+        try:
+            resp = self._drive_list(
+                q=query,
+                fields='files(id, name, mimeType, size)',
+                page_size=min(100, max(len(wanted), 1)),
+            )
+        except Exception:
+            return {}
+        found = {}
+        for item in resp.get('files') or []:
+            item_name = item.get('name') or ''
+            item_id = item.get('id')
+            if not item_id or not item_name:
+                continue
+            mime = item.get('mimeType') or ''
+            if mime.startswith('application/vnd.google-apps.'):
+                continue
+            found[item_name] = {
+                'id': item_id,
+                'name': item_name,
+                'size': int(item.get('size') or 0),
+                'mime': mime,
+            }
+        return found
+
     def fetch_thumbnail(self, virtual_path, size=220):
         """Fetch a small preview for the grid. Short timeouts — never block a worker for minutes."""
         meta = self.get_meta(virtual_path)

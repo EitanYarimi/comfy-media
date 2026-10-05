@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY video_server.py drive_backend.py index.html photos.html ./
+COPY video_server.py drive_backend.py index.html photos.html run.html ./
 
 ENV STORAGE_MODE=drive
 ENV PORT=8080

@@ -2608,6 +2608,410 @@ def extract_comfy_workflow(filepath):
     return payload
 
 
+_PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
+DRIVE_SIDECAR_MAX_BYTES = 8 * 1024 * 1024
+DRIVE_IMAGE_PREFIX_BYTES = 8 * 1024 * 1024
+DRIVE_IMAGE_MAX_BYTES = 48 * 1024 * 1024
+DRIVE_VIDEO_PROBE_BYTES = 4 * 1024 * 1024
+_NO_PROMPT_ERROR = 'No ComfyUI prompt found in this file'
+
+
+def read_png_text_chunks(data):
+    """Read PNG tEXt/zTXt/iTXt chunks without decoding pixels.
+
+    Returns (texts, finished). finished is true once IDAT or IEND is reached,
+    so a prefix that already includes those chunks does not need the rest of the file.
+    """
+    texts = {}
+    if not isinstance(data, (bytes, bytearray)) or not data.startswith(_PNG_SIGNATURE):
+        return texts, False
+    import zlib
+    pos = len(_PNG_SIGNATURE)
+    size = len(data)
+    while pos + 8 <= size:
+        length = int.from_bytes(data[pos:pos + 4], 'big')
+        if length > 64 * 1024 * 1024:
+            return texts, False
+        ctype = bytes(data[pos + 4:pos + 8])
+        start = pos + 8
+        end = start + length
+        if end + 4 > size:
+            return texts, False
+        chunk = bytes(data[start:end])
+        if ctype in (b'tEXt', b'zTXt', b'iTXt'):
+            parsed = _decode_png_text_chunk(ctype, chunk, zlib)
+            if parsed:
+                key, value = parsed
+                texts.setdefault(key, value)
+        elif ctype in (b'IDAT', b'IEND'):
+            return texts, True
+        pos = end + 4
+    return texts, False
+
+
+def _decode_png_text_chunk(ctype, chunk, zlib_mod):
+    try:
+        if ctype == b'tEXt':
+            key, _, value = chunk.partition(b'\x00')
+            if not key:
+                return None
+            return key.decode('latin1', 'replace'), value.decode('utf-8', 'replace')
+        if ctype == b'zTXt':
+            key, _, rest = chunk.partition(b'\x00')
+            if not key or len(rest) < 2:
+                return None
+            value = zlib_mod.decompress(rest[1:])
+            return key.decode('latin1', 'replace'), value.decode('utf-8', 'replace')
+        if ctype == b'iTXt':
+            sep = chunk.find(b'\x00')
+            if sep < 0 or sep + 3 > len(chunk):
+                return None
+            key = chunk[:sep]
+            comp_flag = chunk[sep + 1]
+            rest = chunk[sep + 3:]
+            _lang, sep2, rest = rest.partition(b'\x00')
+            if sep2 != b'\x00':
+                return None
+            _translated, sep3, text = rest.partition(b'\x00')
+            if sep3 != b'\x00':
+                return None
+            if comp_flag == 1:
+                text = zlib_mod.decompress(text)
+            return key.decode('latin1', 'replace'), text.decode('utf-8', 'replace')
+    except Exception:
+        return None
+    return None
+
+
+def drive_companion_names(filename):
+    """Sidecar JSON names, then same-stem stills, matching the local extractor."""
+    path = Path(filename)
+    sidecars = []
+    for name in (f'{filename}.json', f'{path.stem}.json', f'{path.stem}.prompt.json'):
+        if name and name not in sidecars:
+            sidecars.append(name)
+    siblings = []
+    for ext in ('.png', '.webp', '.jpg', '.jpeg'):
+        name = f'{path.stem}{ext}'
+        if name not in siblings and name != filename:
+            siblings.append(name)
+    return sidecars, siblings
+
+
+def _workflow_cache_file(file_id):
+    digest = hashlib.sha256(str(file_id).encode()).hexdigest()
+    return CACHE_ROOT / 'drive_workflow' / f'{digest}.json'
+
+
+def _read_workflow_cache(meta):
+    file_id = meta.get('id')
+    if not file_id:
+        return None
+    try:
+        data = json.loads(_workflow_cache_file(file_id).read_text(encoding='utf-8'))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get('size') != int(meta.get('size') or 0):
+        return None
+    if data.get('modified') != meta.get('modified'):
+        return None
+    payload = data.get('payload')
+    return payload if isinstance(payload, dict) and payload.get('prompt') else None
+
+
+def _write_workflow_cache(meta, payload):
+    file_id = meta.get('id')
+    if not file_id or not payload or not payload.get('prompt'):
+        return
+    path = _workflow_cache_file(file_id)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            'size': int(meta.get('size') or 0),
+            'modified': meta.get('modified'),
+            'payload': payload,
+        }), encoding='utf-8')
+    except OSError:
+        pass
+
+
+def _empty_workflow(rel, name, error=_NO_PROMPT_ERROR):
+    return {
+        'path': rel,
+        'name': name,
+        'prompt': None,
+        'fields': [],
+        'source': None,
+        'error': error,
+    }
+
+
+def _workflow_from_prompt(rel, name, prompt, source):
+    return {
+        'path': rel,
+        'name': name,
+        'prompt': prompt,
+        'fields': prompt_to_fields(prompt) if prompt else [],
+        'source': source,
+    }
+
+
+def _workflow_from_image_bytes(name, data):
+    suffix = Path(name).suffix.lower() or '.img'
+    fd, tmp_name = tempfile.mkstemp(suffix=suffix)
+    try:
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(data)
+        return extract_comfy_workflow(tmp_name)
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+
+
+def _prompt_from_image_bytes(name, data, prefix_only):
+    """Return (prompt, source, done). done means a larger download will not help."""
+    if not data:
+        return None, None, False
+    if Path(name).suffix.lower() == '.png' or data.startswith(_PNG_SIGNATURE):
+        texts, finished = read_png_text_chunks(data)
+        for key in ('prompt', 'workflow', 'parameters'):
+            prompt = coerce_comfy_prompt(texts.get(key))
+            if prompt:
+                return prompt, f'image:{key}', True
+        if finished or not prefix_only:
+            return None, None, True
+        return None, None, False
+    try:
+        payload = _workflow_from_image_bytes(name, data)
+    except Exception:
+        payload = None
+    if payload and payload.get('prompt'):
+        return payload['prompt'], payload.get('source'), True
+    if prefix_only:
+        return None, None, False
+    return None, None, True
+
+
+def _download_drive_image_prompt(drive, item, name):
+    file_id = item.get('id')
+    size = int(item.get('size') or 0)
+    if not file_id:
+        return None, None
+    if size and size <= DRIVE_IMAGE_PREFIX_BYTES:
+        raw = drive.download_bytes(file_id, max(size, 1))
+        if not raw:
+            return None, None
+        prompt, source, _done = _prompt_from_image_bytes(name, raw, prefix_only=False)
+        return prompt, source
+    raw = drive.download_bytes(
+        file_id,
+        DRIVE_IMAGE_PREFIX_BYTES,
+        range_header=f'bytes=0-{DRIVE_IMAGE_PREFIX_BYTES - 1}',
+    )
+    prompt, source, done = _prompt_from_image_bytes(name, raw, prefix_only=True)
+    if prompt or done:
+        return prompt, source
+    if size and size > DRIVE_IMAGE_MAX_BYTES:
+        return None, None
+    raw = drive.download_bytes(file_id, DRIVE_IMAGE_MAX_BYTES)
+    if not raw:
+        return None, None
+    prompt, source, _done = _prompt_from_image_bytes(name, raw, prefix_only=False)
+    return prompt, source
+
+
+def _balanced_json_object(text, start, limit=2_000_000):
+    if start < 0 or start >= len(text) or text[start] != '{':
+        return None
+    depth = 0
+    in_str = False
+    escaped = False
+    end_limit = min(len(text), start + limit)
+    for index in range(start, end_limit):
+        ch = text[index]
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == '\\':
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+    return None
+
+
+def prompt_from_media_bytes(data):
+    """Find a ComfyUI API prompt embedded in a video or other binary blob."""
+    if not data or b'class_type' not in data:
+        return None
+    text = data.decode('utf-8', errors='ignore')
+    needle = '"class_type"'
+    pos = 0
+    while True:
+        at = text.find(needle, pos)
+        if at < 0:
+            return None
+        start = at
+        for _hop in range(40):
+            start = text.rfind('{', 0, start)
+            if start < 0:
+                break
+            snippet = _balanced_json_object(text, start)
+            if not snippet:
+                continue
+            prompt = coerce_comfy_prompt(snippet)
+            if prompt:
+                return prompt
+        pos = at + len(needle)
+
+
+def _download_drive_probe_chunks(drive, item):
+    """Head and tail of a video. Comfy metadata sits in moov, which may be either end."""
+    file_id = item.get('id')
+    if not file_id:
+        return []
+    size = int(item.get('size') or 0)
+    if size and size <= DRIVE_VIDEO_PROBE_BYTES:
+        raw = drive.download_bytes(file_id, max(size, 1))
+        return [raw] if raw else []
+    chunks = []
+    head = drive.download_bytes(
+        file_id,
+        DRIVE_VIDEO_PROBE_BYTES,
+        range_header=f'bytes=0-{DRIVE_VIDEO_PROBE_BYTES - 1}',
+    )
+    if head:
+        chunks.append(head)
+    if size > DRIVE_VIDEO_PROBE_BYTES:
+        start = size - DRIVE_VIDEO_PROBE_BYTES
+        tail = drive.download_bytes(
+            file_id,
+            DRIVE_VIDEO_PROBE_BYTES,
+            range_header=f'bytes={start}-{size - 1}',
+        )
+        if tail:
+            chunks.append(tail)
+    return chunks
+
+
+def _prompt_from_drive_video(drive, item):
+    for chunk in _download_drive_probe_chunks(drive, item):
+        prompt = prompt_from_media_bytes(chunk)
+        if prompt:
+            return prompt
+    return None
+
+
+def _prompt_from_drive_sidecar(drive, item):
+    size = int(item.get('size') or 0)
+    if size > DRIVE_SIDECAR_MAX_BYTES or not item.get('id'):
+        return None
+    raw = drive.download_bytes(item['id'], DRIVE_SIDECAR_MAX_BYTES)
+    if not raw:
+        return None
+    return coerce_comfy_prompt(raw.decode('utf-8', errors='replace'))
+
+
+def extract_drive_workflow(drive, rel):
+    """Load a ComfyUI prompt for a file in the shared Drive folder.
+
+    Returns None when the media file itself is missing. Images are read from
+    PNG text chunks (a prefix is enough). Videos use a sidecar JSON, prompt
+    text embedded in the file, or a same-stem still in the same Drive folder.
+    """
+    meta = drive.get_meta(rel)
+    if not meta or not meta.get('id'):
+        return None
+    name = meta.get('name') or Path(rel).name
+    cached = _read_workflow_cache(meta)
+    if cached:
+        payload = dict(cached)
+        payload['path'] = rel
+        payload['name'] = name
+        return payload
+
+    suffix = Path(name).suffix.lower()
+    sidecars, siblings = drive_companion_names(name)
+    wanted = list(sidecars)
+    if suffix not in IMAGE_EXTENSIONS:
+        wanted.extend(siblings)
+    try:
+        found = drive.find_named_files(meta['id'], wanted) or {}
+    except Exception:
+        found = {}
+
+    prompt = None
+    source = None
+    too_big = False
+    if suffix in IMAGE_EXTENSIONS:
+        size = int(meta.get('size') or 0)
+        if size > DRIVE_IMAGE_MAX_BYTES:
+            too_big = True
+        else:
+            prompt, source = _download_drive_image_prompt(drive, meta, name)
+        if not prompt:
+            for sidecar_name in sidecars:
+                item = found.get(sidecar_name)
+                if not item:
+                    continue
+                prompt = _prompt_from_drive_sidecar(drive, item)
+                if prompt:
+                    source = f"sidecar:{item.get('name') or sidecar_name}"
+                    too_big = False
+                    break
+    else:
+        for sidecar_name in sidecars:
+            item = found.get(sidecar_name)
+            if not item:
+                continue
+            prompt = _prompt_from_drive_sidecar(drive, item)
+            if prompt:
+                source = f"sidecar:{item.get('name') or sidecar_name}"
+                break
+        if not prompt:
+            prompt = _prompt_from_drive_video(drive, meta)
+            if prompt:
+                source = 'video:metadata'
+        if not prompt:
+            for sibling_name in siblings:
+                item = found.get(sibling_name)
+                if not item:
+                    continue
+                if int(item.get('size') or 0) > DRIVE_IMAGE_MAX_BYTES:
+                    too_big = True
+                    continue
+                prompt, source = _download_drive_image_prompt(drive, item, sibling_name)
+                if prompt:
+                    source = f'sibling:{sibling_name}'
+                    too_big = False
+                    break
+
+    if not prompt:
+        error = _NO_PROMPT_ERROR
+        if too_big:
+            error = (
+                'This file is too large to read its ComfyUI prompt in cloud mode. '
+                'Add a sidecar JSON next to it, or paste the API prompt.'
+            )
+        return _empty_workflow(rel, name, error)
+
+    payload = _workflow_from_prompt(rel, name, prompt, source)
+    _write_workflow_cache(meta, payload)
+    return payload
+
+
 def scan_videos(root_dir):
     """Scan VIDEO_DIR for video files, return paths relative to CWD for serving."""
     if STORAGE_MODE == 'drive':
@@ -3528,13 +3932,21 @@ class VideoHandler(SimpleHTTPRequestHandler):
                 send_http_json(self, 400, {'error': 'path required'})
                 return
             if STORAGE_MODE == 'drive':
-                send_http_json(self, 501, {
-                    'error': 'Remix reads local files. Run the gallery locally, or add a sidecar JSON next to the clip.',
-                    'prompt': None,
-                    'fields': [],
-                    'source': None,
-                    'path': rel,
-                })
+                try:
+                    payload = extract_drive_workflow(get_drive_storage(), rel)
+                except Exception as exc:
+                    send_http_json(self, 502, {
+                        'error': f'Could not read workflow from Drive: {exc}',
+                        'prompt': None,
+                        'fields': [],
+                        'source': None,
+                        'path': rel,
+                    })
+                    return
+                if payload is None:
+                    send_http_empty(self, 404)
+                    return
+                respond_json(self, payload)
                 return
             filepath = resolve_media_path(rel)
             if not filepath or not filepath.is_file():

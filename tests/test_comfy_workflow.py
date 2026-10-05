@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+import drive_backend  # noqa: E402
 import video_server  # noqa: E402
 
 SAMPLE_PROMPT = {
@@ -438,6 +439,223 @@ class FrontendRemixTests(unittest.TestCase):
         self.assertIn('/api/workflow', src)
         self.assertIn('APP_HTML_PAGES', src)
         self.assertIn('def serve_app_html', src)
+        self.assertIn('def extract_drive_workflow', src)
+        self.assertNotIn('Remix reads local files', src)
+        docker = (Path(ROOT) / 'Dockerfile').read_text()
+        self.assertIn('run.html', docker)
+
+
+def _png_chunk(ctype, data):
+    import struct
+    import zlib
+    return struct.pack('>I', len(data)) + ctype + data + struct.pack('>I', zlib.crc32(ctype + data) & 0xffffffff)
+
+
+def _png_with_prompt(prompt):
+    sig = b'\x89PNG\r\n\x1a\n'
+    ihdr = _png_chunk(b'IHDR', b'\x00' * 13)
+    text = _png_chunk(b'tEXt', b'prompt\x00' + json.dumps(prompt).encode())
+    idat = _png_chunk(b'IDAT', b'pixels')
+    return sig + ihdr + text + idat
+
+
+class PngTextChunkTests(unittest.TestCase):
+    def test_reads_prompt_before_idat(self):
+        blob = _png_with_prompt(SAMPLE_PROMPT)
+        texts, finished = video_server.read_png_text_chunks(blob)
+        self.assertTrue(finished)
+        prompt = video_server.coerce_comfy_prompt(texts['prompt'])
+        self.assertEqual(prompt['4']['inputs']['text'], 'a cat')
+
+    def test_prefix_without_pixels_still_has_prompt(self):
+        blob = _png_with_prompt(SAMPLE_PROMPT)
+        prefix = blob[:blob.find(b'IDAT') - 4]
+        texts, finished = video_server.read_png_text_chunks(prefix)
+        self.assertFalse(finished)
+        self.assertIn('a cat', texts['prompt'])
+        prompt, source, done = video_server._prompt_from_image_bytes('out.png', prefix, prefix_only=True)
+        self.assertTrue(done)
+        self.assertEqual(source, 'image:prompt')
+        self.assertEqual(prompt['4']['inputs']['text'], 'a cat')
+
+
+class _FakeDrive:
+    def __init__(self, meta, files=None, blobs=None):
+        self.meta = meta
+        self.files = files or {}
+        self.blobs = blobs or {}
+        self.downloads = []
+
+    def get_meta(self, path):
+        if self.meta and self.meta.get('path') in (path, None):
+            return self.meta
+        return self.meta if self.meta and self.meta.get('name') else None
+
+    def find_named_files(self, file_id, names):
+        return {name: self.files[name] for name in names if name in self.files}
+
+    def download_bytes(self, file_id, max_bytes, range_header=None):
+        self.downloads.append((file_id, max_bytes, range_header))
+        blob = self.blobs.get(file_id)
+        if blob is None or len(blob) > max_bytes:
+            return None
+        return blob
+
+
+class DriveWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self._cache = video_server.CACHE_ROOT
+        video_server.CACHE_ROOT = Path(self.tmp.name)
+
+    def tearDown(self):
+        video_server.CACHE_ROOT = self._cache
+        self.tmp.cleanup()
+
+    def test_video_sidecar_json(self):
+        drive = _FakeDrive(
+            {'id': 'vid1', 'name': 'clip.mp4', 'size': 99, 'modified': 5, 'path': 'output/video/clip.mp4'},
+            files={'clip.mp4.json': {'id': 'json1', 'name': 'clip.mp4.json', 'size': 40}},
+            blobs={'json1': json.dumps(SAMPLE_PROMPT).encode()},
+        )
+        payload = video_server.extract_drive_workflow(drive, 'output/video/clip.mp4')
+        self.assertEqual(payload['prompt']['4']['inputs']['text'], 'a cat')
+        self.assertEqual(payload['source'], 'sidecar:clip.mp4.json')
+        self.assertEqual(payload['path'], 'output/video/clip.mp4')
+        self.assertEqual(drive.downloads, [('json1', video_server.DRIVE_SIDECAR_MAX_BYTES, None)])
+        again = video_server.extract_drive_workflow(drive, 'output/video/clip.mp4')
+        self.assertEqual(again['prompt']['4']['inputs']['text'], 'a cat')
+        self.assertEqual(len(drive.downloads), 1)
+
+    def test_png_prompt_from_prefix(self):
+        blob = _png_with_prompt(SAMPLE_PROMPT)
+        drive = _FakeDrive(
+            {'id': 'img1', 'name': 'out.png', 'size': len(blob), 'modified': 1, 'path': 'output/out.png'},
+            blobs={'img1': blob},
+        )
+        payload = video_server.extract_drive_workflow(drive, 'output/out.png')
+        self.assertEqual(payload['source'], 'image:prompt')
+        self.assertEqual(payload['fields'][0]['value'], 'a cat')
+        self.assertIsNone(drive.downloads[0][2])
+
+    def test_missing_file(self):
+        drive = _FakeDrive(None)
+        self.assertIsNone(video_server.extract_drive_workflow(drive, 'output/missing.mp4'))
+
+    def test_large_video_probe_reads_tail(self):
+        class Drive(_FakeDrive):
+            def download_bytes(self, file_id, max_bytes, range_header=None):
+                self.downloads.append((file_id, max_bytes, range_header))
+                header = range_header or ''
+                if header.startswith('bytes=0-'):
+                    return b'head-without-prompt'
+                return json.dumps(SAMPLE_PROMPT).encode()
+
+        drive = Drive({
+            'id': 'big',
+            'name': 'clip.mp4',
+            'size': 20_000_000,
+            'modified': 3,
+            'path': 'output/video/clip.mp4',
+        })
+        payload = video_server.extract_drive_workflow(drive, 'output/video/clip.mp4')
+        self.assertEqual(payload['source'], 'video:metadata')
+        self.assertTrue(drive.downloads[0][2].startswith('bytes=0-'))
+        tail_start = 20_000_000 - video_server.DRIVE_VIDEO_PROBE_BYTES
+        self.assertEqual(drive.downloads[1][2], f'bytes={tail_start}-19999999')
+
+    def test_video_embedded_prompt(self):
+        raw = b'\x00\x01moov' + json.dumps(SAMPLE_PROMPT).encode() + b'\xfftail'
+        drive = _FakeDrive(
+            {'id': 'vid3', 'name': 'clip.mp4', 'size': len(raw), 'modified': 2, 'path': 'output/video/clip.mp4'},
+            blobs={'vid3': raw},
+        )
+        payload = video_server.extract_drive_workflow(drive, 'output/video/clip.mp4')
+        self.assertEqual(payload['source'], 'video:metadata')
+        self.assertEqual(payload['prompt']['4']['inputs']['text'], 'a cat')
+        self.assertEqual(drive.downloads[0][0], 'vid3')
+
+    def test_prompt_bytes_ignore_surrounding_binary(self):
+        raw = b'\xff\xfe' + json.dumps(SAMPLE_PROMPT).encode() + b'\x00\x01'
+        prompt = video_server.prompt_from_media_bytes(raw)
+        self.assertEqual(prompt['6']['inputs']['width'], 640)
+
+    def test_video_without_prompt_is_empty_payload(self):
+        drive = _FakeDrive(
+            {'id': 'vid2', 'name': 'empty.mp4', 'size': 10, 'modified': 1, 'path': 'output/video/empty.mp4'},
+        )
+        payload = video_server.extract_drive_workflow(drive, 'output/video/empty.mp4')
+        self.assertIsNone(payload['prompt'])
+        self.assertIn('error', payload)
+        self.assertEqual(payload['fields'], [])
+
+
+class DriveDownloadTests(unittest.TestCase):
+    def test_download_bytes_caps_size_and_passes_range(self):
+        class Resp:
+            status_code = 206
+            headers = {'Content-Length': '4'}
+
+            def iter_content(self, _n):
+                yield b'abcd'
+
+            def close(self):
+                self.closed = True
+
+        resp = Resp()
+
+        class Storage:
+            def open_media(self, file_id, range_header=None, timeout=120):
+                self.file_id = file_id
+                self.range_header = range_header
+                self.timeout = timeout
+                return resp
+
+        storage = Storage()
+        data = drive_backend.DriveStorage.download_bytes(
+            storage, 'abc', max_bytes=4, range_header='bytes=0-3',
+        )
+        self.assertEqual(data, b'abcd')
+        self.assertEqual(storage.range_header, 'bytes=0-3')
+        self.assertTrue(resp.closed)
+        oversized = drive_backend.DriveStorage.download_bytes(storage, 'abc', max_bytes=3)
+        self.assertIsNone(oversized)
+
+    def test_find_named_files_queries_parent(self):
+        class Files:
+            def get(self, **kwargs):
+                self.kwargs = kwargs
+                return self
+
+            def execute(self):
+                return {'parents': ['folder-1']}
+
+        class Service:
+            def files(self):
+                return Files()
+
+        storage = drive_backend.DriveStorage.__new__(drive_backend.DriveStorage)
+        storage.service = Service()
+
+        def fake_list(q, fields, page_size=10, page_token=None, order_by=None):
+            storage.query = q
+            return {'files': [{
+                'id': 'j1',
+                'name': 'clip.mp4.json',
+                'mimeType': 'application/json',
+                'size': '12',
+            }, {
+                'id': 'doc',
+                'name': 'notes',
+                'mimeType': 'application/vnd.google-apps.document',
+                'size': '1',
+            }]}
+
+        storage._drive_list = fake_list
+        found = storage.find_named_files('vid', ['clip.mp4.json', 'clip.json'])
+        self.assertIn("'folder-1' in parents", storage.query)
+        self.assertEqual(found['clip.mp4.json']['id'], 'j1')
+        self.assertNotIn('notes', found)
 
 
 if __name__ == '__main__':
