@@ -2144,6 +2144,86 @@ def coerce_comfy_prompt(obj):
     return None
 
 
+def coerce_ui_workflow(obj):
+    """Return a ComfyUI graph (nodes/links/positions), or None.
+
+    The graph is returned as parsed, with key order and node order intact.
+    API prompts are not graphs.
+    """
+    if isinstance(obj, str):
+        text = obj.strip()
+        if not text or text[0] not in '{[':
+            return None
+        try:
+            obj = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(obj, dict):
+        return None
+    nodes = obj.get('nodes')
+    if not isinstance(nodes, list) or not nodes:
+        return None
+    if not any(
+        isinstance(node, dict) and (node.get('type') or 'pos' in node or 'widgets_values' in node)
+        for node in nodes
+    ):
+        return None
+    return obj
+
+
+def _split_prompt_and_ui(obj):
+    """Split a JSON document into an API prompt and the original UI graph."""
+    parsed = obj
+    if isinstance(obj, (bytes, bytearray)):
+        try:
+            parsed = json.loads(bytes(obj).decode('utf-8', errors='replace'))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None, None
+    elif isinstance(obj, str):
+        try:
+            parsed = json.loads(obj)
+        except json.JSONDecodeError:
+            return None, None
+    prompt = coerce_comfy_prompt(parsed)
+    ui = coerce_ui_workflow(parsed)
+    if ui is None and isinstance(parsed, dict):
+        ui = coerce_ui_workflow(parsed.get('workflow'))
+    return prompt, ui
+
+
+def _comfy_from_text_map(texts):
+    """Pick the API prompt and UI graph out of PNG/EXIF text fields."""
+    if not isinstance(texts, dict):
+        return None, None, None
+    prompt = None
+    source_key = None
+    for key in ('prompt', 'workflow', 'parameters', 'userComment'):
+        found = coerce_comfy_prompt(texts.get(key))
+        if found:
+            prompt = found
+            source_key = key
+            break
+    ui = None
+    for key in ('workflow', 'prompt', 'parameters', 'userComment'):
+        found = coerce_ui_workflow(texts.get(key))
+        if found:
+            ui = found
+            break
+        raw = texts.get(key)
+        parsed = raw
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = None
+        if isinstance(parsed, dict):
+            found = coerce_ui_workflow(parsed.get('workflow'))
+            if found:
+                ui = found
+                break
+    return prompt, source_key, ui
+
+
 def _node_title(node):
     meta = node.get('_meta') if isinstance(node, dict) else None
     if isinstance(meta, dict) and meta.get('title'):
@@ -2508,12 +2588,22 @@ def _read_json_file(path):
 
 
 def _prompt_from_image_file(filepath):
-    meta = extract_image_metadata(filepath)
-    for key in ('prompt', 'workflow', 'parameters', 'userComment'):
-        prompt = coerce_comfy_prompt(meta.get(key))
-        if prompt:
-            return prompt, f'image:{key}'
-    return None, None
+    path = Path(filepath)
+    if path.suffix.lower() == '.png':
+        try:
+            data = path.read_bytes()
+        except OSError:
+            data = b''
+        if data.startswith(_PNG_SIGNATURE):
+            texts, _finished = read_png_text_chunks(data)
+            prompt, key, ui = _comfy_from_text_map(texts)
+            if prompt:
+                return prompt, f'image:{key}', ui
+    meta = extract_image_metadata(path)
+    prompt, key, ui = _comfy_from_text_map(meta)
+    if prompt:
+        return prompt, f'image:{key}', ui
+    return None, None, None
 
 
 def _prompt_from_sidecar(filepath):
@@ -2531,15 +2621,15 @@ def _prompt_from_sidecar(filepath):
         seen.add(resolved)
         if not candidate.is_file():
             continue
-        prompt = coerce_comfy_prompt(_read_json_file(candidate))
+        prompt, ui = _split_prompt_and_ui(_read_json_file(candidate))
         if prompt:
-            return prompt, f'sidecar:{candidate.name}'
-    return None, None
+            return prompt, f'sidecar:{candidate.name}', ui
+    return None, None, None
 
 
 def _prompt_from_ffprobe(filepath):
     if not _ffprobe_path:
-        return None, None
+        return None, None, None
     try:
         result = subprocess.run(
             [
@@ -2549,13 +2639,13 @@ def _prompt_from_ffprobe(filepath):
             capture_output=True, text=True, timeout=20,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return None, None
+        return None, None, None
     if result.returncode != 0 or not result.stdout:
-        return None, None
+        return None, None, None
     try:
         data = json.loads(result.stdout)
     except json.JSONDecodeError:
-        return None, None
+        return None, None, None
     blobs = []
     fmt = data.get('format') or {}
     tags = fmt.get('tags') or {}
@@ -2563,10 +2653,10 @@ def _prompt_from_ffprobe(filepath):
     for stream in data.get('streams') or []:
         blobs.extend((stream.get('tags') or {}).values())
     for blob in blobs:
-        prompt = coerce_comfy_prompt(blob)
+        prompt, ui = _split_prompt_and_ui(blob)
         if prompt:
-            return prompt, 'ffprobe'
-    return None, None
+            return prompt, 'ffprobe', ui
+    return None, None, None
 
 
 def _prompt_from_sibling_image(filepath):
@@ -2574,10 +2664,16 @@ def _prompt_from_sibling_image(filepath):
     for suffix in ('.png', '.webp', '.jpg', '.jpeg'):
         sibling = path.with_suffix(suffix)
         if sibling.is_file():
-            prompt, source = _prompt_from_image_file(sibling)
+            prompt, _source, ui = _prompt_from_image_file(sibling)
             if prompt:
-                return prompt, f'sibling:{sibling.name}'
-    return None, None
+                return prompt, f'sibling:{sibling.name}', ui
+    return None, None, None
+
+
+def _with_ui_workflow(payload, ui):
+    if ui:
+        payload['ui_workflow'] = ui
+    return payload
 
 
 def extract_comfy_workflow(filepath):
@@ -2586,16 +2682,17 @@ def extract_comfy_workflow(filepath):
     suffix = path.suffix.lower()
     prompt = None
     source = None
+    ui = None
     if suffix in IMAGE_EXTENSIONS:
-        prompt, source = _prompt_from_image_file(path)
+        prompt, source, ui = _prompt_from_image_file(path)
         if not prompt:
-            prompt, source = _prompt_from_sidecar(path)
+            prompt, source, ui = _prompt_from_sidecar(path)
     else:
-        prompt, source = _prompt_from_sidecar(path)
+        prompt, source, ui = _prompt_from_sidecar(path)
         if not prompt:
-            prompt, source = _prompt_from_ffprobe(path)
+            prompt, source, ui = _prompt_from_ffprobe(path)
         if not prompt:
-            prompt, source = _prompt_from_sibling_image(path)
+            prompt, source, ui = _prompt_from_sibling_image(path)
     payload = {
         'path': str(path),
         'name': path.name,
@@ -2603,12 +2700,14 @@ def extract_comfy_workflow(filepath):
         'fields': prompt_to_fields(prompt) if prompt else [],
         'source': source,
     }
+    _with_ui_workflow(payload, ui)
     if not prompt:
         payload['error'] = 'No ComfyUI prompt found in this file'
     return payload
 
 
 _PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
+WORKFLOW_CACHE_VERSION = 2
 DRIVE_SIDECAR_MAX_BYTES = 8 * 1024 * 1024
 DRIVE_IMAGE_PREFIX_BYTES = 8 * 1024 * 1024
 DRIVE_IMAGE_MAX_BYTES = 48 * 1024 * 1024
@@ -2713,6 +2812,8 @@ def _read_workflow_cache(meta):
         return None
     if not isinstance(data, dict):
         return None
+    if data.get('v') != WORKFLOW_CACHE_VERSION:
+        return None
     if data.get('size') != int(meta.get('size') or 0):
         return None
     if data.get('modified') != meta.get('modified'):
@@ -2729,6 +2830,7 @@ def _write_workflow_cache(meta, payload):
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({
+            'v': WORKFLOW_CACHE_VERSION,
             'size': int(meta.get('size') or 0),
             'modified': meta.get('modified'),
             'payload': payload,
@@ -2748,14 +2850,15 @@ def _empty_workflow(rel, name, error=_NO_PROMPT_ERROR):
     }
 
 
-def _workflow_from_prompt(rel, name, prompt, source):
-    return {
+def _workflow_from_prompt(rel, name, prompt, source, ui=None):
+    payload = {
         'path': rel,
         'name': name,
         'prompt': prompt,
         'fields': prompt_to_fields(prompt) if prompt else [],
         'source': source,
     }
+    return _with_ui_workflow(payload, ui)
 
 
 def _workflow_from_image_bytes(name, data):
@@ -2773,55 +2876,54 @@ def _workflow_from_image_bytes(name, data):
 
 
 def _prompt_from_image_bytes(name, data, prefix_only):
-    """Return (prompt, source, done). done means a larger download will not help."""
+    """Return (prompt, source, done, ui_workflow). done means a larger download will not help."""
     if not data:
-        return None, None, False
+        return None, None, False, None
     if Path(name).suffix.lower() == '.png' or data.startswith(_PNG_SIGNATURE):
         texts, finished = read_png_text_chunks(data)
-        for key in ('prompt', 'workflow', 'parameters'):
-            prompt = coerce_comfy_prompt(texts.get(key))
-            if prompt:
-                return prompt, f'image:{key}', True
+        prompt, key, ui = _comfy_from_text_map(texts)
+        if prompt:
+            return prompt, f'image:{key}', True, ui
         if finished or not prefix_only:
-            return None, None, True
-        return None, None, False
+            return None, None, True, None
+        return None, None, False, None
     try:
         payload = _workflow_from_image_bytes(name, data)
     except Exception:
         payload = None
     if payload and payload.get('prompt'):
-        return payload['prompt'], payload.get('source'), True
+        return payload['prompt'], payload.get('source'), True, payload.get('ui_workflow')
     if prefix_only:
-        return None, None, False
-    return None, None, True
+        return None, None, False, None
+    return None, None, True, None
 
 
 def _download_drive_image_prompt(drive, item, name):
     file_id = item.get('id')
     size = int(item.get('size') or 0)
     if not file_id:
-        return None, None
+        return None, None, None
     if size and size <= DRIVE_IMAGE_PREFIX_BYTES:
         raw = drive.download_bytes(file_id, max(size, 1))
         if not raw:
-            return None, None
-        prompt, source, _done = _prompt_from_image_bytes(name, raw, prefix_only=False)
-        return prompt, source
+            return None, None, None
+        prompt, source, _done, ui = _prompt_from_image_bytes(name, raw, prefix_only=False)
+        return prompt, source, ui
     raw = drive.download_bytes(
         file_id,
         DRIVE_IMAGE_PREFIX_BYTES,
         range_header=f'bytes=0-{DRIVE_IMAGE_PREFIX_BYTES - 1}',
     )
-    prompt, source, done = _prompt_from_image_bytes(name, raw, prefix_only=True)
+    prompt, source, done, ui = _prompt_from_image_bytes(name, raw, prefix_only=True)
     if prompt or done:
-        return prompt, source
+        return prompt, source, ui
     if size and size > DRIVE_IMAGE_MAX_BYTES:
-        return None, None
+        return None, None, None
     raw = drive.download_bytes(file_id, DRIVE_IMAGE_MAX_BYTES)
     if not raw:
-        return None, None
-    prompt, source, _done = _prompt_from_image_bytes(name, raw, prefix_only=False)
-    return prompt, source
+        return None, None, None
+    prompt, source, _done, ui = _prompt_from_image_bytes(name, raw, prefix_only=False)
+    return prompt, source, ui
 
 
 def _balanced_json_object(text, start, limit=2_000_000):
@@ -2877,6 +2979,39 @@ def prompt_from_media_bytes(data):
         pos = at + len(needle)
 
 
+def ui_from_media_bytes(data):
+    """Find a ComfyUI UI graph embedded in a video or other binary blob."""
+    if not data or b'"nodes"' not in data:
+        return None
+    if b'"widgets_values"' not in data and b'"last_node_id"' not in data:
+        return None
+    text = data.decode('utf-8', errors='ignore')
+    needle = '"nodes"'
+    best = None
+    best_len = 0
+    pos = 0
+    hits = 0
+    while hits < 8:
+        at = text.find(needle, pos)
+        if at < 0:
+            break
+        hits += 1
+        start = at
+        for _hop in range(30):
+            start = text.rfind('{', 0, start)
+            if start < 0:
+                break
+            snippet = _balanced_json_object(text, start, limit=4_000_000)
+            if not snippet or len(snippet) <= best_len:
+                continue
+            ui = coerce_ui_workflow(snippet)
+            if ui is not None and ('links' in ui or 'last_node_id' in ui):
+                best = ui
+                best_len = len(snippet)
+        pos = at + len(needle)
+    return best
+
+
 def _download_drive_probe_chunks(drive, item):
     """Head and tail of a video. Comfy metadata sits in moov, which may be either end."""
     file_id = item.get('id')
@@ -2907,21 +3042,28 @@ def _download_drive_probe_chunks(drive, item):
 
 
 def _prompt_from_drive_video(drive, item):
+    prompt = None
+    ui = None
     for chunk in _download_drive_probe_chunks(drive, item):
-        prompt = prompt_from_media_bytes(chunk)
-        if prompt:
-            return prompt
-    return None
+        if not prompt:
+            prompt = prompt_from_media_bytes(chunk)
+        if not ui:
+            ui = ui_from_media_bytes(chunk)
+        if prompt and ui:
+            break
+    if prompt:
+        return prompt, ui
+    return None, None
 
 
 def _prompt_from_drive_sidecar(drive, item):
     size = int(item.get('size') or 0)
     if size > DRIVE_SIDECAR_MAX_BYTES or not item.get('id'):
-        return None
+        return None, None
     raw = drive.download_bytes(item['id'], DRIVE_SIDECAR_MAX_BYTES)
     if not raw:
-        return None
-    return coerce_comfy_prompt(raw.decode('utf-8', errors='replace'))
+        return None, None
+    return _split_prompt_and_ui(raw.decode('utf-8', errors='replace'))
 
 
 def extract_drive_workflow(drive, rel):
@@ -2954,19 +3096,20 @@ def extract_drive_workflow(drive, rel):
 
     prompt = None
     source = None
+    ui = None
     too_big = False
     if suffix in IMAGE_EXTENSIONS:
         size = int(meta.get('size') or 0)
         if size > DRIVE_IMAGE_MAX_BYTES:
             too_big = True
         else:
-            prompt, source = _download_drive_image_prompt(drive, meta, name)
+            prompt, source, ui = _download_drive_image_prompt(drive, meta, name)
         if not prompt:
             for sidecar_name in sidecars:
                 item = found.get(sidecar_name)
                 if not item:
                     continue
-                prompt = _prompt_from_drive_sidecar(drive, item)
+                prompt, ui = _prompt_from_drive_sidecar(drive, item)
                 if prompt:
                     source = f"sidecar:{item.get('name') or sidecar_name}"
                     too_big = False
@@ -2976,12 +3119,12 @@ def extract_drive_workflow(drive, rel):
             item = found.get(sidecar_name)
             if not item:
                 continue
-            prompt = _prompt_from_drive_sidecar(drive, item)
+            prompt, ui = _prompt_from_drive_sidecar(drive, item)
             if prompt:
                 source = f"sidecar:{item.get('name') or sidecar_name}"
                 break
         if not prompt:
-            prompt = _prompt_from_drive_video(drive, meta)
+            prompt, ui = _prompt_from_drive_video(drive, meta)
             if prompt:
                 source = 'video:metadata'
         if not prompt:
@@ -2992,7 +3135,7 @@ def extract_drive_workflow(drive, rel):
                 if int(item.get('size') or 0) > DRIVE_IMAGE_MAX_BYTES:
                     too_big = True
                     continue
-                prompt, source = _download_drive_image_prompt(drive, item, sibling_name)
+                prompt, source, ui = _download_drive_image_prompt(drive, item, sibling_name)
                 if prompt:
                     source = f'sibling:{sibling_name}'
                     too_big = False
@@ -3007,7 +3150,7 @@ def extract_drive_workflow(drive, rel):
             )
         return _empty_workflow(rel, name, error)
 
-    payload = _workflow_from_prompt(rel, name, prompt, source)
+    payload = _workflow_from_prompt(rel, name, prompt, source, ui)
     _write_workflow_cache(meta, payload)
     return payload
 

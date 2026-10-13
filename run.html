@@ -604,6 +604,9 @@ function applyPastedJson() {
     workflow.prompt = prompt;
     workflow.error = null;
     workflow.source = 'paste';
+    workflow.ui = (obj && obj.workflow && typeof obj.workflow === 'object') ? obj.workflow : null;
+    workflow.ui_workflow = workflow.ui;
+    workflow.promptBase = JSON.parse(JSON.stringify(prompt));
     workflow.fields = buildFieldsClient(prompt);
     renderForm();
     persistRemix();
@@ -995,10 +998,15 @@ async function loadWorkflow() {
             return;
         }
         const data = await resp.json();
+        const filePrompt = data.prompt ? JSON.parse(JSON.stringify(data.prompt)) : null;
         workflow = data;
         workflow.path = path;
+        workflow.ui = data.ui_workflow || null;
+        workflow.promptBase = filePrompt;
         if (saved && saved.path === path && saved.workflow && saved.workflow.prompt) {
             workflow.prompt = saved.workflow.prompt;
+            if (!workflow.ui && saved.workflow.ui) workflow.ui = saved.workflow.ui;
+            if (!workflow.promptBase && saved.workflow.promptBase) workflow.promptBase = saved.workflow.promptBase;
         }
         if (workflow.prompt) {
             workflow.fields = buildFieldsClient(workflow.prompt);
@@ -1210,6 +1218,10 @@ function snapshotJob() {
         name,
         path: currentPath(),
         prompt,
+        promptBase: workflow.promptBase ? JSON.parse(JSON.stringify(workflow.promptBase)) : null,
+        ui: (workflow.ui || workflow.ui_workflow)
+            ? JSON.parse(JSON.stringify(workflow.ui || workflow.ui_workflow))
+            : null,
         runCount: readRunCount(),
         randomSeed: isRandomSeedOn(),
     };
@@ -1922,6 +1934,92 @@ function randomSeedValue() {
     return Math.floor(Math.random() * 0x100000000);
 }
 
+function isComfyLinkValue(value) {
+    return Array.isArray(value) && value.length === 2
+        && (typeof value[0] === 'string' || typeof value[0] === 'number')
+        && Number.isInteger(value[1]);
+}
+
+function widgetValuesMatch(a, b) {
+    if (Object.is(a, b)) return true;
+    if (typeof a === 'number' && typeof b === 'string' && b.trim() !== '' && Number(b) === a) return true;
+    if (typeof b === 'number' && typeof a === 'string' && a.trim() !== '' && Number(a) === b) return true;
+    try { return JSON.stringify(a) === JSON.stringify(b); } catch (_) { return false; }
+}
+
+function eachUiNode(ui, fn) {
+    if (!ui || typeof ui !== 'object') return;
+    if (Array.isArray(ui.nodes)) ui.nodes.forEach(fn);
+    const subs = ui.definitions && ui.definitions.subgraphs;
+    if (Array.isArray(subs)) {
+        subs.forEach(sg => {
+            if (sg && Array.isArray(sg.nodes)) sg.nodes.forEach(fn);
+        });
+    }
+}
+
+function patchWidgetList(widgets, changes) {
+    const used = new Set();
+    changes.forEach(change => {
+        const idx = widgets.findIndex((w, i) => !used.has(i) && widgetValuesMatch(w, change.oldVal));
+        if (idx >= 0) {
+            widgets[idx] = change.newVal;
+            used.add(idx);
+        }
+    });
+}
+
+function patchWidgetObject(widgets, changes) {
+    changes.forEach(change => {
+        if (Object.prototype.hasOwnProperty.call(widgets, change.key) && !isComfyLinkValue(widgets[change.key])) {
+            widgets[change.key] = change.newVal;
+            return;
+        }
+        const keys = Object.keys(widgets);
+        for (let i = 0; i < keys.length; i++) {
+            if (widgetValuesMatch(widgets[keys[i]], change.oldVal)) {
+                widgets[keys[i]] = change.newVal;
+                break;
+            }
+        }
+    });
+}
+
+function patchUiWidgets(ui, basePrompt, nextPrompt) {
+    if (!ui || !basePrompt || !nextPrompt) return ui;
+    eachUiNode(ui, node => {
+        if (!node || node.widgets_values == null) return;
+        const id = node.id == null ? '' : String(node.id);
+        const baseNode = basePrompt[id] || basePrompt[node.id];
+        const nextNode = nextPrompt[id] || nextPrompt[node.id];
+        if (!baseNode || !nextNode) return;
+        const baseIn = baseNode.inputs || {};
+        const nextIn = nextNode.inputs || {};
+        const changes = [];
+        Object.keys(nextIn).forEach(key => {
+            const oldVal = baseIn[key];
+            const newVal = nextIn[key];
+            if (isComfyLinkValue(oldVal) || isComfyLinkValue(newVal)) return;
+            if (widgetValuesMatch(oldVal, newVal)) return;
+            changes.push({ key, oldVal, newVal });
+        });
+        if (!changes.length) return;
+        if (Array.isArray(node.widgets_values)) patchWidgetList(node.widgets_values, changes);
+        else if (typeof node.widgets_values === 'object') patchWidgetObject(node.widgets_values, changes);
+    });
+    return ui;
+}
+
+function queueUiWorkflow(payload, graph) {
+    const hasGraph = !!(graph && typeof graph === 'object');
+    const source = hasGraph ? graph.ui : (workflow.ui || workflow.ui_workflow);
+    if (!source || !Array.isArray(source.nodes) || !source.nodes.length) return null;
+    const clone = JSON.parse(JSON.stringify(source));
+    const base = hasGraph ? graph.promptBase : workflow.promptBase;
+    if (base) patchUiWidgets(clone, base, payload);
+    return clone;
+}
+
 function applyRandomSeeds(promptObj) {
     const target = promptObj || workflow.prompt;
     if (!isRandomSeedOn() || !target) return [];
@@ -1972,7 +2070,7 @@ function finishBatchOk() {
     if (tab && tab.hint !== 'stopped' && tab.hint !== 'error') setTabHint(tab, 'done');
 }
 
-async function executeOneRun(base, prompt, i) {
+async function executeOneRun(base, prompt, i, graph) {
     if (runStopped) return;
     const tab = beginRunTab();
     runIndex = i;
@@ -1994,11 +2092,14 @@ async function executeOneRun(base, prompt, i) {
     persistRemix();
     try {
         if (runStopped) return;
+        const queueBody = { prompt: payload, client_id: clientId };
+        const uiWorkflow = queueUiWorkflow(payload, graph);
+        if (uiWorkflow) queueBody.extra_data = { extra_pnginfo: { workflow: uiWorkflow } };
         const resp = await colabFetch(base + '/prompt', {
             method: 'POST',
             mode: 'cors',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt: payload, client_id: clientId }),
+            body: JSON.stringify(queueBody),
         }, { label: '/prompt', statusNoun: 'prompt', tries: 6 });
         if (runStopped) return;
         const body = await resp.json().catch(() => ({}));
@@ -2151,7 +2252,7 @@ async function startQueuedJob(job) {
     try {
         for (let i = 1; i <= runTotal; i++) {
             if (runStopped) break;
-            await executeOneRun(base, prompt, i);
+            await executeOneRun(base, prompt, i, { ui: job.ui || null, promptBase: job.promptBase || null });
         }
         if (!runStopped) finishBatchOk();
     } catch (err) {

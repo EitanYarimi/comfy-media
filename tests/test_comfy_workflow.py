@@ -66,7 +66,7 @@ class CoercePromptTests(unittest.TestCase):
         self.assertIsNotNone(video_server.coerce_comfy_prompt(json.dumps(SAMPLE_PROMPT)))
 
     def test_rejects_ui_workflow(self):
-        self.assertIsNone(video_server.coerce_comfy_prompt({'nodes': [{'id': 1}]}))
+        self.assertIsNone(video_server.coerce_comfy_prompt({'nodes': [{'id': 1, 'type': 'Note', 'pos': [0, 0]}]}))
 
 
 class PromptToFieldsTests(unittest.TestCase):
@@ -348,6 +348,33 @@ class ExtractWorkflowTests(unittest.TestCase):
         self.assertEqual(payload['source'], 'image:prompt')
         self.assertEqual(payload['fields'][0]['value'], 'a cat')
 
+    def test_png_keeps_original_ui_workflow(self):
+        img_path = self.root / 'layout.png'
+        img_path.write_bytes(_png_with_texts([
+            ('prompt', json.dumps(SAMPLE_PROMPT)),
+            ('workflow', json.dumps(SAMPLE_UI)),
+        ]))
+        payload = video_server.extract_comfy_workflow(img_path)
+        ui = payload['ui_workflow']
+        self.assertEqual([node['id'] for node in ui['nodes']], [1, 4, 3])
+        self.assertEqual(ui['nodes'][1]['pos'], [30, 400])
+        self.assertEqual(ui['nodes'][2]['widgets_values'][1], 'randomize')
+        self.assertEqual(ui['links'], SAMPLE_UI['links'])
+        self.assertEqual(list(ui.keys()), list(SAMPLE_UI.keys()))
+        self.assertEqual(list(ui['nodes'][0].keys()), list(SAMPLE_UI['nodes'][0].keys()))
+
+    def test_sidecar_keeps_ui_workflow(self):
+        clip = self.root / 'clip.mp4'
+        clip.write_bytes(b'not-a-real-video')
+        (self.root / 'clip.mp4.json').write_text(
+            json.dumps({'prompt': SAMPLE_PROMPT, 'workflow': SAMPLE_UI}),
+            encoding='utf-8',
+        )
+        payload = video_server.extract_comfy_workflow(clip)
+        self.assertEqual(payload['prompt']['4']['inputs']['text'], 'a cat')
+        self.assertEqual(payload['ui_workflow']['nodes'][2]['pos'], [500, 200])
+        self.assertNotIn('error', payload)
+
 
 class FrontendRemixTests(unittest.TestCase):
     def test_run_page_exists(self):
@@ -425,6 +452,11 @@ class FrontendRemixTests(unittest.TestCase):
         self.assertIn('Colab unreachable, retrying history', src)
         self.assertIn('websocket dropped · reconnecting', src)
         self.assertIn('/api/workflow?path=', src)
+        self.assertIn('extra_pnginfo', src)
+        self.assertIn('function patchUiWidgets', src)
+        self.assertIn('function queueUiWorkflow', src)
+        self.assertIn('promptBase', src)
+        self.assertIn('ui_workflow', src)
 
     def test_gallery_remix_links(self):
         src = (Path(ROOT) / 'index.html').read_text()
@@ -461,11 +493,49 @@ def _png_chunk(ctype, data):
 
 
 def _png_with_prompt(prompt):
+    return _png_with_texts([('prompt', json.dumps(prompt))])
+
+
+def _png_with_texts(pairs):
     sig = b'\x89PNG\r\n\x1a\n'
     ihdr = _png_chunk(b'IHDR', b'\x00' * 13)
-    text = _png_chunk(b'tEXt', b'prompt\x00' + json.dumps(prompt).encode())
-    idat = _png_chunk(b'IDAT', b'pixels')
-    return sig + ihdr + text + idat
+    chunks = [ihdr]
+    for key, value in pairs:
+        chunks.append(_png_chunk(b'tEXt', key.encode('latin1') + b'\x00' + value.encode()))
+    chunks.append(_png_chunk(b'IDAT', b'pixels'))
+    return sig + b''.join(chunks)
+
+
+SAMPLE_UI = {
+    'last_node_id': 8,
+    'last_link_id': 4,
+    'nodes': [
+        {
+            'id': 1,
+            'type': 'CheckpointLoaderSimple',
+            'pos': [10, 20],
+            'widgets_values': ['model.safetensors'],
+            'order': 0,
+        },
+        {
+            'id': 4,
+            'type': 'CLIPTextEncode',
+            'pos': [30, 400],
+            'widgets_values': ['a cat'],
+            'order': 1,
+        },
+        {
+            'id': 3,
+            'type': 'KSampler',
+            'pos': [500, 200],
+            'widgets_values': [42, 'randomize', 20, 7, 'euler', 'normal', 1],
+            'order': 2,
+        },
+    ],
+    'links': [[1, 1, 1, 4, 1, 'CLIP']],
+    'groups': [],
+    'version': 0.4,
+}
 
 
 class PngTextChunkTests(unittest.TestCase):
@@ -482,10 +552,11 @@ class PngTextChunkTests(unittest.TestCase):
         texts, finished = video_server.read_png_text_chunks(prefix)
         self.assertFalse(finished)
         self.assertIn('a cat', texts['prompt'])
-        prompt, source, done = video_server._prompt_from_image_bytes('out.png', prefix, prefix_only=True)
+        prompt, source, done, ui = video_server._prompt_from_image_bytes('out.png', prefix, prefix_only=True)
         self.assertTrue(done)
         self.assertEqual(source, 'image:prompt')
         self.assertEqual(prompt['4']['inputs']['text'], 'a cat')
+        self.assertIsNone(ui)
 
 
 class _FakeDrive:
@@ -665,6 +736,104 @@ class DriveDownloadTests(unittest.TestCase):
         self.assertIn("'folder-1' in parents", storage.query)
         self.assertEqual(found['clip.mp4.json']['id'], 'j1')
         self.assertNotIn('notes', found)
+
+
+class UiWorkflowTests(unittest.TestCase):
+    def test_coerce_ui_workflow_rejects_api_prompt(self):
+        self.assertIsNone(video_server.coerce_ui_workflow(SAMPLE_PROMPT))
+        self.assertIsNone(video_server.coerce_ui_workflow(json.dumps(SAMPLE_PROMPT)))
+
+    def test_coerce_ui_workflow_keeps_node_order(self):
+        ui = video_server.coerce_ui_workflow(json.dumps(SAMPLE_UI))
+        self.assertEqual([node['id'] for node in ui['nodes']], [1, 4, 3])
+        self.assertEqual(ui['nodes'][0]['pos'], [10, 20])
+
+    def test_drive_png_returns_same_graph(self):
+        blob = _png_with_texts([
+            ('prompt', json.dumps(SAMPLE_PROMPT)),
+            ('workflow', json.dumps(SAMPLE_UI)),
+        ])
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        previous = video_server.CACHE_ROOT
+        video_server.CACHE_ROOT = Path(tmp.name)
+        self.addCleanup(setattr, video_server, 'CACHE_ROOT', previous)
+        drive = _FakeDrive(
+            {'id': 'img-ui', 'name': 'out.png', 'size': len(blob), 'modified': 9, 'path': 'output/out.png'},
+            blobs={'img-ui': blob},
+        )
+        payload = video_server.extract_drive_workflow(drive, 'output/out.png')
+        ui = payload['ui_workflow']
+        self.assertEqual([node['id'] for node in ui['nodes']], [1, 4, 3])
+        self.assertEqual(ui['nodes'][1]['pos'], [30, 400])
+        self.assertEqual(ui['links'], [[1, 1, 1, 4, 1, 'CLIP']])
+        again = video_server.extract_drive_workflow(drive, 'output/out.png')
+        self.assertEqual([node['id'] for node in again['ui_workflow']['nodes']], [1, 4, 3])
+        self.assertEqual(len(drive.downloads), 1)
+
+    def test_old_cache_without_version_is_ignored(self):
+        blob = _png_with_texts([
+            ('prompt', json.dumps(SAMPLE_PROMPT)),
+            ('workflow', json.dumps(SAMPLE_UI)),
+        ])
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        previous = video_server.CACHE_ROOT
+        video_server.CACHE_ROOT = Path(tmp.name)
+        self.addCleanup(setattr, video_server, 'CACHE_ROOT', previous)
+        meta = {'id': 'img-old', 'name': 'out.png', 'size': len(blob), 'modified': 4, 'path': 'output/out.png'}
+        cache = video_server._workflow_cache_file(meta['id'])
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps({
+            'size': len(blob),
+            'modified': 4,
+            'payload': {'prompt': {'1': {'class_type': 'Note', 'inputs': {}}}, 'fields': [], 'source': 'stale'},
+        }), encoding='utf-8')
+        drive = _FakeDrive(meta, blobs={'img-old': blob})
+        payload = video_server.extract_drive_workflow(drive, 'output/out.png')
+        self.assertEqual(payload['prompt']['4']['inputs']['text'], 'a cat')
+        self.assertEqual(payload['ui_workflow']['nodes'][2]['pos'], [500, 200])
+        self.assertEqual(len(drive.downloads), 1)
+
+    def test_queue_body_patches_widgets_and_keeps_layout(self):
+        node = __import__('shutil').which('node')
+        if not node:
+            self.skipTest('node is not installed')
+        script = r'''
+const fs = require('fs');
+const html = fs.readFileSync(process.argv[1], 'utf8');
+const start = html.indexOf('function isComfyLinkValue');
+const end = html.indexOf('function applyRandomSeeds');
+if (start < 0 || end < start) throw new Error('patch helpers missing');
+global.workflow = { ui: null, ui_workflow: null, promptBase: null };
+eval(html.slice(start, end));
+const ui = JSON.parse(process.argv[2]);
+const base = JSON.parse(process.argv[3]);
+const next = JSON.parse(process.argv[4]);
+workflow.ui = ui;
+workflow.promptBase = base;
+const out = queueUiWorkflow(next);
+const order = out.nodes.map(n => n.id);
+const pos = out.nodes.map(n => n.pos);
+const widgets = out.nodes.map(n => n.widgets_values);
+process.stdout.write(JSON.stringify({ order, pos, widgets, links: out.links, keys: Object.keys(out) }));
+'''
+        edited = json.loads(json.dumps(SAMPLE_PROMPT))
+        edited['4']['inputs']['text'] = 'a dog in the same graph'
+        edited['3']['inputs']['seed'] = 99
+        proc = __import__('subprocess').run(
+            [node, '-e', script, str(Path(ROOT) / 'run.html'), json.dumps(SAMPLE_UI), json.dumps(SAMPLE_PROMPT), json.dumps(edited)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        got = json.loads(proc.stdout)
+        self.assertEqual(got['order'], [1, 4, 3])
+        self.assertEqual(got['pos'], [[10, 20], [30, 400], [500, 200]])
+        self.assertEqual(got['links'], SAMPLE_UI['links'])
+        self.assertEqual(got['keys'], list(SAMPLE_UI.keys()))
+        self.assertEqual(got['widgets'][1], ['a dog in the same graph'])
+        self.assertEqual(got['widgets'][2], [99, 'randomize', 20, 7, 'euler', 'normal', 1])
+        self.assertEqual(got['widgets'][0], ['model.safetensors'])
 
 
 if __name__ == '__main__':
