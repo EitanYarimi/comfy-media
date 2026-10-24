@@ -830,6 +830,73 @@
             text-align: center;
         }
 
+        #videoInfoPanel {
+            display: none;
+            position: fixed;
+            left: 50%;
+            bottom: 16px;
+            transform: translateX(-50%);
+            width: min(760px, calc(100vw - 24px));
+            max-height: min(72vh, 680px);
+            overflow: auto;
+            background: #141414;
+            border: 1px solid #333;
+            border-radius: 16px;
+            padding: 14px 16px 16px;
+            z-index: 1200;
+            color: #ddd;
+            font-size: 0.8rem;
+            line-height: 1.45;
+            box-shadow: 0 16px 48px rgba(0,0,0,0.55);
+        }
+        #videoInfoPanel .info-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        #videoInfoPanel .info-head strong {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        #videoInfoPanel .info-close {
+            flex: 0 0 auto;
+            width: 32px;
+            height: 32px;
+            border: 1px solid #333;
+            border-radius: 50%;
+            background: #1a1a1a;
+            color: #ccc;
+            cursor: pointer;
+        }
+        #videoInfoPanel .info-meta {
+            color: #888;
+            font-size: 0.72rem;
+            margin: 6px 0 4px;
+        }
+        #videoInfoPanel .info-meta a { color: #e60023; }
+        #videoInfoPanel .info-prompt { margin-top: 12px; }
+        #videoInfoPanel .info-prompt h3 {
+            font-size: 0.75rem;
+            font-weight: 650;
+            color: #fff;
+            margin-bottom: 6px;
+        }
+        #videoInfoPanel .info-prompt pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+            background: #0c0c0c;
+            border-radius: 10px;
+            padding: 10px 12px;
+            color: #e8e8e8;
+            font-family: inherit;
+            font-size: 0.78rem;
+            margin: 0;
+        }
+        #videoInfoPanel .info-empty { color: #888; margin-top: 10px; }
+
         .modal-overlay.slideshow-mode .modal-title { color: #ccc; }
 
         #slideshowCounter {
@@ -1104,12 +1171,14 @@
                 bottom: env(safe-area-inset-bottom, 0px);
             }
             #videoInfoPanel {
-                bottom: calc(96px + env(safe-area-inset-bottom, 0px)) !important;
+                top: calc(72px + env(safe-area-inset-top, 0px)) !important;
+                bottom: calc(12px + env(safe-area-inset-bottom, 0px)) !important;
                 left: 12px !important;
                 right: 12px !important;
                 transform: none !important;
                 max-width: none !important;
                 width: auto !important;
+                max-height: none !important;
             }
         }
 
@@ -1273,7 +1342,7 @@
     <button type="button" class="viewer-remix" onclick="openRemixFromModal()">Remix</button>
 </div>
 
-<div id="videoInfoPanel" style="display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1a1a1a;border:1px solid #333;border-radius:16px;padding:14px 20px;font-size:0.75rem;color:#ccc;z-index:1100;max-width:90vw;line-height:1.8;box-shadow:0 12px 40px rgba(0,0,0,0.5)"></div>
+<div id="videoInfoPanel"></div>
 
 <script>
 let allVideos = [];
@@ -1362,7 +1431,7 @@ function getVideoByVid(vid) {
     return allVideos.find(v => v.name === name);
 }
 const THUMB_URL_VERSION = '4'; // bump when thumb pipeline changes (busts browser cache)
-const APP_BUILD = '2026-10-24-fav';
+const APP_BUILD = '2026-10-24-info';
 const FAVORITES_KEY = 'comfyVideoFavorites';
 const favoritesMode = new URLSearchParams(location.search).get('favorites') === '1';
 const DISABLE_THUMBS = new URLSearchParams(location.search).has('nothumbs');
@@ -2464,11 +2533,7 @@ function playVideoFromBtn(event, vid) {
 function showVideoInfoFor(event, vid) {
     event.stopPropagation();
     const video = getVideoByVid(vid);
-    if (!video) return;
-    const panel = document.getElementById('videoInfoPanel');
-    panel.innerHTML = `<strong>Name:</strong> ${escapeHtml(video.name)} &nbsp;&nbsp; <strong>Size:</strong> ${formatSize(video.size)} &nbsp;&nbsp; <strong>Duration:</strong> ${video.duration ? formatDuration(video.duration) : '?'} &nbsp;&nbsp; <strong>Modified:</strong> ${video.date.toLocaleString()}`;
-    panel.style.display = 'block';
-    setTimeout(() => { panel.style.display = 'none'; }, 5000);
+    if (video) toggleVideoInfoFor(video);
 }
 
 // ========== MODAL & SLIDESHOW ==========
@@ -3008,6 +3073,10 @@ function openModal(video, keepZoom = false) {
     updateFullscreenBtn();
     updateFitScreenBtn();
     updateFavoriteChrome(video.path);
+    const infoPanel = document.getElementById('videoInfoPanel');
+    if (infoPanel && infoPanel.style.display === 'block' && infoPanel.dataset.path !== video.path) {
+        hideVideoInfo();
+    }
 }
 
 function closeModal() {
@@ -3026,7 +3095,7 @@ function closeModal() {
     overlay.classList.remove('active', 'chrome-hidden');
     clearTimeout(chromeHideTimer);
     document.body.style.overflow = '';
-    document.getElementById('videoInfoPanel').style.display = 'none';
+    hideVideoInfo();
     if (wasSlideshow) updateSlideshowUI();
     processThumbLoadQueue();
 }
@@ -3041,14 +3110,101 @@ function openRemixFromModal() {
     window.location.href = 'run.html?path=' + encodeURIComponent(video.path);
 }
 
-function toggleVideoInfo() {
+const videoPromptCache = new Map();
+let videoInfoToken = 0;
+
+function hideVideoInfo() {
+    videoInfoToken++;
     const panel = document.getElementById('videoInfoPanel');
-    if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
-    const video = modalPlaylist[currentVideoIndex];
-    if (!video) return;
-    panel.innerHTML = `<strong>Name:</strong> ${escapeHtml(video.name)} &nbsp;&nbsp; <strong>Size:</strong> ${formatSize(video.size)} &nbsp;&nbsp; <strong>Modified:</strong> ${video.date.toLocaleString()} &nbsp;&nbsp; <a href="run.html?path=${encodeURIComponent(video.path)}" style="color:#e60023">Remix</a>`;
+    if (!panel) return;
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+    delete panel.dataset.path;
+}
+
+function infoPromptRank(field) {
+    const label = String(field.label || '');
+    const kind = /^image\b/i.test(label) ? 0 : (/^video\b/i.test(label) ? 1 : 2);
+    const role = field.role === 'positive' ? 0 : (field.role === 'negative' ? 1 : 2);
+    return [kind, role, label];
+}
+
+function promptFieldsFromWorkflow(data) {
+    return (data && data.fields || [])
+        .filter(field => field && field.section === 'prompts')
+        .slice()
+        .sort((a, b) => {
+            const ar = infoPromptRank(a);
+            const br = infoPromptRank(b);
+            for (let i = 0; i < ar.length; i++) {
+                if (ar[i] < br[i]) return -1;
+                if (ar[i] > br[i]) return 1;
+            }
+            return 0;
+        });
+}
+
+function renderVideoInfo(video, data, errorText) {
+    const panel = document.getElementById('videoInfoPanel');
+    const fields = data ? promptFieldsFromWorkflow(data) : [];
+    let prompts = '';
+    if (errorText) {
+        prompts = `<div class="info-empty">${escapeHtml(errorText)}</div>`;
+    } else if (!fields.length) {
+        prompts = '<div class="info-empty">No prompts found in this file.</div>';
+    } else {
+        prompts = fields.map(field => {
+            const text = field.value == null ? '' : String(field.value);
+            return `<section class="info-prompt"><h3>${escapeHtml(field.label || 'Prompt')}</h3><pre>${escapeHtml(text) || '(empty)'}</pre></section>`;
+        }).join('');
+    }
+    panel.dataset.path = video.path;
+    panel.innerHTML = `
+        <div class="info-head"><strong>${escapeHtml(video.name)}</strong><button type="button" class="info-close" onclick="hideVideoInfo()" aria-label="Close info">✕</button></div>
+        <div class="info-meta">${formatSize(video.size)} · ${video.date.toLocaleString()} · <a href="run.html?path=${encodeURIComponent(video.path)}">Remix</a></div>
+        ${prompts}`;
     panel.style.display = 'block';
-    setTimeout(() => { panel.style.display = 'none'; }, 5000);
+}
+
+async function showVideoInfo(video) {
+    if (!video) return;
+    const panel = document.getElementById('videoInfoPanel');
+    const token = ++videoInfoToken;
+    panel.dataset.path = video.path;
+    panel.style.display = 'block';
+    panel.innerHTML = `<div class="info-head"><strong>${escapeHtml(video.name)}</strong><button type="button" class="info-close" onclick="hideVideoInfo()" aria-label="Close info">✕</button></div><div class="info-meta">Loading prompts…</div>`;
+    const cached = videoPromptCache.get(video.path);
+    if (cached) {
+        if (token === videoInfoToken) renderVideoInfo(video, cached);
+        return;
+    }
+    try {
+        const resp = await fetch(`${serverBaseUrl}/api/workflow?path=${encodeURIComponent(video.path)}`);
+        if (token !== videoInfoToken) return;
+        if (!resp.ok) throw new Error('Could not read prompts');
+        const data = await resp.json();
+        if (token !== videoInfoToken) return;
+        videoPromptCache.set(video.path, data);
+        renderVideoInfo(video, data);
+    } catch (err) {
+        if (token !== videoInfoToken) return;
+        renderVideoInfo(video, null, err.message || 'Could not read prompts');
+    }
+}
+
+function toggleVideoInfoFor(video) {
+    const panel = document.getElementById('videoInfoPanel');
+    if (!video) return;
+    if (panel.style.display === 'block' && panel.dataset.path === video.path) {
+        hideVideoInfo();
+        return;
+    }
+    showVideoInfo(video);
+}
+
+function toggleVideoInfo() {
+    const video = modalPlaylist[currentVideoIndex];
+    toggleVideoInfoFor(video);
 }
 
 async function deleteFromModal() {
@@ -3453,11 +3609,7 @@ document.getElementById('videoGrid').addEventListener('click', (e) => {
             if (video) toggleFavorite(video);
         } else if (btn.dataset.action === 'info') {
             const video = getVideoByPath(pathEnc);
-            if (!video) return;
-            const panel = document.getElementById('videoInfoPanel');
-            panel.innerHTML = `<strong>Name:</strong> ${escapeHtml(video.name)} &nbsp;&nbsp; <strong>Size:</strong> ${formatSize(video.size)} &nbsp;&nbsp; <strong>Duration:</strong> ${video.duration ? formatDuration(video.duration) : '?'} &nbsp;&nbsp; <strong>Modified:</strong> ${video.date.toLocaleString()} &nbsp;&nbsp; <a href="run.html?path=${pathEnc}" style="color:#e60023">Remix</a>`;
-            panel.style.display = 'block';
-            setTimeout(() => { panel.style.display = 'none'; }, 5000);
+            if (video) toggleVideoInfoFor(video);
         } else if (btn.dataset.action === 'remix') {
             window.location.href = 'run.html?path=' + pathEnc;
         } else if (btn.dataset.action === 'delete') {

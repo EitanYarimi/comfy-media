@@ -30,6 +30,10 @@ class FavoritesMarkupTests(unittest.TestCase):
             src,
         )
         self.assertIn('if (favoritesMode) return favoriteItems();', src)
+        self.assertIn('/api/workflow?path=', src)
+        self.assertIn('class="info-prompt"', src)
+        self.assertIn('function promptFieldsFromWorkflow', src)
+        self.assertNotIn("setTimeout(() => { panel.style.display = 'none'; }, 5000)", src)
 
 
 class FavoritesBehaviorTests(unittest.TestCase):

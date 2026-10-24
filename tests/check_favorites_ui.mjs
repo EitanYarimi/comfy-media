@@ -173,6 +173,32 @@ try {
   const favBtn = document.getElementById('modalFavBtn');
   if (favBtn.textContent !== '♥') failures.push('player heart should be filled, got ' + favBtn.textContent);
   if (!favBtn.classList.contains('is-on')) failures.push('player heart missing is-on');
+
+  const ordered = promptFieldsFromWorkflow({
+    fields: [
+      { section: 'prompts', role: 'positive', label: 'Video positive', value: 'a moving cat' },
+      { section: 'widgets', role: 'seed', label: 'KSampler · seed', value: 7 },
+      { section: 'prompts', role: 'negative', label: 'Image negative', value: 'blur' },
+      { section: 'prompts', role: 'positive', label: 'Image positive', value: 'a still cat' },
+      { section: 'prompts', role: 'negative', label: 'Video negative', value: 'jitter' },
+    ],
+  }).map(field => field.label);
+  const want = ['Image positive', 'Image negative', 'Video positive', 'Video negative'];
+  if (ordered.join('|') !== want.join('|')) failures.push('prompt order ' + ordered.join('|'));
+  renderVideoInfo({
+    name: 'clip-b.mp4',
+    path: 'output/video/clip-b.mp4',
+    size: 4,
+    date: new Date(1700000000 * 1000),
+  }, {
+    fields: [
+      { section: 'prompts', role: 'positive', label: 'Image positive', value: 'a still cat' },
+      { section: 'prompts', role: 'positive', label: 'Video positive', value: 'a moving cat' },
+    ],
+  });
+  const infoHtml = document.getElementById('videoInfoPanel').innerHTML;
+  if (!infoHtml.includes('a still cat') || !infoHtml.includes('a moving cat')) failures.push('info panel missing prompts');
+  if (infoHtml.includes('KSampler')) failures.push('info panel included a non-prompt field');
   if (!document.getElementById('videoGrid').innerHTML.includes('♡') && !document.getElementById('videoGrid').innerHTML.includes('♥')) {
     failures.push('card heart missing');
   }
