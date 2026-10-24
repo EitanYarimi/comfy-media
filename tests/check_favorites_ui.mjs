@@ -1,6 +1,9 @@
 // Loads index.html's script with a tiny DOM and checks the favorites list.
 import { readFileSync } from 'node:fs';
 
+const recipeJs = readFileSync(new URL('../recipe.js', import.meta.url), 'utf8');
+eval(recipeJs);
+
 const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const match = html.match(/<script>([\s\S]*)<\/script>\s*<\/body>/);
 if (!match) {
@@ -110,12 +113,31 @@ global.IntersectionObserver = class {
 };
 global.HTMLMediaElement = { HAVE_CURRENT_DATA: 2, HAVE_ENOUGH_DATA: 4 };
 global.alert = () => {};
-global.fetch = async (url) => ({
-  ok: true,
-  json: async () => ({ total: 0, months: [], videos: [], vthumb: true, ffmpeg: false }),
-  text: async () => '',
-  url,
-});
+global.fetch = async (url) => {
+  const u = String(url);
+  if (u.includes('/api/workflow')) {
+    return {
+      ok: true,
+      json: async () => ({
+        name: 'clip-a.mp4',
+        prompt: {
+          '1': { class_type: 'CheckpointLoaderSimple', inputs: { ckpt_name: 'ltx-fav.safetensors' } },
+          '2': {
+            class_type: 'LoraLoader',
+            inputs: { lora_name: 'fav-lora.safetensors', strength_model: 1, strength_clip: 1, model: ['1', 0], clip: ['1', 1] },
+          },
+          '4': { class_type: 'CLIPTextEncode', inputs: { text: 'keep this prompt', clip: ['1', 1] } },
+        },
+      }),
+    };
+  }
+  return {
+    ok: true,
+    json: async () => ({ total: 0, months: [], videos: [], vthumb: true, ffmpeg: false }),
+    text: async () => '',
+    url,
+  };
+};
 
 const saved = {
   'output/video/clip-a.mp4': {
@@ -202,6 +224,17 @@ try {
   if (!document.getElementById('videoGrid').innerHTML.includes('♡') && !document.getElementById('videoGrid').innerHTML.includes('♥')) {
     failures.push('card heart missing');
   }
+  let recipe = null;
+  for (let i = 0; i < 20; i++) {
+    recipe = JSON.parse(localStorage.getItem('comfyVideoRecipe') || 'null');
+    if (recipe && recipe.checkpoint) break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  if (!recipe || recipe.checkpoint !== 'ltx-fav.safetensors') failures.push('recipe checkpoint ' + JSON.stringify(recipe));
+  if (!recipe || !recipe.loras || recipe.loras[0]?.name !== 'fav-lora.safetensors') failures.push('recipe lora ' + JSON.stringify(recipe && recipe.loras));
+  const card = document.getElementById('recipeCard').innerHTML;
+  if (!card.includes('ltx-fav.safetensors')) failures.push('recipe card missing checkpoint: ' + card.slice(0, 400));
+  if (!card.includes('fav-lora.safetensors')) failures.push('recipe card missing lora');
   return failures;
 })()
 `);

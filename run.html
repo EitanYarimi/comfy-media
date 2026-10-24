@@ -142,6 +142,15 @@
             font-size: 0.75rem; color: #999; white-space: nowrap; cursor: pointer;
         }
         .check-wrap input[type=checkbox] { width: auto; margin: 0; accent-color: #e60023; }
+        #recipeLockWrap[hidden] { display: none !important; }
+        .recipe-note {
+            font-size: 0.78rem; color: #d5e0d2; background: #141a14;
+            border: 1px solid #243024; border-radius: 10px;
+            padding: 8px 10px; margin: 0 0 14px; line-height: 1.45;
+            word-break: break-word;
+        }
+        .recipe-note[hidden] { display: none !important; }
+        input:disabled, textarea:disabled { opacity: 0.72; cursor: not-allowed; }
         .url-input { flex: 1; min-width: 220px; }
         .btn { padding: 8px 14px; border: 1px solid #2a2a2a; border-radius: 20px; background: #1a1a1a; color: #ccc; font-size: 0.8rem; cursor: pointer; }
         .btn:hover { background: #252525; }
@@ -224,12 +233,17 @@
             <input type="checkbox" id="randomSeed" checked>
             Random seed
         </label>
+        <label class="check-wrap" id="recipeLockWrap" for="useRecipe" hidden title="Use the checkpoint and LoRAs from your favorite recipe">
+            <input type="checkbox" id="useRecipe" checked>
+            Same checkpoint and LoRAs
+        </label>
         <button type="button" class="btn" id="testBtn" onclick="testColab()">Test</button>
         <button type="button" class="btn btn--primary" id="runBtn" onclick="runPrompt()">Run</button>
         <button type="button" class="btn btn--stop" id="stopBtn" onclick="stopRun()" title="Stop the in-progress run. Other tabs keep their stills and videos." disabled>Stop</button>
         <button type="button" class="btn" id="cancelBtn" onclick="cancelStandby()" title="Cancel the next remix waiting in standby" disabled>Cancel</button>
     </div>
     <div class="status" id="colabStatus"></div>
+    <div class="recipe-note" id="recipeNote" hidden></div>
 
     <div id="formRoot"></div>
     <div class="run-panel" id="runPanel">
@@ -252,6 +266,7 @@
     <button type="button" class="lb-close" id="lightboxClose" aria-label="Close preview">Close</button>
     <div class="lb-stage" id="mediaLightboxStage"></div>
 </div>
+<script src="recipe.js"></script>
 <script>
 const COLAB_KEY = 'comfyColabUrl';
 const PATH_KEY = 'comfyRemixPath';
@@ -521,7 +536,8 @@ function escapeAttr(s) { return escapeHtml(s).replace(/\n/g, ' '); }
 
 function fieldControl(field) {
     const val = field.value == null ? '' : field.value;
-    const common = `data-node="${escapeAttr(field.node_id)}" data-key="${escapeAttr(field.key)}"`;
+    const locked = field.locked ? ' disabled title="Locked by the favorite recipe"' : '';
+    const common = `data-node="${escapeAttr(field.node_id)}" data-key="${escapeAttr(field.key)}"${locked}`;
     if (field.type === 'checkbox') {
         return `<input type="checkbox" ${common} ${val ? 'checked' : ''}>`;
     }
@@ -561,6 +577,8 @@ function renderField(field, open) {
 
 function renderForm() {
     const root = document.getElementById('formRoot');
+    if (!Array.isArray(workflow.fields)) workflow.fields = [];
+    lockModelFields(workflow.fields);
     const prompts = workflow.fields.filter(f => f.section === 'prompts');
     const widgets = workflow.fields.filter(f => f.section === 'widgets');
     const advanced = workflow.fields.filter(f => f.section === 'advanced');
@@ -570,6 +588,7 @@ function renderForm() {
         html += `<div class="paste"><label for="pasteJson">API prompt JSON</label><textarea id="pasteJson" placeholder='{"12":{"class_type":"CLIPTextEncode","inputs":{"text":"..."}}}'></textarea>
             <div class="row" style="margin-top:8px"><button type="button" class="btn" onclick="applyPastedJson()">Use JSON</button></div></div>`;
         root.innerHTML = html;
+        renderRecipeNote();
         return;
     }
     if (prompts.length) {
@@ -588,6 +607,7 @@ function renderForm() {
         html += `</details>`;
     }
     root.innerHTML = html || '<div class="empty">No editable fields in this prompt.</div>';
+    renderRecipeNote();
 }
 
 function applyPastedJson() {
@@ -608,7 +628,8 @@ function applyPastedJson() {
     workflow.ui = (obj && obj.workflow && typeof obj.workflow === 'object') ? obj.workflow : null;
     workflow.ui_workflow = workflow.ui;
     workflow.promptBase = JSON.parse(JSON.stringify(prompt));
-    workflow.fields = buildFieldsClient(prompt);
+    lockWorkflowModels();
+    workflow.fields = buildFieldsClient(workflow.prompt);
     renderForm();
     persistRemix();
 }
@@ -868,11 +889,105 @@ function buildFieldsClient(prompt) {
     return fields;
 }
 
+function recipeLockOn() {
+    if (!window.ComfyRecipe) return false;
+    const recipe = ComfyRecipe.readRecipe(localStorage);
+    if (!recipe || !recipe.checkpoint || recipe.enabled === false) return false;
+    const box = document.getElementById('useRecipe');
+    if (box) return !!box.checked;
+    return true;
+}
+
+function syncRecipeCheckbox() {
+    const wrap = document.getElementById('recipeLockWrap');
+    const box = document.getElementById('useRecipe');
+    const recipe = window.ComfyRecipe && ComfyRecipe.readRecipe(localStorage);
+    const has = !!(recipe && recipe.checkpoint);
+    if (wrap) wrap.hidden = !has;
+    if (box && has) box.checked = recipe.enabled !== false;
+}
+
+function lockModelFields(fields) {
+    if (!recipeLockOn() || !fields) return;
+    fields.forEach(field => {
+        const key = field.key || '';
+        if (key === 'ckpt_name' || key === 'unet_name' || key === 'lora_name' || key === 'strength_model' || key === 'strength_clip') {
+            field.locked = true;
+        }
+        if (key === 'strength' && /lora/i.test(field.class_type || '')) field.locked = true;
+    });
+}
+
+function lockWorkflowModels() {
+    syncRecipeCheckbox();
+    workflow.recipeReport = null;
+    if (!workflow.prompt || !recipeLockOn()) return;
+    const recipe = ComfyRecipe.readRecipe(localStorage);
+    if (!recipe) return;
+    const applied = ComfyRecipe.applyRecipeToPrompt(workflow.prompt, recipe);
+    workflow.prompt = applied.prompt;
+    workflow.recipeReport = applied;
+}
+
+function renderRecipeNote() {
+    const el = document.getElementById('recipeNote');
+    if (!el) return;
+    const recipe = window.ComfyRecipe && ComfyRecipe.readRecipe(localStorage);
+    if (!recipe || !recipe.checkpoint || !recipeLockOn()) {
+        el.hidden = true;
+        el.textContent = '';
+        return;
+    }
+    const loras = (recipe.loras || []).map(lora => lora.name);
+    let text = 'Locked to ' + recipe.checkpoint;
+    text += loras.length ? ' and ' + loras.join(', ') : ' and no LoRA';
+    text += '.';
+    if (workflow.prompt) text += ' Prompts still come from this clip.';
+    const report = workflow.recipeReport;
+    if (report && report.checkpointApplied === false) {
+        text += ' This graph has no checkpoint loader, so the checkpoint was not changed.';
+    }
+    if (report && report.missingSlots) {
+        text += ' This graph has fewer LoRA slots, so ' + report.missingSlots + ' recipe LoRA' + (report.missingSlots === 1 ? '' : 's') + ' could not be added.';
+    }
+    if (report && report.disabled) {
+        text += ' ' + report.disabled + ' extra LoRA slot' + (report.disabled === 1 ? ' is' : 's are') + ' turned off.';
+    }
+    el.hidden = false;
+    el.textContent = text;
+}
+
+function onRecipeLockChange() {
+    const recipe = window.ComfyRecipe && ComfyRecipe.readRecipe(localStorage);
+    const box = document.getElementById('useRecipe');
+    if (recipe) {
+        recipe.enabled = !!(box && box.checked);
+        ComfyRecipe.writeRecipe(localStorage, recipe);
+    }
+    if (workflow.prompt) {
+        let next = readFieldsIntoPrompt();
+        if (box && box.checked && recipe && recipe.checkpoint) {
+            const applied = ComfyRecipe.applyRecipeToPrompt(next, recipe);
+            next = applied.prompt;
+            workflow.recipeReport = applied;
+        } else if (workflow.promptBase && window.ComfyRecipe) {
+            next = ComfyRecipe.restoreModels(next, workflow.promptBase);
+            workflow.recipeReport = null;
+        }
+        workflow.prompt = next;
+        workflow.fields = buildFieldsClient(workflow.prompt);
+    }
+    renderForm();
+    persistRemix();
+}
+
 function readFieldsIntoPrompt() {
     const next = JSON.parse(JSON.stringify(workflow.prompt));
     document.querySelectorAll('[data-node][data-key]').forEach(el => {
         const node = next[el.dataset.node];
         if (!node || !node.inputs) return;
+        const current = node.inputs[el.dataset.key];
+        if (current && typeof current === 'object') return;
         let val;
         if (el.type === 'checkbox') val = el.checked;
         else if (el.type === 'number') {
@@ -880,10 +995,15 @@ function readFieldsIntoPrompt() {
         } else val = el.value;
         node.inputs[el.dataset.key] = val;
     });
+    if (recipeLockOn() && window.ComfyRecipe) {
+        const recipe = ComfyRecipe.readRecipe(localStorage);
+        if (recipe && recipe.checkpoint) return ComfyRecipe.applyRecipeToPrompt(next, recipe).prompt;
+    }
     return next;
 }
 
 async function loadWorkflow() {
+    syncRecipeCheckbox();
     bindGalleryBack();
     let path = qs('path') || sessionStorage.getItem(PATH_KEY) || '';
     const label = document.getElementById('sourceLabel');
@@ -969,6 +1089,8 @@ async function loadWorkflow() {
     if (!path) {
         if (saved && saved.workflow && saved.workflow.prompt) {
             workflow = saved.workflow;
+            lockWorkflowModels();
+            if (workflow.prompt) workflow.fields = buildFieldsClient(workflow.prompt);
             overlaySavedRun();
             label.textContent = workflow.name || 'Restored session · paste JSON';
             renderForm();
@@ -991,6 +1113,8 @@ async function loadWorkflow() {
             sessionStorage.setItem(PATH_KEY, path);
             if (saved && saved.workflow && saved.workflow.prompt && saved.path === path) {
                 workflow = saved.workflow;
+                lockWorkflowModels();
+                if (workflow.prompt) workflow.fields = buildFieldsClient(workflow.prompt);
                 overlaySavedRun();
                 renderForm();
             } else {
@@ -1010,6 +1134,7 @@ async function loadWorkflow() {
             if (!workflow.promptBase && saved.workflow.promptBase) workflow.promptBase = saved.workflow.promptBase;
         }
         if (workflow.prompt) {
+            lockWorkflowModels();
             workflow.fields = buildFieldsClient(workflow.prompt);
         }
         label.textContent = (workflow.name || path) + (workflow.source ? ` · ${workflow.source}` : '');
@@ -2249,6 +2374,13 @@ async function startQueuedJob(job) {
     persistRemix();
     connectRunSocket(base);
     logLine(`starting ${job.name || 'remix'}` + (runTotal > 1 ? ` · ${runTotal} runs` : ''));
+    if (recipeLockOn()) {
+        const recipe = ComfyRecipe.readRecipe(localStorage);
+        if (recipe) {
+            const loras = (recipe.loras || []).map(lora => lora.name).join(', ');
+            logLine('recipe · ' + recipe.checkpoint + (loras ? ' · ' + loras : ' · no LoRA'));
+        }
+    }
     setStatus(el, runTotal > 1 ? `Run 1 of ${runTotal} · Queueing…` : 'Queueing…');
     try {
         for (let i = 1; i <= runTotal; i++) {
@@ -2275,6 +2407,7 @@ async function startQueuedJob(job) {
 document.getElementById('colabUrl').value = localStorage.getItem(COLAB_KEY) || '';
 document.getElementById('runCount').addEventListener('change', persistRemix);
 document.getElementById('randomSeed').addEventListener('change', persistRemix);
+document.getElementById('useRecipe').addEventListener('change', onRecipeLockChange);
 document.getElementById('runTabs').addEventListener('click', (e) => {
     const btn = e.target.closest('[data-tab]');
     if (!btn) return;
@@ -2296,6 +2429,7 @@ document.addEventListener('keydown', (e) => {
 });
 window.addEventListener('pagehide', persistRemix);
 window.addEventListener('visibilitychange', () => { if (document.hidden) persistRemix(); });
+syncRecipeCheckbox();
 loadWorkflow();
 </script>
 </body>

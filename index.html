@@ -223,6 +223,54 @@
             margin: 0 auto;
         }
 
+        .recipe-card {
+            max-width: 1800px;
+            margin: 0 auto;
+            padding: 0 16px 10px;
+        }
+        .recipe-card[hidden] { display: none !important; }
+        .recipe-card-inner {
+            border: 1px solid #2a2a2a;
+            background: #141414;
+            border-radius: 12px;
+            padding: 12px 14px;
+            color: #ccc;
+            font-size: 0.8rem;
+        }
+        .recipe-card h2 {
+            font-size: 0.72rem;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            color: #888;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+        .recipe-card .recipe-label {
+            color: #777;
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            margin-top: 8px;
+        }
+        .recipe-card .recipe-file {
+            color: #eee;
+            word-break: break-all;
+            font-size: 0.8rem;
+            line-height: 1.35;
+        }
+        .recipe-card .recipe-note,
+        .recipe-card .recipe-other {
+            color: #999;
+            margin-top: 8px;
+            line-height: 1.4;
+        }
+        .recipe-card .recipe-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+        }
+
         /* Pinterest masonry */
         .video-grid {
             padding: 8px 16px 48px;
@@ -1260,6 +1308,7 @@
     <button type="button" class="month-nav" id="monthNextBtn" onclick="shiftMonth(-1)" title="Older month" aria-label="Older month">›</button>
 </div>
 
+<div id="recipeCard" hidden></div>
 <div class="video-grid" id="videoGrid">
     <div class="empty-state">
         <div class="icon">📂</div>
@@ -1344,6 +1393,7 @@
 
 <div id="videoInfoPanel"></div>
 
+<script src="recipe.js"></script>
 <script>
 let allVideos = [];
 let filteredVideos = [];
@@ -1431,7 +1481,7 @@ function getVideoByVid(vid) {
     return allVideos.find(v => v.name === name);
 }
 const THUMB_URL_VERSION = '4'; // bump when thumb pipeline changes (busts browser cache)
-const APP_BUILD = '2026-10-24-info';
+const APP_BUILD = '2026-10-24-recipe';
 const FAVORITES_KEY = 'comfyVideoFavorites';
 const favoritesMode = new URLSearchParams(location.search).get('favorites') === '1';
 const DISABLE_THUMBS = new URLSearchParams(location.search).has('nothumbs');
@@ -1541,6 +1591,184 @@ function toggleFavoriteFromModal() {
     if (video) toggleFavorite(video);
 }
 
+let recipeBuildBusy = false;
+let recipeBuildStarted = false;
+let recipeBuildToken = 0;
+let recipeBuildError = '';
+
+function recipePathsMatch(recipe, favs) {
+    const saved = (recipe && recipe.paths ? recipe.paths : []).slice().sort();
+    const now = favs.map(video => video.path).sort();
+    if (!saved.length) return true;
+    if (saved.length !== now.length) return false;
+    return saved.every((path, index) => path === now[index]);
+}
+
+function recipeStrengthLabel(lora) {
+    const strength = typeof lora.strength === 'number' ? lora.strength : null;
+    const clip = typeof lora.clip === 'number' ? lora.clip : null;
+    if (strength != null && strength !== 1) {
+        if (clip != null && clip !== strength) return ' · ' + strength + ' · clip ' + clip;
+        return ' · ' + strength;
+    }
+    if (clip != null && clip !== 1) return ' · clip ' + clip;
+    return '';
+}
+
+function recipeAgreement(recipe) {
+    const votes = recipe.votes || 0;
+    const total = recipe.scanned || votes;
+    if (votes && votes === total) {
+        return total === 1 ? 'This favorite uses this.' : `All ${total} favorites use this.`;
+    }
+    let text = votes === 1
+        ? `1 of ${total} favorites uses this.`
+        : `${votes} of ${total} favorites use this.`;
+    if (recipe.missing) {
+        text += ` ${recipe.missing} had no checkpoint in the file.`;
+    }
+    return text;
+}
+
+function recipeOthersHtml(recipe) {
+    return (recipe.others || []).slice(0, 4).map(group => {
+        const count = group.count || 0;
+        const files = [group.checkpoint].concat(group.loras || []).filter(Boolean).map(escapeHtml).join(' + ');
+        const lead = count === 1 ? '1 favorite used' : `${count} favorites used`;
+        return `<p class="recipe-other">${lead} a different setup: ${files}</p>`;
+    }).join('');
+}
+
+function recipeCardHtml(recipe, favs) {
+    const actions = `<div class="recipe-actions"><button type="button" class="btn btn--primary" id="recipeBuildBtn" onclick="buildRecipeFromFavorites()">Build from favorites</button></div>`;
+    if (window.ComfyRecipe && ComfyRecipe.isCleared(localStorage)) {
+        return `<div class="recipe-card-inner"><h2>Recipe</h2><p class="recipe-note">Recipe cleared. Remix uses each clip's own checkpoint and LoRAs.</p>${actions}</div>`;
+    }
+    if (!recipe || !recipe.checkpoint) {
+        const err = recipeBuildError ? `<p class="recipe-other">${escapeHtml(recipeBuildError)}</p>` : '';
+        return `<div class="recipe-card-inner"><h2>Recipe</h2><p class="recipe-note">Build a recipe from your favorites so new videos use the same checkpoint and LoRAs.</p>${err}${actions}</div>`;
+    }
+    const loraHtml = recipe.loras && recipe.loras.length
+        ? recipe.loras.map(lora => `<div class="recipe-file" data-recipe-lora="${escapeHtml(lora.name)}">${escapeHtml(lora.name)}${escapeHtml(recipeStrengthLabel(lora))}</div>`).join('')
+        : '<div class="recipe-file">No LoRA</div>';
+    const stale = recipePathsMatch(recipe, favs)
+        ? ''
+        : '<p class="recipe-other">Favorites changed since this recipe. Rebuild so it matches the current list.</p>';
+    return `<div class="recipe-card-inner"><h2>Recipe</h2>
+        <div class="recipe-label">Checkpoint</div>
+        <div class="recipe-file" data-recipe-checkpoint="${escapeHtml(recipe.checkpoint)}">${escapeHtml(recipe.checkpoint)}</div>
+        <div class="recipe-label">LoRAs</div>
+        ${loraHtml}
+        <p class="recipe-note">${escapeHtml(recipeAgreement(recipe))} Remix keeps this checkpoint and these LoRAs. Prompts still come from the clip you remix.</p>
+        ${recipeOthersHtml(recipe)}
+        ${stale}
+        <div class="recipe-actions">
+            <button type="button" class="btn btn--primary" id="recipeBuildBtn" onclick="buildRecipeFromFavorites()">Rebuild from favorites</button>
+            <button type="button" class="btn" onclick="clearFavoriteRecipe()">Clear</button>
+        </div>
+    </div>`;
+}
+
+function renderRecipeCard() {
+    const card = document.getElementById('recipeCard');
+    if (!card) return;
+    if (!favoritesMode || recipeBuildBusy) {
+        if (!favoritesMode) card.hidden = true;
+        return;
+    }
+    const favs = listFavorites();
+    const recipe = window.ComfyRecipe ? ComfyRecipe.readRecipe(localStorage) : null;
+    const cleared = window.ComfyRecipe && ComfyRecipe.isCleared(localStorage);
+    if (!favs.length && !(recipe && recipe.checkpoint) && !cleared) {
+        card.hidden = true;
+        card.innerHTML = '';
+        return;
+    }
+    card.hidden = false;
+    card.innerHTML = recipeCardHtml(recipe, favs);
+}
+
+function setRecipeProgress(done, total) {
+    const card = document.getElementById('recipeCard');
+    if (!card) return;
+    card.hidden = false;
+    card.innerHTML = `<div class="recipe-card-inner"><h2>Recipe</h2><p class="recipe-note">Reading favorite ${done} of ${total}…</p></div>`;
+}
+
+async function buildRecipeFromFavorites() {
+    if (!window.ComfyRecipe || recipeBuildBusy) return;
+    const favs = listFavorites();
+    recipeBuildBusy = true;
+    recipeBuildStarted = true;
+    recipeBuildError = '';
+    const token = ++recipeBuildToken;
+    if (!favs.length) {
+        recipeBuildError = 'Favorite a few videos first.';
+        recipeBuildBusy = false;
+        renderRecipeCard();
+        return;
+    }
+    const stacks = [];
+    let missing = 0;
+    try {
+        for (let i = 0; i < favs.length; i++) {
+            if (token !== recipeBuildToken) return;
+            setRecipeProgress(i + 1, favs.length);
+            const fav = favs[i];
+            try {
+                const resp = await fetch(serverBaseUrl + '/api/workflow?path=' + encodeURIComponent(fav.path));
+                const data = resp.ok ? await resp.json() : null;
+                const models = ComfyRecipe.modelsFromPrompt(data && data.prompt);
+                if (!models.checkpoint) missing += 1;
+                else stacks.push(models);
+            } catch (_) {
+                missing += 1;
+            }
+        }
+        if (token !== recipeBuildToken) return;
+        const built = ComfyRecipe.buildRecipe(stacks, {
+            scanned: favs.length,
+            missing,
+            paths: favs.map(video => video.path),
+        });
+        recipeBuildBusy = false;
+        if (!built) {
+            recipeBuildError = 'None of these favorites had a checkpoint in the file.';
+            renderRecipeCard();
+            return;
+        }
+        ComfyRecipe.writeRecipe(localStorage, built);
+        renderRecipeCard();
+    } catch (err) {
+        if (token !== recipeBuildToken) return;
+        recipeBuildBusy = false;
+        recipeBuildError = String(err && err.message || err || 'Could not build a recipe');
+        renderRecipeCard();
+    }
+}
+
+function maybeBuildRecipe() {
+    if (!favoritesMode || !window.ComfyRecipe || recipeBuildStarted || recipeBuildBusy) return;
+    if (ComfyRecipe.isCleared(localStorage)) return;
+    const existing = ComfyRecipe.readRecipe(localStorage);
+    if (existing && existing.checkpoint) return;
+    if (!listFavorites().length) return;
+    buildRecipeFromFavorites();
+}
+
+function clearFavoriteRecipe() {
+    if (!window.ComfyRecipe) return;
+    ComfyRecipe.clearRecipe(localStorage);
+    recipeBuildStarted = true;
+    recipeBuildError = '';
+    renderRecipeCard();
+}
+
+function finishFavoritesChrome() {
+    renderRecipeCard();
+    maybeBuildRecipe();
+}
+
 function renderFavorites() {
     clearThumbLoadQueue();
     const items = favoriteItems();
@@ -1558,6 +1786,7 @@ function renderFavorites() {
             : '<div class="empty-state"><div class="icon">♡</div><h2>No favorites yet</h2><p style="color:#666;margin-top:8px;font-size:0.85rem">Open a video and tap the heart.</p></div>';
         if (stats) stats.textContent = q ? 'No matches' : '0 favorites';
         window._visibleVideos = [];
+        finishFavoritesChrome();
         return;
     }
     if (stats) stats.textContent = `${items.length} favorite${items.length === 1 ? '' : 's'}`;
@@ -1568,6 +1797,7 @@ function renderFavorites() {
     grid.innerHTML = html;
     observeThumbs(grid);
     requestThumbWarm(items, true);
+    finishFavoritesChrome();
 }
 
 async function loadFavoritesView() {

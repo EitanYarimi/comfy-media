@@ -381,12 +381,23 @@ APP_HTML_PAGES = {
     '/run.html': 'run.html',
 }
 
+# Gallery files that must come from the app folder. The server chdirs into
+# MEDIA_ROOT, so a plain static path would miss recipe.js on a Drive library.
+APP_ASSETS = {
+    '/': ('index.html', 'text/html; charset=utf-8'),
+    '/index.html': ('index.html', 'text/html; charset=utf-8'),
+    '/photos.html': ('photos.html', 'text/html; charset=utf-8'),
+    '/run.html': ('run.html', 'text/html; charset=utf-8'),
+    '/recipe.js': ('recipe.js', 'text/javascript; charset=utf-8'),
+}
+
 
 def serve_app_html(handler, bare_path):
-    """Serve gallery HTML from the app folder, not MEDIA_ROOT cwd."""
-    name = APP_HTML_PAGES.get(bare_path)
-    if not name:
+    """Serve gallery HTML and recipe.js from the app folder, not MEDIA_ROOT cwd."""
+    spec = APP_ASSETS.get(bare_path)
+    if not spec:
         return False
+    name, content_type = spec
     html_path = Path(__file__).resolve().parent / name
     if not html_path.is_file():
         send_http_bytes(
@@ -395,7 +406,7 @@ def serve_app_html(handler, bare_path):
         return True
     data = html_path.read_bytes()
     handler.send_response(200)
-    handler.send_header('Content-Type', 'text/html; charset=utf-8')
+    handler.send_header('Content-Type', content_type)
     handler.send_header('Content-Length', str(len(data)))
     handler.send_header('Cache-Control', 'no-store, no-cache, must-revalidate')
     handler.send_header('X-Comfy-App-Dir', str(html_path.parent))

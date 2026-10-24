@@ -34,9 +34,62 @@ class FavoritesMarkupTests(unittest.TestCase):
         self.assertIn('class="info-prompt"', src)
         self.assertIn('function promptFieldsFromWorkflow', src)
         self.assertNotIn("setTimeout(() => { panel.style.display = 'none'; }, 5000)", src)
+        self.assertIn('id="recipeCard"', src)
+        self.assertIn('src="recipe.js"', src)
+        self.assertIn('function buildRecipeFromFavorites()', src)
+        run = (ROOT / 'run.html').read_text()
+        self.assertIn('src="recipe.js"', run)
+        self.assertIn('id="useRecipe"', run)
+        self.assertIn('Same checkpoint and LoRAs', run)
+        self.assertIn('function lockWorkflowModels()', run)
+
+    def test_recipe_script_is_served_from_the_app_folder(self):
+        import video_server
+
+        class Body:
+            def __init__(self):
+                self.buf = bytearray()
+
+            def write(self, data):
+                self.buf.extend(data)
+
+        class Handler:
+            def __init__(self):
+                self.command = 'GET'
+                self.status = None
+                self.headers = {}
+                self.wfile = Body()
+
+            def send_response(self, code):
+                self.status = code
+
+            def send_header(self, key, value):
+                self.headers[key] = value
+
+            def end_headers(self):
+                pass
+
+        handler = Handler()
+        self.assertTrue(video_server.serve_app_html(handler, '/recipe.js'))
+        self.assertEqual(handler.status, 200)
+        self.assertIn('javascript', handler.headers['Content-Type'])
+        self.assertIn(b'buildRecipe', bytes(handler.wfile.buf))
+        self.assertNotIn('/recipe.js', video_server.APP_HTML_PAGES)
 
 
 class FavoritesBehaviorTests(unittest.TestCase):
+    def test_recipe_picks_the_shared_checkpoint_and_loras(self):
+        script = ROOT / 'tests' / 'check_recipe.mjs'
+        proc = subprocess.run(
+            ['node', str(script)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            self.fail(proc.stdout + '\n' + proc.stderr)
+
     def test_heart_round_trip_in_the_page_script(self):
         script = ROOT / 'tests' / 'check_favorites_ui.mjs'
         proc = subprocess.run(
