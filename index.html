@@ -190,6 +190,31 @@
         .nav a:hover { background: #1a1a1a; color: #ccc; }
         .nav a.active { background: #e60023; color: #fff; }
 
+        .fav-badge {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            z-index: 4;
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.55);
+            color: #fff;
+            font-size: 1rem;
+            line-height: 1;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        .fav-badge.is-on { color: #ff4d6a; background: rgba(0, 0, 0, 0.72); }
+        .modal-close--fav.is-on { color: #ff4d6a; border-color: #ff4d6a; }
+        body.favorites-mode #slideshowRandomWideBtn,
+        body.favorites-mode #slideshowRandomTallBtn { display: none; }
+
         .stats {
             color: #555;
             font-size: 0.75rem;
@@ -953,6 +978,13 @@
                 font-size: 0.55rem;
                 border-radius: 4px;
             }
+            .fav-badge {
+                top: 4px;
+                left: 4px;
+                width: 28px;
+                height: 28px;
+                font-size: 0.9rem;
+            }
 
             .stats {
                 padding: 6px 12px;
@@ -1119,7 +1151,8 @@
 
 <header>
     <nav class="nav">
-        <a href="index.html" class="active">Videos</a>
+        <a href="index.html" class="active" id="videosNav">Videos</a>
+        <a href="index.html?favorites=1" id="favoritesNav">Favorites</a>
         <a href="photos.html">Photos</a>
         <a href="run.html" id="remixNav">Remix</a>
     </nav>
@@ -1221,6 +1254,7 @@
         </div>
         <div class="modal-chrome-cluster">
             <button type="button" class="modal-close modal-close--pause" id="slideshowPauseBtn" style="display:none" onclick="toggleSlideshowPause()" title="Pause slideshow" aria-label="Pause slideshow">⏸</button>
+            <button type="button" class="modal-close modal-close--fav" id="modalFavBtn" onclick="toggleFavoriteFromModal()" title="Add to favorites" aria-label="Favorite" aria-pressed="false">♡</button>
             <button type="button" class="modal-close modal-close--remix" onclick="openRemixFromModal()" title="Remix" aria-label="Remix"><span class="remix-icon" aria-hidden="true">↻</span><span class="remix-word">Remix</span></button>
             <button type="button" class="modal-close modal-close--info" onclick="toggleVideoInfo()" title="Info" aria-label="Video info">ⓘ</button>
             <button type="button" class="modal-close modal-close--delete" onclick="deleteFromModal()" title="Delete" aria-label="Delete">🗑</button>
@@ -1328,7 +1362,9 @@ function getVideoByVid(vid) {
     return allVideos.find(v => v.name === name);
 }
 const THUMB_URL_VERSION = '4'; // bump when thumb pipeline changes (busts browser cache)
-const APP_BUILD = '2026-10-01-r1';
+const APP_BUILD = '2026-10-24-fav';
+const FAVORITES_KEY = 'comfyVideoFavorites';
+const favoritesMode = new URLSearchParams(location.search).get('favorites') === '1';
 const DISABLE_THUMBS = new URLSearchParams(location.search).has('nothumbs');
 function getVThumbSrc(video) {
     const base = serverBaseUrl + '/vthumb/' + encodeURIComponent(video.path).replace(/%2F/g, '/');
@@ -1345,6 +1381,140 @@ function mapVideo(v) {
         date: new Date(v.modified * 1000),
         url: serverBaseUrl + '/' + encodeURIComponent(v.path).replace(/%2F/g, '/'),
     };
+}
+
+function readFavoriteStore() {
+    try {
+        const raw = JSON.parse(localStorage.getItem(FAVORITES_KEY) || '{}');
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+        return raw;
+    } catch (_) {
+        return {};
+    }
+}
+
+function writeFavoriteStore(store) {
+    localStorage.setItem(FAVORITES_KEY, JSON.stringify(store));
+}
+
+function isFavorite(path) {
+    return !!(path && readFavoriteStore()[path]);
+}
+
+function videoToFavorite(video) {
+    const modified = video.date instanceof Date
+        ? Math.floor(video.date.getTime() / 1000)
+        : (video.modified || 0);
+    return {
+        name: video.name,
+        path: video.path,
+        size: video.size || 0,
+        modified,
+        duration: video.duration || null,
+    };
+}
+
+function listFavorites() {
+    return Object.values(readFavoriteStore())
+        .filter(rec => rec && rec.path && rec.name)
+        .map(mapVideo);
+}
+
+function favoriteItems() {
+    const q = (document.getElementById('searchInput')?.value || '').toLowerCase().trim();
+    let items = listFavorites();
+    if (q) items = items.filter(v => (v.name || '').toLowerCase().includes(q));
+    return sortVideoList(items);
+}
+
+function toggleFavorite(video) {
+    if (!video || !video.path) return;
+    const store = readFavoriteStore();
+    if (store[video.path]) delete store[video.path];
+    else store[video.path] = videoToFavorite(video);
+    writeFavoriteStore(store);
+    if (favoritesMode) renderFavorites();
+    updateFavoriteChrome(video.path);
+}
+
+function forgetFavorite(path) {
+    if (!path || !isFavorite(path)) return;
+    const store = readFavoriteStore();
+    delete store[path];
+    writeFavoriteStore(store);
+    updateFavoriteChrome(path);
+}
+
+function updateFavoriteChrome(path) {
+    const current = modalPlaylist[currentVideoIndex];
+    const btn = document.getElementById('modalFavBtn');
+    if (btn && current && (!path || current.path === path)) {
+        const on = isFavorite(current.path);
+        btn.textContent = on ? '♥' : '♡';
+        btn.classList.toggle('is-on', on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        btn.title = on ? 'Remove from favorites' : 'Add to favorites';
+    }
+    document.querySelectorAll('.fav-badge[data-path]').forEach(el => {
+        let decoded = el.dataset.path || '';
+        try { decoded = decodeURIComponent(decoded); } catch (_) {}
+        if (path && decoded !== path) return;
+        const on = isFavorite(decoded);
+        el.textContent = on ? '♥' : '♡';
+        el.classList.toggle('is-on', on);
+        el.setAttribute('aria-pressed', on ? 'true' : 'false');
+        el.title = on ? 'Remove from favorites' : 'Add to favorites';
+    });
+}
+
+function toggleFavoriteFromModal() {
+    const video = modalPlaylist[currentVideoIndex];
+    if (video) toggleFavorite(video);
+}
+
+function renderFavorites() {
+    clearThumbLoadQueue();
+    const items = favoriteItems();
+    registerVideos(items);
+    feedCache = { items, total: items.length, loading: false, hasMore: false };
+    searchMode = false;
+    const q = (document.getElementById('searchInput')?.value || '').trim();
+    const grid = document.getElementById('videoGrid');
+    const stats = document.getElementById('stats');
+    setMonthPickerVisible(false);
+    document.getElementById('dayStepper')?.classList.remove('visible');
+    if (!items.length) {
+        grid.innerHTML = q
+            ? '<div class="empty-state"><div class="icon">🔍</div><h2>No matching favorites</h2></div>'
+            : '<div class="empty-state"><div class="icon">♡</div><h2>No favorites yet</h2><p style="color:#666;margin-top:8px;font-size:0.85rem">Open a video and tap the heart.</p></div>';
+        if (stats) stats.textContent = q ? 'No matches' : '0 favorites';
+        window._visibleVideos = [];
+        return;
+    }
+    if (stats) stats.textContent = `${items.length} favorite${items.length === 1 ? '' : 's'}`;
+    let html = '<div class="month-section" data-month="favorites"><div class="month-grid">';
+    items.forEach(video => { html += buildVideoCardHtml(video); });
+    html += '</div></div>';
+    window._visibleVideos = items.slice();
+    grid.innerHTML = html;
+    observeThumbs(grid);
+    requestThumbWarm(items, true);
+}
+
+async function loadFavoritesView() {
+    if (slideshowActive) stopSlideshow(true);
+    const { q } = readFilterUrl();
+    const input = document.getElementById('searchInput');
+    if (input && q && !input.value) input.value = q;
+    renderFavorites();
+    try {
+        const resp = await fetch(serverBaseUrl + '/api/videos?summary=1');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const before = serverHasVthumb;
+        applyVthumbFlag(data);
+        if (serverHasVthumb !== before) renderFavorites();
+    } catch (_) {}
 }
 
 function registerVideos(videos) {
@@ -1404,6 +1574,10 @@ function resolveHasMore(data, mergedLen) {
 
 let indexPollTimer = null;
 async function loadFromServer(isPoll = false, forceRefresh = false) {
+    if (favoritesMode) {
+        await loadFavoritesView();
+        return;
+    }
     if (slideshowActive && !isPoll) stopSlideshow(true);
     if (!isPoll) {
         showLoading();
@@ -1564,12 +1738,19 @@ async function loadSearchVideos(append = false) {
 }
 
 function sortAndRender() {
+    if (favoritesMode) { renderFavorites(); return; }
     if (feedCache.items?.length) feedCache.items = sortVideoList(feedCache.items);
     if (searchResults.items?.length) searchResults.items = sortVideoList(searchResults.items);
     renderGrid();
 }
 
 async function filterVideos() {
+    if (favoritesMode) {
+        if (slideshowActive) stopSlideshow(true);
+        syncFilterUrl();
+        renderFavorites();
+        return;
+    }
     const q = document.getElementById('searchInput').value.toLowerCase().trim();
     if (slideshowActive) stopSlideshow(true);
     if (q) {
@@ -1594,6 +1775,20 @@ async function filterVideos() {
 function syncFilterUrl(replace = true) {
     const params = new URLSearchParams(location.search);
     const q = document.getElementById('searchInput')?.value.trim() || '';
+    if (favoritesMode) {
+        params.set('favorites', '1');
+        params.delete('month');
+        params.delete('day');
+        if (q) params.set('q', q);
+        else params.delete('q');
+        const qs = params.toString();
+        const url = location.pathname + (qs ? `?${qs}` : '') + location.hash;
+        if (url === location.pathname + location.search + location.hash) return;
+        if (replace) history.replaceState(null, '', url);
+        else history.pushState(null, '', url);
+        return;
+    }
+    params.delete('favorites');
     ['month', 'day', 'q'].forEach(k => params.delete(k));
     if (searchMode && q) params.set('q', q);
     else {
@@ -1777,7 +1972,7 @@ function updateMonthNavButtons() {
 }
 
 async function shiftMonth(dir) {
-    if (searchMode || !monthSummaries.length) return;
+    if (favoritesMode || searchMode || !monthSummaries.length) return;
     const keys = monthSummaries.map(s => s.month);
     let idx = activeMonth ? keys.indexOf(activeMonth) : -1;
     if (idx < 0) {
@@ -1839,7 +2034,7 @@ function scrollActiveMonthIntoView() {
 }
 
 async function selectMonth(key) {
-    if (searchMode) return;
+    if (favoritesMode || searchMode) return;
     const next = (!key || key === 'all') ? null : key;
     if (next === activeMonth) return;
     activeMonth = next;
@@ -2022,6 +2217,7 @@ function showScrollLoader(show) {
 }
 
 function renderGrid() {
+    if (favoritesMode) { renderFavorites(); return; }
     clearThumbLoadQueue();
     const grid = document.getElementById('videoGrid');
     const stats = document.getElementById('stats');
@@ -2178,8 +2374,10 @@ function buildVideoCardHtml(video) {
     const thumbHtml = useServerVthumb()
         ? `<img class="thumb-lazy video-thumb" data-src="${getVThumbSrc(video)}" alt="${escapeHtml(video.name)}" onload="onThumbLoaded(this)" onerror="fallbackThumbnail(this)">`
         : '';
+    const favOn = isFavorite(video.path);
     return `<div class="video-card" data-vid="${vid}" data-path="${pathEnc}">
         <div class="thumbnail-container" data-path="${pathEnc}">
+            <button type="button" class="fav-badge${favOn ? ' is-on' : ''}" data-action="favorite" data-path="${pathEnc}" title="${favOn ? 'Remove from favorites' : 'Add to favorites'}" aria-label="Favorite" aria-pressed="${favOn ? 'true' : 'false'}">${favOn ? '♥' : '♡'}</button>
             ${thumbHtml}
             <div class="thumbnail-placeholder">▶</div>
             <span class="duration-badge">${durationText}</span>
@@ -2251,6 +2449,7 @@ async function deleteVideo(event, vid) {
         const resp = await fetch(video.url, { method: 'DELETE' });
         if (!resp.ok) { alert('Failed to delete'); return; }
     } catch (err) { alert('Delete failed: ' + err.message); return; }
+    forgetFavorite(video.path);
     allVideos.splice(allVideos.indexOf(video), 1);
     const fi = filteredVideos.indexOf(video); if (fi > -1) filteredVideos.splice(fi, 1);
     const card = document.querySelector(`.video-card[data-vid="${vid}"]`); if (card) card.remove();
@@ -2307,6 +2506,7 @@ async function fetchPagedVideos(baseParams, maxItems = 2000) {
 }
 
 async function fetchSlideshowVideos() {
+    if (favoritesMode) return favoriteItems();
     // Random/Slideshow must use the full selected scope:
     // search query, selected month, or All — not just the first loaded page.
     if (searchMode) {
@@ -2593,7 +2793,7 @@ async function startSlideshow(random = false, orientation = null) {
     // All + Random: each next clip is a server pick — no full-library download.
     // Orientation picks always go to the server too: only it knows the pixel
     // size of each clip, so the browser cannot filter the playlist itself.
-    const useServerRandom = random && (slideshowOrientation || (!searchMode && !activeMonth));
+    const useServerRandom = !favoritesMode && random && (slideshowOrientation || (!searchMode && !activeMonth));
     if (useServerRandom) {
         if (stats) stats.textContent = slideshowOrientation
             ? `Picking a random ${slideshowOrientation} video…`
@@ -2807,6 +3007,7 @@ function openModal(video, keepZoom = false) {
     if (slideshowActive) updateSlideshowUI();
     updateFullscreenBtn();
     updateFitScreenBtn();
+    updateFavoriteChrome(video.path);
 }
 
 function closeModal() {
@@ -2859,11 +3060,15 @@ async function deleteFromModal() {
         const resp = await fetch(video.url, { method: 'DELETE' });
         if (!resp.ok) { alert('Failed to delete'); return; }
     } catch (err) { alert('Delete failed: ' + err.message); return; }
+    forgetFavorite(video.path);
     allVideos.splice(allVideos.indexOf(video), 1);
     const fi = filteredVideos.indexOf(video); if (fi > -1) filteredVideos.splice(fi, 1);
     modalPlaylist.splice(currentVideoIndex, 1);
-    const card = document.querySelector(`.video-card[data-vid="${vid}"]`); if (card) card.remove();
-    document.getElementById('stats').textContent = `${filteredVideos.length} of ${allVideos.length} videos`;
+    if (favoritesMode) renderFavorites();
+    else {
+        const card = document.querySelector(`.video-card[data-vid="${vid}"]`); if (card) card.remove();
+        document.getElementById('stats').textContent = `${filteredVideos.length} of ${allVideos.length} videos`;
+    }
     if (modalPlaylist.length === 0) { closeModal(); return; }
     if (currentVideoIndex >= modalPlaylist.length) currentVideoIndex = 0;
     openModal(modalPlaylist[currentVideoIndex], true);
@@ -3238,12 +3443,15 @@ document.addEventListener('keydown', (e) => {
 document.getElementById('modalOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeModal(); });
 
 document.getElementById('videoGrid').addEventListener('click', (e) => {
-    const btn = e.target.closest('.action-btn[data-action]');
+    const btn = e.target.closest('[data-action]');
     if (btn) {
         e.stopPropagation();
         const pathEnc = btn.dataset.path;
         if (!pathEnc) return;
-        if (btn.dataset.action === 'info') {
+        if (btn.dataset.action === 'favorite') {
+            const video = getVideoByPath(pathEnc);
+            if (video) toggleFavorite(video);
+        } else if (btn.dataset.action === 'info') {
             const video = getVideoByPath(pathEnc);
             if (!video) return;
             const panel = document.getElementById('videoInfoPanel');
@@ -3269,6 +3477,7 @@ async function deleteVideoByPath(event, pathEnc) {
         const resp = await fetch(video.url, { method: 'DELETE' });
         if (!resp.ok) { alert('Failed to delete'); return; }
     } catch (err) { alert('Delete failed: ' + err.message); return; }
+    forgetFavorite(video.path);
     allVideos.splice(allVideos.indexOf(video), 1);
     const fi = filteredVideos.indexOf(video); if (fi > -1) filteredVideos.splice(fi, 1);
     feedCache.items = (feedCache.items || []).filter(item => item.path !== video.path);
@@ -3289,6 +3498,14 @@ async function deleteVideoByPath(event, pathEnc) {
 window.addEventListener('scroll', onScrollPage, { passive: true });
 window.addEventListener('resize', onResizeFill);
 window.addEventListener('popstate', async () => {
+    if (favoritesMode) {
+        if (slideshowActive) stopSlideshow(true);
+        const input = document.getElementById('searchInput');
+        const { q } = readFilterUrl();
+        if (input) input.value = q || '';
+        renderFavorites();
+        return;
+    }
     if (slideshowActive) stopSlideshow(true);
     feedCache = { items: [], total: 0, loading: false, hasMore: true };
     searchResults = { items: [], total: 0, loading: false, hasMore: false };
@@ -3300,6 +3517,11 @@ window.addEventListener('popstate', async () => {
     if (searchMode) await loadSearchVideos(false);
     else await loadFeed(false);
 });
+if (favoritesMode) {
+    document.body.classList.add('favorites-mode');
+    document.getElementById('videosNav')?.classList.remove('active');
+    document.getElementById('favoritesNav')?.classList.add('active');
+}
 syncHeaderOffset();
 loadFromServer();
 
