@@ -49,7 +49,7 @@ class FavoritesMarkupTests(unittest.TestCase):
         self.assertIn('id="pageControls"', src)
         self.assertIn('id="zoomResetBtn"', src)
         self.assertIn('webkitEnterFullscreen', src)
-        self.assertIn("const APP_BUILD = '2026-10-25-mobile'", src)
+        self.assertIn("const APP_BUILD = '2026-10-25-colab-link'", src)
         self.assertIn('header.menu-open .controls { display: flex; }', src)
         self.assertNotIn('.modal-close--fs,\n            .modal-close--fit {\n                display: none;', src)
         photos = (ROOT / 'photos.html').read_text()

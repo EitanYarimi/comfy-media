@@ -481,9 +481,19 @@ class FrontendRemixTests(unittest.TestCase):
         self.assertIn('APP_HTML_PAGES', src)
         self.assertIn('def serve_app_html', src)
         self.assertIn('def extract_drive_workflow', src)
+        self.assertIn('/api/colab-link', src)
+        self.assertIn('def find_colab_link', src)
         self.assertNotIn('Remix reads local files', src)
         docker = (Path(ROOT) / 'Dockerfile').read_text()
         self.assertIn('run.html', docker)
+
+    def test_remix_can_fetch_the_colab_link(self):
+        src = (Path(ROOT) / 'run.html').read_text()
+        self.assertIn('id="getColabLinkBtn"', src)
+        self.assertIn('id="colabHint"', src)
+        self.assertIn('function loadColabLink', src)
+        self.assertIn('/api/colab-link', src)
+        self.assertIn('1oTjdma3a0bQYHoihdRBZnv8pazQdVrak', src)
 
 
 def _png_chunk(ctype, data):
@@ -834,6 +844,42 @@ process.stdout.write(JSON.stringify({ order, pos, widgets, links: out.links, key
         self.assertEqual(got['widgets'][1], ['a dog in the same graph'])
         self.assertEqual(got['widgets'][2], [99, 'randomize', 20, 7, 'euler', 'normal', 1])
         self.assertEqual(got['widgets'][0], ['model.safetensors'])
+
+
+class ColabLinkTests(unittest.TestCase):
+    def test_parse_json_link(self):
+        now = video_server._colab_link_epoch('2026-10-25T12:10:00Z')
+        link = video_server.parse_colab_link(
+            '{"url":"https://abc.trycloudflare.com/","written":"2026-10-25T12:00:00Z"}',
+            now=now,
+        )
+        self.assertEqual(link['url'], 'https://abc.trycloudflare.com')
+        self.assertEqual(link['ageSeconds'], 600)
+        self.assertFalse(link['stale'])
+
+    def test_parse_plain_url_and_stale(self):
+        link = video_server.parse_colab_link(
+            'https://abc.trycloudflare.com\n',
+            modified=video_server._colab_link_epoch('2026-10-25T00:00:00Z'),
+            now=video_server._colab_link_epoch('2026-10-25T12:00:00Z'),
+        )
+        self.assertEqual(link['url'], 'https://abc.trycloudflare.com')
+        self.assertTrue(link['stale'])
+
+    def test_local_file_is_found(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'ComfyUI').mkdir()
+            (root / 'ComfyUI' / 'comfy-api-url.txt').write_text(
+                '{"url":"https://x.trycloudflare.com"}\n',
+                encoding='utf-8',
+            )
+            link = video_server.find_colab_link(root=root, storage='local')
+            self.assertEqual(link['url'], 'https://x.trycloudflare.com')
+
+    def test_missing_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(video_server.find_colab_link(root=tmp, storage='local'))
 
 
 if __name__ == '__main__':

@@ -153,6 +153,7 @@
         input:disabled, textarea:disabled { opacity: 0.72; cursor: not-allowed; }
         .url-input { flex: 1; min-width: 220px; }
         .btn { padding: 8px 14px; border: 1px solid #2a2a2a; border-radius: 20px; background: #1a1a1a; color: #ccc; font-size: 0.8rem; cursor: pointer; }
+        a.btn { text-decoration: none; display: inline-flex; align-items: center; }
         .btn:hover { background: #252525; }
         .btn--primary { background: #e60023; border-color: #e60023; color: #fff; }
         .btn--primary:hover { background: #cc001f; }
@@ -242,11 +243,14 @@
 </header>
 <div class="wrap">
     <h1>Remix on Colab ComfyUI</h1>
-    <p class="muted" id="sourceLabel">Load a clip from the gallery, edit prompts, then queue on the Colab URL you paste.</p>
+    <p class="muted" id="sourceLabel">Load a clip from the gallery, edit prompts, then queue it on Colab.</p>
+    <p class="muted" id="colabHint">Open Colab, run the public tunnel cell, then tap Get link. Remix fills in the ComfyUI address.</p>
 
     <label for="colabUrl">Colab ComfyUI URL</label>
     <div class="row">
         <input class="url-input" type="url" id="colabUrl" placeholder="https://….trycloudflare.com" autocomplete="off">
+        <button type="button" class="btn" id="getColabLinkBtn" onclick="loadColabLink()">Get link</button>
+        <a class="btn" id="openColabBtn" href="https://colab.research.google.com/drive/1oTjdma3a0bQYHoihdRBZnv8pazQdVrak" target="_blank" rel="noopener">Open Colab</a>
         <div class="runs-wrap">
             <label for="runCount">Runs</label>
             <input type="number" id="runCount" min="1" max="20" value="1" inputmode="numeric" title="Queue this prompt multiple times">
@@ -1649,6 +1653,29 @@ function formatSystemStats(data) {
     return parts.join(' · ') || 'ok';
 }
 
+async function loadColabLink(quiet) {
+    const el = document.getElementById('colabStatus');
+    if (!quiet) setStatus(el, 'Looking for the Colab link…');
+    try {
+        const resp = await fetch('/api/colab-link', { cache: 'no-store' });
+        if (resp.status === 404) {
+            if (!quiet) setStatus(el, 'No link yet. Open Colab, run it through the public tunnel cell, then tap Get link again.', 'err');
+            return;
+        }
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        if (!data.url) throw new Error('empty link');
+        document.getElementById('colabUrl').value = data.url;
+        colabUrl();
+        const msg = data.stale
+            ? 'Got a link from an older Colab run. Tap Test. If it fails, run the notebook again.'
+            : 'Got the Colab link.';
+        setStatus(el, msg, data.stale ? '' : 'ok');
+    } catch (err) {
+        if (!quiet) setStatus(el, 'Could not read the Colab link. ' + err.message, 'err');
+    }
+}
+
 async function testColab() {
     const base = colabUrl();
     const el = document.getElementById('colabStatus');
@@ -2427,6 +2454,7 @@ async function startQueuedJob(job) {
 }
 
 document.getElementById('colabUrl').value = localStorage.getItem(COLAB_KEY) || '';
+if (!document.getElementById('colabUrl').value.trim()) loadColabLink(true);
 document.getElementById('runCount').addEventListener('change', persistRemix);
 document.getElementById('randomSeed').addEventListener('change', persistRemix);
 document.getElementById('useRecipe').addEventListener('change', onRecipeLockChange);

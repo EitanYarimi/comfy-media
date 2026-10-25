@@ -3077,6 +3077,94 @@ def _prompt_from_drive_sidecar(drive, item):
     return _split_prompt_and_ui(raw.decode('utf-8', errors='replace'))
 
 
+COLAB_LINK_CANDIDATES = ('comfy-api-url.txt', 'ComfyUI/comfy-api-url.txt')
+COLAB_LINK_STALE_SECONDS = 6 * 3600
+_COLAB_URL_RE = re.compile(r'https?://[^\s\'"<>]+', re.I)
+
+
+def _colab_link_epoch(value):
+    if value is None or value == '':
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        dt = datetime.fromisoformat(str(value).strip().replace('Z', '+00:00'))
+        return dt.timestamp()
+    except (TypeError, ValueError, OSError):
+        return 0.0
+
+
+def parse_colab_link(text, modified=None, now=None):
+    """Pull a ComfyUI URL out of the file the Colab tunnel cell writes."""
+    raw = (text or '').strip().lstrip('\ufeff')
+    if not raw:
+        return None
+    url = ''
+    written = ''
+    if raw.startswith('{'):
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, dict):
+            url = str(data.get('url') or '').strip()
+            written = str(data.get('written') or '').strip()
+    if not url:
+        match = _COLAB_URL_RE.search(raw)
+        if match:
+            url = match.group(0).rstrip('.,)')
+    if not url.startswith(('http://', 'https://')):
+        return None
+    when = _colab_link_epoch(written) or _colab_link_epoch(modified)
+    now_ts = time.time() if now is None else float(now)
+    age = int(now_ts - when) if when else None
+    if age is not None and age < 0:
+        age = 0
+    return {
+        'url': url.rstrip('/'),
+        'written': written,
+        'ageSeconds': age,
+        'stale': bool(age is not None and age > COLAB_LINK_STALE_SECONDS),
+    }
+
+
+def choose_colab_link(found):
+    dated = [item for item in found if isinstance(item.get('ageSeconds'), int)]
+    pool = dated or list(found)
+    if not pool:
+        return None
+    return min(pool, key=lambda item: item.get('ageSeconds') if isinstance(item.get('ageSeconds'), int) else 10 ** 12)
+
+
+def find_colab_link(root=None, storage=None, drive=None, now=None):
+    """Read comfy-api-url.txt from My Drive (local) or the shared Drive folder."""
+    mode = STORAGE_MODE if storage is None else storage
+    found = []
+
+    def take(text, modified):
+        parsed = parse_colab_link(text, modified=modified, now=now)
+        if parsed:
+            found.append(parsed)
+
+    if mode == 'drive':
+        reader = drive if drive is not None else get_drive_storage()
+        for rel in COLAB_LINK_CANDIDATES:
+            got = reader.read_text_file(rel)
+            if got and got.get('text'):
+                take(got['text'], got.get('modified'))
+    else:
+        base = Path(root) if root is not None else Path('.')
+        for rel in COLAB_LINK_CANDIDATES:
+            path = base / rel
+            try:
+                if not path.is_file():
+                    continue
+                take(path.read_text(encoding='utf-8', errors='replace'), path.stat().st_mtime)
+            except OSError:
+                continue
+    return choose_colab_link(found)
+
+
 def extract_drive_workflow(drive, rel):
     """Load a ComfyUI prompt for a file in the shared Drive folder.
 
@@ -4077,6 +4165,18 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     'error': result.get('error') or 'No photos available',
                 }
             respond_json(self, result)
+            return
+
+        if path.split('?', 1)[0] == '/api/colab-link':
+            try:
+                link = find_colab_link()
+            except Exception as exc:
+                send_http_json(self, 502, {'url': None, 'error': f'Could not read the Colab link: {exc}'})
+                return
+            if not link:
+                send_http_json(self, 404, {'url': None, 'error': 'No Colab link yet'})
+                return
+            respond_json(self, link)
             return
 
         if path.split('?', 1)[0] == '/api/workflow':

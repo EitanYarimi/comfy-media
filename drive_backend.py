@@ -1151,6 +1151,45 @@ class DriveStorage:
                 except Exception:
                     pass
 
+    def read_text_file(self, rel_path, max_bytes=16384):
+        """Read a small text file under the shared Drive folder. Returns {text, modified} or None."""
+        rel_path = (rel_path or '').replace('\\', '/').strip('/')
+        if not rel_path or '..' in rel_path.split('/'):
+            return None
+        folder, _, name = rel_path.rpartition('/')
+        if not name:
+            return None
+        try:
+            self._ensure_root()
+            folder_id = self._folder_id_for_path(folder)
+        except Exception:
+            return None
+        if not folder_id:
+            return None
+        safe = name.replace("'", "\\'")
+        try:
+            resp = self._drive_list(
+                q=(
+                    f"'{_clean_id(folder_id)}' in parents and trashed=false and "
+                    f"name='{safe}' and mimeType!='{FOLDER_MIME}'"
+                ),
+                fields='files(id, name, modifiedTime, size)',
+                page_size=5,
+            )
+        except Exception:
+            return None
+        files = resp.get('files') or []
+        if not files:
+            return None
+        item = files[0]
+        data = self.download_bytes(item['id'], max_bytes=max_bytes)
+        if not data:
+            return None
+        return {
+            'text': data.decode('utf-8', errors='replace'),
+            'modified': _parse_drive_time(item.get('modifiedTime')),
+        }
+
     def find_named_files(self, file_id, names):
         """Return {filename: {id, name, size, mime}} for names in the same folder."""
         wanted = []

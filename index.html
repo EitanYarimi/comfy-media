@@ -1564,7 +1564,7 @@ function getVideoByVid(vid) {
     return allVideos.find(v => v.name === name);
 }
 const THUMB_URL_VERSION = '4'; // bump when thumb pipeline changes (busts browser cache)
-const APP_BUILD = '2026-10-25-mobile';
+const APP_BUILD = '2026-10-25-colab-link';
 const FAVORITES_KEY = 'comfyVideoFavorites';
 const favoritesMode = new URLSearchParams(location.search).get('favorites') === '1';
 const DISABLE_THUMBS = new URLSearchParams(location.search).has('nothumbs');
