@@ -179,6 +179,7 @@
         .day-step:hover { background: #252525; color: #fff; }
         .day-step:disabled { opacity: 0.35; cursor: default; }
 
+        .header-bar { display: flex; align-items: center; gap: 6px; min-width: 0; }
         .nav { display: flex; gap: 4px; }
         .nav a {
             padding: 6px 12px;
@@ -186,9 +187,11 @@
             font-size: 0.8rem;
             color: #888;
             text-decoration: none;
+            touch-action: manipulation;
         }
         .nav a:hover { background: #1a1a1a; color: #ccc; }
         .nav a.active { background: #e60023; color: #fff; }
+        .menu-toggle { display: none; }
 
         .fav-badge {
             position: absolute;
@@ -615,7 +618,7 @@
             -webkit-tap-highlight-color: transparent;
         }
 
-        .modal-overlay.active { display: flex; }
+        .modal-overlay.active { display: flex; touch-action: none; }
 
         .modal-chrome {
             position: absolute;
@@ -736,7 +739,29 @@
         .modal-overlay:-webkit-full-screen {
             padding: 0;
             background: #000;
+            z-index: 10000;
+            width: 100%;
+            height: 100dvh;
         }
+        .fs-word { display: none; }
+        .zoom-reset {
+            position: absolute;
+            z-index: 180;
+            left: 50%;
+            bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+            transform: translateX(-50%);
+            min-height: 44px;
+            padding: 0 16px;
+            border-radius: 22px;
+            border: 1px solid rgba(255, 255, 255, 0.28);
+            background: rgba(0, 0, 0, 0.78);
+            color: #fff;
+            font-size: 0.85rem;
+            font-weight: 700;
+            cursor: pointer;
+            touch-action: manipulation;
+        }
+        .zoom-reset[hidden] { display: none !important; }
 
         .modal-overlay.is-fs #modalVideoWrap,
         .modal-overlay:fullscreen #modalVideoWrap,
@@ -825,15 +850,12 @@
             touch-action: manipulation;
         }
 
-        .modal-overlay.chrome-hidden .modal-chrome,
+        .modal-overlay.chrome-hidden .modal-chrome .modal-close:not(.modal-close--fs),
+        .modal-overlay.chrome-hidden .modal-chrome #slideshowCounter,
         .modal-overlay.chrome-hidden .modal-nav,
         .modal-overlay.chrome-hidden .modal-title {
             opacity: 0;
             pointer-events: none;
-        }
-
-        .modal-overlay.chrome-hidden .modal-chrome {
-            transform: translateY(-8px);
         }
 
         .modal-video-wrap {
@@ -845,7 +867,7 @@
             max-height: 70vh;
             transform-origin: center center;
             will-change: transform;
-            touch-action: manipulation;
+            touch-action: none;
         }
 
         .modal-video-wrap #modalVideo {
@@ -1004,29 +1026,78 @@
         @media (max-width: 1600px) { .month-grid { grid-template-columns: repeat(7, 1fr); } }
         @media (max-width: 1200px) { .month-grid { grid-template-columns: repeat(6, 1fr); gap: 8px; } }
 
-        @media (max-width: 768px) {
+        @media (max-width: 1200px) {
             header {
+                flex-direction: column;
+                align-items: stretch;
+                flex-wrap: nowrap;
+                gap: 0;
+                padding: 0;
+            }
+            .header-bar {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                width: 100%;
+                padding: 8px 10px;
+            }
+            .logo { display: none; }
+            .nav { flex: 1; min-width: 0; }
+            .nav a {
+                flex: 1;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 44px;
+                padding: 8px 2px;
+                font-size: 0.72rem;
+                text-align: center;
+            }
+            .menu-toggle {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                flex: 0 0 auto;
+                min-height: 44px;
+                min-width: 64px;
                 padding: 8px 12px;
-                gap: 8px;
+            }
+            .menu-toggle[aria-expanded="true"] {
+                background: #e60023;
+                border-color: #e60023;
+                color: #fff;
             }
             .controls {
+                display: none;
                 width: 100%;
                 justify-content: stretch;
+                padding: 0 10px 10px;
             }
+            header.menu-open .controls { display: flex; }
             .controls .btn {
-                flex: 1;
+                flex: 1 1 calc(50% - 8px);
                 text-align: center;
-                padding: 10px 6px;
-                font-size: 0.75rem;
+                min-height: 44px;
+                padding: 10px 8px;
+                font-size: 0.8rem;
             }
             #searchInput {
                 width: 100%;
+                flex: 1 1 100%;
                 order: -1;
+                min-height: 44px;
             }
             #sortOrder, #dayFilter {
                 flex: 1;
+                min-width: 0;
+                min-height: 44px;
+                font-size: 16px;
             }
-            .day-stepper { flex: 1; min-width: 0; }
+            .day-stepper { flex: 1 1 100%; min-width: 0; }
+            .day-step { width: 44px; height: 44px; }
+        }
+
+        @media (max-width: 768px) {
             .video-grid {
                 padding: 6px 10px 40px;
             }
@@ -1133,10 +1204,18 @@
                 border-color: rgba(255, 255, 255, 0.18);
                 color: #f2f2f2;
             }
-            .modal-close--fs,
-            .modal-close--fit {
-                display: none;
+            .modal-close--fit { display: none; }
+            .modal-close--fs {
+                width: auto;
+                min-width: 44px;
+                height: 44px;
+                padding: 0 12px;
+                border-radius: 22px;
+                gap: 4px;
+                font-size: 0.78rem;
+                font-weight: 700;
             }
+            .modal-close--fs .fs-word { display: inline; }
             .modal-close--remix {
                 width: auto;
                 min-width: 44px;
@@ -1240,8 +1319,8 @@
             .month-grid { grid-template-columns: repeat(3, 1fr); gap: 6px; }
             .video-card { border-radius: 8px; }
             .controls .btn {
-                padding: 10px 4px;
-                font-size: 0.7rem;
+                padding: 10px 8px;
+                font-size: 0.8rem;
             }
             .action-btn {
                 width: 22px;
@@ -1267,14 +1346,17 @@
 <body>
 
 <header>
-    <nav class="nav">
-        <a href="index.html" class="active" id="videosNav">Videos</a>
-        <a href="index.html?favorites=1" id="favoritesNav">Favorites</a>
-        <a href="photos.html">Photos</a>
-        <a href="run.html" id="remixNav">Remix</a>
-    </nav>
+    <div class="header-bar">
+        <nav class="nav">
+            <a href="index.html" class="active" id="videosNav">Videos</a>
+            <a href="index.html?favorites=1" id="favoritesNav">Favorites</a>
+            <a href="photos.html">Photos</a>
+            <a href="run.html" id="remixNav">Remix</a>
+        </nav>
+        <button type="button" class="btn menu-toggle" id="menuToggle" aria-expanded="false" aria-controls="pageControls">Menu</button>
+    </div>
     <div class="logo"></div>
-    <div class="controls">
+    <div class="controls" id="pageControls">
         <input type="text" id="searchInput" placeholder="Search...">
         <div class="day-stepper" id="dayStepper">
             <button type="button" class="day-step" id="dayPrevBtn" onclick="shiftDay(-1)" title="Older day" aria-label="Older day">‹</button>
@@ -1366,7 +1448,7 @@
     <div class="slideshow-progress" id="slideshowProgress"></div>
     <div class="modal-chrome modal-chrome--top">
         <div class="modal-chrome-cluster">
-            <button type="button" class="modal-close modal-close--fs" id="modalFsBtn" onclick="toggleModalFullscreen()" title="Fullscreen" aria-label="Fullscreen">⛶</button>
+            <button type="button" class="modal-close modal-close--fs" id="modalFsBtn" onclick="toggleModalFullscreen()" title="Fullscreen" aria-label="Fullscreen" aria-pressed="false"><span class="fs-icon" aria-hidden="true">⛶</span><span class="fs-word">Full</span></button>
             <button type="button" class="modal-close modal-close--fit" id="modalFitBtn" onclick="toggleFitScreen()" title="Fit to screen" aria-label="Fit to screen">⊞</button>
             <span id="slideshowCounter"></span>
         </div>
@@ -1388,6 +1470,7 @@
         <video id="prefetchVideo" muted playsinline webkit-playsinline preload="auto" style="display:none" aria-hidden="true"></video>
     </div>
     <div class="modal-title" id="modalTitle"></div>
+    <button type="button" class="zoom-reset" id="zoomResetBtn" hidden onclick="resetVideoZoom()">Reset zoom</button>
     <button type="button" class="viewer-remix" onclick="openRemixFromModal()">Remix</button>
 </div>
 
@@ -1481,7 +1564,7 @@ function getVideoByVid(vid) {
     return allVideos.find(v => v.name === name);
 }
 const THUMB_URL_VERSION = '4'; // bump when thumb pipeline changes (busts browser cache)
-const APP_BUILD = '2026-10-24-recipe';
+const APP_BUILD = '2026-10-25-mobile';
 const FAVORITES_KEY = 'comfyVideoFavorites';
 const favoritesMode = new URLSearchParams(location.search).get('favorites') === '1';
 const DISABLE_THUMBS = new URLSearchParams(location.search).has('nothumbs');
@@ -2240,6 +2323,47 @@ function syncHeaderOffset() {
     const header = document.querySelector('header');
     if (!header) return;
     document.documentElement.style.setProperty('--header-h', `${header.offsetHeight}px`);
+}
+
+function setMobileMenu(open) {
+    const header = document.querySelector('header');
+    const btn = document.getElementById('menuToggle');
+    if (!header || !btn) return;
+    header.classList.toggle('menu-open', !!open);
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    btn.textContent = open ? 'Close' : 'Menu';
+    syncHeaderOffset();
+}
+
+function bindMobileMenu() {
+    const btn = document.getElementById('menuToggle');
+    const controls = document.getElementById('pageControls');
+    if (!btn || !controls || btn.dataset.bound === '1') return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => {
+        setMobileMenu(!document.querySelector('header').classList.contains('menu-open'));
+    });
+    controls.addEventListener('click', (e) => {
+        if (e.target.closest('button')) setMobileMenu(false);
+    });
+    controls.addEventListener('change', (e) => {
+        if (e.target.closest('select')) setMobileMenu(false);
+    });
+    document.addEventListener('click', (e) => {
+        const header = document.querySelector('header');
+        if (!header || !header.classList.contains('menu-open')) return;
+        if (e.target.closest('#menuToggle') || e.target.closest('#pageControls')) return;
+        setMobileMenu(false);
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        const modal = document.getElementById('modalOverlay');
+        if (modal && modal.classList.contains('active')) return;
+        if (document.querySelector('header').classList.contains('menu-open')) setMobileMenu(false);
+    });
+    window.addEventListener('resize', () => {
+        if (!window.matchMedia('(max-width: 1200px)').matches) setMobileMenu(false);
+    });
 }
 
 const onResizeFill = debounce(() => {
@@ -3217,10 +3341,10 @@ function openModal(video, keepZoom = false) {
     const token = ++modalLoadToken;
     modalRetryCount = 0;
     thumbLoadPaused = true;
-    if (!keepZoom) {
-        resetVideoZoom();
-        setFitScreen(false);
-    }
+    resetVideoZoom();
+    setWatchingZoom(true);
+    setMobileMenu(false);
+    if (!keepZoom) setFitScreen(false);
     const player = document.getElementById('modalVideo');
     const prefetchEl = document.getElementById('prefetchVideo');
     player.removeAttribute('poster');
@@ -3325,6 +3449,7 @@ function closeModal() {
     overlay.classList.remove('active', 'chrome-hidden');
     clearTimeout(chromeHideTimer);
     document.body.style.overflow = '';
+    setWatchingZoom(false);
     hideVideoInfo();
     if (wasSlideshow) updateSlideshowUI();
     processThumbLoadQueue();
@@ -3573,38 +3698,101 @@ function updateFitScreenBtn() {
     btn.title = videoFitScreen ? 'Original size' : 'Fit to screen';
 }
 
+const VIEWPORT_FREE = 'width=device-width, initial-scale=1.0, viewport-fit=cover';
+const VIEWPORT_LOCK = 'width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover';
+
+function setWatchingZoom(locked) {
+    const meta = document.querySelector('meta[name="viewport"]');
+    if (meta) meta.setAttribute('content', locked ? VIEWPORT_LOCK : VIEWPORT_FREE);
+}
+
 function isModalFullscreen() {
     const el = document.getElementById('modalOverlay');
+    const video = document.getElementById('modalVideo');
     return document.fullscreenElement === el
         || document.webkitFullscreenElement === el
-        || el.classList.contains('is-fs');
+        || el.classList.contains('is-fs')
+        || !!(video && video.webkitDisplayingFullscreen);
 }
 
 function updateFullscreenBtn() {
     const btn = document.getElementById('modalFsBtn');
     if (!btn) return;
-    btn.textContent = isModalFullscreen() ? '⤡' : '⛶';
-    btn.title = isModalFullscreen() ? 'Exit fullscreen' : 'Fullscreen';
+    const on = isModalFullscreen();
+    const icon = btn.querySelector('.fs-icon');
+    const word = btn.querySelector('.fs-word');
+    if (icon) icon.textContent = on ? '⤡' : '⛶';
+    if (word) word.textContent = on ? 'Exit' : 'Full';
+    const label = on ? 'Exit fullscreen' : 'Fullscreen';
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+}
+
+function pinCssFullscreen() {
+    const el = document.getElementById('modalOverlay');
+    if (!el) return;
+    const vv = window.visualViewport;
+    if (!el.classList.contains('is-fs') || !vv) {
+        el.style.left = '';
+        el.style.top = '';
+        el.style.width = '';
+        el.style.height = '';
+        return;
+    }
+    el.style.left = vv.offsetLeft + 'px';
+    el.style.top = vv.offsetTop + 'px';
+    el.style.width = vv.width + 'px';
+    el.style.height = vv.height + 'px';
+}
+
+function fallbackModalFullscreen(el, video) {
+    if (video && typeof video.webkitEnterFullscreen === 'function') {
+        try {
+            video.webkitEnterFullscreen();
+            updateFullscreenBtn();
+            return;
+        } catch (_) {}
+    }
+    el.classList.add('is-fs');
+    pinCssFullscreen();
+    updateFullscreenBtn();
 }
 
 function enterModalFullscreen() {
+    resetVideoZoom();
+    setWatchingZoom(true);
     const el = document.getElementById('modalOverlay');
+    const video = document.getElementById('modalVideo');
     const req = el.requestFullscreen || el.webkitRequestFullscreen;
-    if (req) {
-        Promise.resolve(req.call(el)).catch(() => el.classList.add('is-fs'));
-    } else {
-        el.classList.add('is-fs');
+    const apiOk = document.fullscreenEnabled || document.webkitFullscreenEnabled;
+    if (req && apiOk) {
+        let result;
+        try { result = req.call(el); } catch (_) { result = null; }
+        if (result && typeof result.then === 'function') {
+            result.then(() => updateFullscreenBtn()).catch(() => fallbackModalFullscreen(el, video));
+        }
+        updateFullscreenBtn();
+        return;
     }
-    updateFullscreenBtn();
+    fallbackModalFullscreen(el, video);
 }
 
 function exitModalFullscreen() {
     const el = document.getElementById('modalOverlay');
+    const video = document.getElementById('modalVideo');
+    if (video && video.webkitDisplayingFullscreen && typeof video.webkitExitFullscreen === 'function') {
+        try { video.webkitExitFullscreen(); } catch (_) {}
+    }
     if (document.fullscreenElement === el || document.webkitFullscreenElement === el) {
         const exit = document.exitFullscreen || document.webkitExitFullscreen;
-        if (exit) exit.call(document);
+        if (exit) {
+            const result = exit.call(document);
+            if (result && result.catch) result.catch(() => {});
+        }
     }
     el.classList.remove('is-fs');
+    pinCssFullscreen();
     updateFullscreenBtn();
 }
 
@@ -3621,6 +3809,17 @@ document.getElementById('modalOverlay').addEventListener('webkitfullscreenchange
     updateFullscreenBtn();
     updateVideoFitLayout();
 });
+if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', pinCssFullscreen);
+    window.visualViewport.addEventListener('scroll', pinCssFullscreen);
+}
+(function bindNativeVideoFullscreen() {
+    const video = document.getElementById('modalVideo');
+    if (!video || video.dataset.nativeFsBound === '1') return;
+    video.dataset.nativeFsBound = '1';
+    video.addEventListener('webkitbeginfullscreen', updateFullscreenBtn);
+    video.addEventListener('webkitendfullscreen', updateFullscreenBtn);
+})();
 window.addEventListener('resize', debouncedFitLayout);
 bindVideoFitLayout(document.getElementById('modalVideo'));
 
@@ -3706,7 +3905,12 @@ function toggleModalChrome() {
             return;
         }
         if (!moved && dt < 280 && isMobilePreview()) {
-            if (e.target.closest('button, video')) return;
+            if (e.target.closest('button')) return;
+            const videoEl = e.target.closest('video');
+            if (videoEl) {
+                const rect = videoEl.getBoundingClientRect();
+                if (t.clientY > rect.bottom - 48) return;
+            }
             toggleModalChrome();
         }
     });
@@ -3720,10 +3924,17 @@ function touchDistance(a, b) {
     return Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
 }
 
+function syncZoomResetBtn() {
+    const btn = document.getElementById('zoomResetBtn');
+    if (btn) btn.hidden = !(videoZoom.scale > 1);
+}
+
 function resetVideoZoom() {
     videoZoom = { scale: 1, x: 0, y: 0 };
+    pinchState = null;
     const wrap = document.getElementById('modalVideoWrap');
     if (wrap) wrap.style.transform = '';
+    syncZoomResetBtn();
 }
 
 function applyVideoZoom() {
@@ -3733,9 +3944,16 @@ function applyVideoZoom() {
         wrap.style.transform = '';
         videoZoom.x = 0;
         videoZoom.y = 0;
+        syncZoomResetBtn();
         return;
     }
     wrap.style.transform = `translate(${videoZoom.x}px, ${videoZoom.y}px) scale(${videoZoom.scale})`;
+    syncZoomResetBtn();
+}
+
+function settleVideoZoom() {
+    if (videoZoom.scale < 1.08) resetVideoZoom();
+    else applyVideoZoom();
 }
 
 (function initVideoPinchZoom() {
@@ -3774,8 +3992,18 @@ function applyVideoZoom() {
         }
     }, { passive: false });
 
-    wrap.addEventListener('touchend', (e) => {
-        if (e.touches.length === 0) pinchState = null;
+    function endPinch(e) {
+        if (e.touches && e.touches.length > 0) {
+            if (pinchState && pinchState.mode === 'pinch') pinchState = null;
+            return;
+        }
+        pinchState = null;
+        settleVideoZoom();
+    }
+    wrap.addEventListener('touchend', endPinch);
+    wrap.addEventListener('touchcancel', () => {
+        pinchState = null;
+        settleVideoZoom();
     });
 
     let lastTap = 0;
@@ -3790,7 +4018,7 @@ function applyVideoZoom() {
         if (!e.ctrlKey) return;
         e.preventDefault();
         videoZoom.scale = Math.min(5, Math.max(1, videoZoom.scale - e.deltaY * 0.01));
-        applyVideoZoom();
+        settleVideoZoom();
     }, { passive: false });
 })();
 
@@ -3905,6 +4133,7 @@ if (favoritesMode) {
     document.getElementById('favoritesNav')?.classList.add('active');
 }
 syncHeaderOffset();
+bindMobileMenu();
 loadFromServer();
 
 (function bindRemixNav() {

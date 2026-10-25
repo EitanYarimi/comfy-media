@@ -207,6 +207,28 @@
         .run-log .err { color: #f07178; }
         .run-log .ok { color: #7dce82; }
         .run-log .node { color: #8ab4f8; }
+        @media (max-width: 768px) {
+            header { flex-wrap: nowrap; padding: 8px 8px; }
+            .nav { flex: 1; min-width: 0; width: 100%; }
+            .nav a {
+                flex: 1;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+                min-height: 44px;
+                padding: 8px 2px;
+                font-size: 0.72rem;
+                border-radius: 16px;
+            }
+            .row { align-items: stretch; }
+            .url-input { flex: 1 1 100%; min-width: 0; font-size: 16px; min-height: 44px; }
+            .row .btn { min-height: 44px; flex: 1 1 calc(50% - 8px); }
+            .check-wrap { min-height: 44px; }
+            .runs-wrap { min-height: 44px; }
+            #runCount { font-size: 16px; min-height: 44px; }
+            input[type=text], input[type=number], input[type=url], textarea, select { font-size: 16px; }
+        }
     </style>
 </head>
 <body>

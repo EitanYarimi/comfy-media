@@ -43,6 +43,22 @@ class FavoritesMarkupTests(unittest.TestCase):
         self.assertIn('Same checkpoint and LoRAs', run)
         self.assertIn('function lockWorkflowModels()', run)
 
+    def test_phone_menu_and_fullscreen(self):
+        src = (ROOT / 'index.html').read_text()
+        self.assertIn('id="menuToggle"', src)
+        self.assertIn('id="pageControls"', src)
+        self.assertIn('id="zoomResetBtn"', src)
+        self.assertIn('webkitEnterFullscreen', src)
+        self.assertIn("const APP_BUILD = '2026-10-25-mobile'", src)
+        self.assertIn('header.menu-open .controls { display: flex; }', src)
+        self.assertNotIn('.modal-close--fs,\n            .modal-close--fit {\n                display: none;', src)
+        photos = (ROOT / 'photos.html').read_text()
+        self.assertIn('id="menuToggle"', photos)
+        self.assertIn('id="lightboxFsBtn"', photos)
+        self.assertIn('function toggleLightboxFullscreen()', photos)
+        run = (ROOT / 'run.html').read_text()
+        self.assertIn('min-height: 44px', run)
+
     def test_recipe_script_is_served_from_the_app_folder(self):
         import video_server
 
