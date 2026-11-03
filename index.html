@@ -64,6 +64,16 @@
             border-color: #444;
         }
 
+        .shape-filter {
+            display: inline-flex;
+            gap: 4px;
+        }
+        .shape-filter .btn[aria-pressed="true"] {
+            background: #e60023;
+            border-color: #e60023;
+            color: #fff;
+        }
+
         .btn--primary {
             background: #2563eb;
             border-color: #2563eb;
@@ -1140,6 +1150,8 @@
                 padding: 10px 8px;
                 font-size: 0.8rem;
             }
+            .shape-filter { flex: 1 1 100%; display: flex; }
+            .controls .shape-filter .btn { flex: 1 1 0; }
             #searchInput {
                 width: 100%;
                 flex: 1 1 100%;
@@ -1432,6 +1444,11 @@
             <option value="size-desc">Largest</option>
             <option value="size-asc">Smallest</option>
         </select>
+        <div class="shape-filter" id="shapeFilter" role="group" aria-label="Shape">
+            <button type="button" class="btn" data-shape="" onclick="setShape('')" aria-pressed="true">All</button>
+            <button type="button" class="btn" data-shape="wide" onclick="setShape('wide')" aria-pressed="false">Wide</button>
+            <button type="button" class="btn" data-shape="narrow" onclick="setShape('narrow')" aria-pressed="false">Narrow</button>
+        </div>
         <button type="button" class="btn" id="selectModeBtn" onclick="toggleSelectMode()" aria-pressed="false">Select</button>
         <button class="btn" onclick="loadFromServer(false, true)">↻ Refresh</button>
         <button class="btn" onclick="startSlideshow(false)" id="slideshowSeqBtn">▶ Slideshow</button>
@@ -1630,11 +1647,16 @@ function getVideoByVid(vid) {
     return allVideos.find(v => v.name === name);
 }
 const THUMB_URL_VERSION = '4'; // bump when thumb pipeline changes (busts browser cache)
-const APP_BUILD = '2026-11-02-multi-delete';
+const APP_BUILD = '2026-11-02-shape';
 let selectMode = false;
 const selectedPaths = new Set();
 const FAVORITES_KEY = 'comfyVideoFavorites';
 const favoritesMode = new URLSearchParams(location.search).get('favorites') === '1';
+let activeShape = '';
+const shapeByPath = {};
+let favoriteShapePending = 0;
+let favoriteShapeUnsupported = false;
+let favoriteShapeToken = 0;
 const DISABLE_THUMBS = new URLSearchParams(location.search).has('nothumbs');
 function getVThumbSrc(video) {
     const base = serverBaseUrl + '/vthumb/' + encodeURIComponent(video.path).replace(/%2F/g, '/');
@@ -1690,11 +1712,80 @@ function listFavorites() {
         .map(mapVideo);
 }
 
+function wantedOrientation() {
+    if (activeShape === 'narrow') return 'vertical';
+    if (activeShape === 'wide') return 'horizontal';
+    return '';
+}
+
+function shapeQuery() {
+    return activeShape ? `shape=${encodeURIComponent(activeShape)}&` : '';
+}
+
+function updateShapeButtons() {
+    document.querySelectorAll('#shapeFilter .btn').forEach(btn => {
+        const on = (btn.dataset.shape || '') === activeShape;
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+}
+
 function favoriteItems() {
     const q = (document.getElementById('searchInput')?.value || '').toLowerCase().trim();
     let items = listFavorites();
     if (q) items = items.filter(v => (v.name || '').toLowerCase().includes(q));
+    const want = wantedOrientation();
+    if (want) items = items.filter(v => shapeByPath[v.path] === want);
     return sortVideoList(items);
+}
+
+async function ensureFavoriteShapes() {
+    if (!activeShape) return;
+    const missing = listFavorites()
+        .map(v => v.path)
+        .filter(path => path && !Object.prototype.hasOwnProperty.call(shapeByPath, path));
+    if (!missing.length) {
+        favoriteShapePending = 0;
+        return;
+    }
+    const token = ++favoriteShapeToken;
+    try {
+        const resp = await fetch(`${serverBaseUrl}/api/shapes`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paths: missing, kind: 'videos' }),
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (token !== favoriteShapeToken) return;
+        favoriteShapeUnsupported = !!data.shapeUnsupported;
+        const shapes = data.shapes || {};
+        Object.keys(shapes).forEach(path => { shapeByPath[path] = shapes[path]; });
+        favoriteShapePending = data.pending || 0;
+        renderFavorites();
+        if (favoriteShapePending && !favoriteShapeUnsupported && token === favoriteShapeToken) {
+            ensureFavoriteShapes();
+        }
+    } catch (_) {}
+}
+
+function setShape(shape) {
+    shape = shape === 'wide' || shape === 'narrow' ? shape : '';
+    if (shape === activeShape) return;
+    if (slideshowActive) stopSlideshow(true);
+    activeShape = shape;
+    updateShapeButtons();
+    syncFilterUrl();
+    if (favoritesMode) {
+        const missing = listFavorites().some(v => v.path && !Object.prototype.hasOwnProperty.call(shapeByPath, v.path));
+        favoriteShapePending = missing ? 1 : 0;
+        renderFavorites();
+        ensureFavoriteShapes();
+        return;
+    }
+    searchResults = { items: [], total: 0, loading: false, hasMore: false, pending: 0 };
+    feedCache = { items: [], total: 0, loading: false, hasMore: true, pending: 0 };
+    if (searchMode) loadSearchVideos(false);
+    else loadFeed(false);
 }
 
 function toggleFavorite(video) {
@@ -1932,15 +2023,30 @@ function renderFavorites() {
     setMonthPickerVisible(false);
     document.getElementById('dayStepper')?.classList.remove('visible');
     if (!items.length) {
-        grid.innerHTML = q
-            ? '<div class="empty-state"><div class="icon">🔍</div><h2>No matching favorites</h2></div>'
-            : '<div class="empty-state"><div class="icon">♡</div><h2>No favorites yet</h2><p style="color:#666;margin-top:8px;font-size:0.85rem">Open a video and tap the heart.</p></div>';
-        if (stats) stats.textContent = q ? 'No matches' : '0 favorites';
+        const shapeWord = activeShape === 'narrow' ? 'narrow' : activeShape === 'wide' ? 'wide' : '';
+        let emptyHtml;
+        if (favoriteShapeUnsupported && shapeWord) {
+            emptyHtml = '<div class="empty-state"><div class="icon">▭</div><h2>Shape needs the Mac gallery</h2><p style="color:#666;margin-top:8px;font-size:0.85rem">This server cannot measure wide and narrow.</p></div>';
+        } else if (shapeWord && favoriteShapePending) {
+            emptyHtml = `<div class="empty-state"><div class="icon">▭</div><h2>Measuring ${shapeWord} favorites…</h2></div>`;
+        } else if (shapeWord) {
+            emptyHtml = `<div class="empty-state"><div class="icon">▭</div><h2>No ${shapeWord} favorites</h2></div>`;
+        } else if (q) {
+            emptyHtml = '<div class="empty-state"><div class="icon">🔍</div><h2>No matching favorites</h2></div>';
+        } else {
+            emptyHtml = '<div class="empty-state"><div class="icon">♡</div><h2>No favorites yet</h2><p style="color:#666;margin-top:8px;font-size:0.85rem">Open a video and tap the heart.</p></div>';
+        }
+        grid.innerHTML = emptyHtml;
+        if (stats) stats.textContent = shapeWord ? (favoriteShapePending ? 'Measuring shapes…' : `No ${shapeWord} favorites`) : (q ? 'No matches' : '0 favorites');
         window._visibleVideos = [];
         finishFavoritesChrome();
         return;
     }
-    if (stats) stats.textContent = `${items.length} favorite${items.length === 1 ? '' : 's'}`;
+    if (stats) {
+        const shapeWord = activeShape === 'narrow' ? 'narrow ' : activeShape === 'wide' ? 'wide ' : '';
+        const noun = items.length === 1 ? 'favorite' : 'favorites';
+        stats.textContent = `${items.length} ${shapeWord}${noun}` + (favoriteShapePending ? ' · measuring shapes' : '');
+    }
     let html = '<div class="month-section" data-month="favorites"><div class="month-grid">';
     items.forEach(video => { html += buildVideoCardHtml(video); });
     html += '</div></div>';
@@ -1953,10 +2059,13 @@ function renderFavorites() {
 
 async function loadFavoritesView() {
     if (slideshowActive) stopSlideshow(true);
-    const { q } = readFilterUrl();
+    const { q, shape } = readFilterUrl();
+    activeShape = shape || '';
+    updateShapeButtons();
     const input = document.getElementById('searchInput');
     if (input && q && !input.value) input.value = q;
     renderFavorites();
+    if (activeShape) ensureFavoriteShapes();
     try {
         const resp = await fetch(serverBaseUrl + '/api/videos?summary=1');
         if (!resp.ok) return;
@@ -2102,7 +2211,8 @@ async function loadFeed(append = false) {
     if (!append) renderGrid();
 
     try {
-        const qs = (activeMonth ? `month=${encodeURIComponent(activeMonth)}&` : '') +
+        const qs = shapeQuery() +
+            (activeMonth ? `month=${encodeURIComponent(activeMonth)}&` : '') +
             (activeMonth && activeDay ? `day=${encodeURIComponent(activeDay)}&` : '') +
             `offset=${offset}&limit=${VIDEOS_PER_LOAD}`;
         const resp = await fetch(`${serverBaseUrl}/api/videos?${qs}`);
@@ -2116,12 +2226,15 @@ async function loadFeed(append = false) {
             feedCache.items.concat(items.filter(item => !feedCache.items.some(v => v.path === item.path)))
         );
         let hasMore = resolveHasMore(data, merged.length);
-        if (!items.length) hasMore = false;
+        const pending = data.pending || 0;
+        if (!items.length && !(pending && hasMore)) hasMore = false;
         feedCache = {
             items: merged,
             total: data.total != null ? data.total : merged.length,
             loading: false,
             hasMore,
+            pending,
+            shapeUnsupported: !!data.shapeUnsupported,
         };
         const added = merged.slice(prevLen);
         requestThumbWarm(added.length ? added : merged, !append);
@@ -2157,7 +2270,7 @@ async function loadSearchVideos(append = false) {
 
     try {
         const resp = await fetch(
-            `${serverBaseUrl}/api/videos?q=${encodeURIComponent(q)}&offset=${offset}&limit=${VIDEOS_PER_LOAD}`
+            `${serverBaseUrl}/api/videos?${shapeQuery()}q=${encodeURIComponent(q)}&offset=${offset}&limit=${VIDEOS_PER_LOAD}`
         );
         if (!resp.ok) throw new Error('Search failed');
         const data = await resp.json();
@@ -2166,11 +2279,16 @@ async function loadSearchVideos(append = false) {
         registerVideos(items);
         const prevLen = append ? searchResults.items.length : 0;
         const mergedLen = append ? prevLen + items.length : items.length;
+        let hasMore = resolveHasMore(data, mergedLen);
+        const pending = data.pending || 0;
+        if (!items.length && !(pending && hasMore)) hasMore = false;
         searchResults = {
             items: append ? searchResults.items.concat(items) : items,
             total: data.total || 0,
             loading: false,
-            hasMore: resolveHasMore(data, mergedLen),
+            hasMore,
+            pending,
+            shapeUnsupported: !!data.shapeUnsupported,
         };
         requestThumbWarm(items, !append);
         if (!append) renderGrid();
@@ -2231,6 +2349,8 @@ function syncFilterUrl(replace = true) {
         params.delete('day');
         if (q) params.set('q', q);
         else params.delete('q');
+        if (activeShape) params.set('shape', activeShape);
+        else params.delete('shape');
         const qs = params.toString();
         const url = location.pathname + (qs ? `?${qs}` : '') + location.hash;
         if (url === location.pathname + location.search + location.hash) return;
@@ -2239,7 +2359,8 @@ function syncFilterUrl(replace = true) {
         return;
     }
     params.delete('favorites');
-    ['month', 'day', 'q'].forEach(k => params.delete(k));
+    ['month', 'day', 'q', 'shape'].forEach(k => params.delete(k));
+    if (activeShape) params.set('shape', activeShape);
     if (searchMode && q) params.set('q', q);
     else {
         if (activeMonth) params.set('month', activeMonth);
@@ -2253,7 +2374,9 @@ function syncFilterUrl(replace = true) {
 }
 
 async function restoreFiltersFromUrl() {
-    const { month, day, q } = readFilterUrl();
+    const { month, day, q, shape } = readFilterUrl();
+    activeShape = shape || '';
+    updateShapeButtons();
     if (q) {
         const input = document.getElementById('searchInput');
         if (input) input.value = q;
@@ -2275,10 +2398,12 @@ function readFilterUrl() {
     const month = params.get('month');
     const day = params.get('day');
     const q = params.get('q');
+    const shape = params.get('shape');
     return {
         month: month || null,
         day: month && day ? day : null,
         q: q || '',
+        shape: shape === 'wide' || shape === 'narrow' ? shape : '',
     };
 }
 
@@ -2724,11 +2849,14 @@ function renderGrid() {
             return;
         }
         if (!searchResults.items.length) {
-            grid.innerHTML = '<div class="empty-state"><div class="icon">🔍</div><h2>No results</h2></div>';
-            stats.textContent = `${totalVideoCount} videos total`;
+            const emptyTitle = shapeEmptyTitle('videos') || 'No results';
+            grid.innerHTML = `<div class="empty-state"><div class="icon">🔍</div><h2>${emptyTitle}</h2></div>`;
+            stats.textContent = searchResults.pending ? 'Measuring shapes…' : `${totalVideoCount} videos total`;
             return;
         }
-        stats.textContent = `${searchResults.items.length} of ${searchResults.total} results`;
+        const shapeWord = activeShape ? `${activeShape} ` : '';
+        stats.textContent = `${searchResults.items.length} of ${searchResults.total} ${shapeWord}results` +
+            (searchResults.pending ? ' · measuring shapes' : '');
         renderGroupedGrid();
         return;
     }
@@ -2741,10 +2869,12 @@ function renderGrid() {
     }
     const shown = feedCache.items?.length || 0;
     const videoWord = shown === 1 ? 'video' : 'videos';
+    const shapeWord = activeShape ? `${activeShape} ` : '';
     stats.textContent = feedCache.hasMore
-        ? `${shown} loaded — scroll for more`
-        : `${shown} ${videoWord}` +
+        ? `${shown} ${shapeWord}loaded — scroll for more`
+        : `${shown} ${shapeWord}${videoWord}` +
         (serverHasVthumb ? '' : ' (tap ▶ to play — thumbnails loading)');
+    if (feedCache.pending) stats.textContent += ' · measuring shapes';
     updateMonthPicker();
     updateDayFilter();
     renderGroupedGrid();
@@ -2789,9 +2919,9 @@ function renderGroupedGrid() {
     if (loading && !items.length) {
         html += '<div class="month-loading" style="grid-column:1/-1"><div class="loading-spinner"></div></div>';
     } else if (!items.length) {
-        const emptyMsg = activeDay
+        const emptyMsg = shapeEmptyTitle('videos') || (activeDay
             ? `No videos on ${getDayLabel(activeDay)}`
-            : (activeMonth ? 'No videos in this month' : 'No videos found');
+            : (activeMonth ? 'No videos in this month' : 'No videos found'));
         html += `<div class="empty-state" style="grid-column:1/-1"><div class="icon">📂</div><h2>${emptyMsg}</h2></div>`;
     } else {
         items.forEach(video => { html += buildVideoCardHtml(video); });
@@ -2801,6 +2931,16 @@ function renderGroupedGrid() {
     window._visibleVideos = items.slice();
     grid.innerHTML = html;
     observeThumbs(grid);
+}
+
+function shapeEmptyTitle(noun) {
+    if (feedCache.shapeUnsupported || searchResults.shapeUnsupported) {
+        return 'Wide and Narrow work on the Mac gallery';
+    }
+    const pending = searchMode ? searchResults.pending : feedCache.pending;
+    if (activeShape === 'wide') return pending ? 'Measuring wide ' + noun + '…' : 'No wide ' + noun;
+    if (activeShape === 'narrow') return pending ? 'Measuring narrow ' + noun + '…' : 'No narrow ' + noun;
+    return '';
 }
 
 function feedHasMore() {
@@ -2823,6 +2963,7 @@ async function maybeLoadMore() {
     if (!feedHasMore()) return false;
 
     const before = searchMode ? searchResults.items.length : feedCache.items.length;
+    const pendingBefore = searchMode ? (searchResults.pending || 0) : (feedCache.pending || 0);
     pageLoading = true;
     try {
         if (searchMode) await loadSearchVideos(true);
@@ -2832,7 +2973,8 @@ async function maybeLoadMore() {
         showScrollLoader(false);
     }
     const after = searchMode ? searchResults.items.length : feedCache.items.length;
-    return after > before;
+    const pendingAfter = searchMode ? (searchResults.pending || 0) : (feedCache.pending || 0);
+    return after > before || pendingAfter < pendingBefore;
 }
 
 /** Keep fetching until the page can scroll (or nothing left). Needed on tall screens. */
@@ -2983,19 +3125,23 @@ async function fetchPagedVideos(baseParams, maxItems = 2000) {
             offset: String(offset),
             limit: String(pageSize),
         });
+        if (activeShape) params.set('shape', activeShape);
         const resp = await fetch(`${serverBaseUrl}/api/videos?${params}`);
         if (!resp.ok) throw new Error('Failed to load playlist');
         const data = await resp.json();
         applyFfmpegFlag(data);
         const batch = sortVideoList((data.videos || []).map(mapVideo));
-        if (!batch.length) break;
+        if (!batch.length) {
+            if (data.pending && data.hasMore) continue;
+            break;
+        }
         registerVideos(batch);
         for (const item of batch) {
             if (!collected.some(v => v.path === item.path)) collected.push(item);
         }
-        offset += batch.length;
+        offset = collected.length;
         if (!data.hasMore) break;
-        if (batch.length < pageSize) break;
+        if (!data.pending && batch.length < pageSize) break;
     }
     return sortVideoList(collected);
 }
@@ -3110,6 +3256,7 @@ async function fetchServerRandomVideo(excludePath = null) {
     if (activeMonth) params.set('month', activeMonth);
     if (activeMonth && activeDay) params.set('day', activeDay);
     if (slideshowOrientation) params.set('orientation', slideshowOrientation);
+    else if (activeShape) params.set('orientation', activeShape);
     if (searchMode) {
         const q = document.getElementById('searchInput').value.trim();
         if (q) params.set('q', q);
@@ -3288,7 +3435,7 @@ async function startSlideshow(random = false, orientation = null) {
     // All + Random: each next clip is a server pick — no full-library download.
     // Orientation picks always go to the server too: only it knows the pixel
     // size of each clip, so the browser cannot filter the playlist itself.
-    const useServerRandom = !favoritesMode && random && (slideshowOrientation || (!searchMode && !activeMonth));
+    const useServerRandom = !favoritesMode && random && (slideshowOrientation || activeShape || (!searchMode && !activeMonth));
     if (useServerRandom) {
         if (stats) stats.textContent = slideshowOrientation
             ? `Picking a random ${slideshowOrientation} video…`
@@ -4308,9 +4455,12 @@ window.addEventListener('popstate', async () => {
     if (favoritesMode) {
         if (slideshowActive) stopSlideshow(true);
         const input = document.getElementById('searchInput');
-        const { q } = readFilterUrl();
+        const { q, shape } = readFilterUrl();
+        activeShape = shape || '';
+        updateShapeButtons();
         if (input) input.value = q || '';
         renderFavorites();
+        if (activeShape) ensureFavoriteShapes();
         return;
     }
     if (slideshowActive) stopSlideshow(true);

@@ -49,7 +49,7 @@ class FavoritesMarkupTests(unittest.TestCase):
         self.assertIn('id="pageControls"', src)
         self.assertIn('id="zoomResetBtn"', src)
         self.assertIn('webkitEnterFullscreen', src)
-        self.assertIn("const APP_BUILD = '2026-11-02-multi-delete'", src)
+        self.assertIn("const APP_BUILD = '2026-11-02-shape'", src)
         self.assertIn('header.menu-open .controls { display: flex; }', src)
         self.assertNotIn('.modal-close--fs,\n            .modal-close--fit {\n                display: none;', src)
         photos = (ROOT / 'photos.html').read_text()
@@ -70,6 +70,18 @@ class FavoritesMarkupTests(unittest.TestCase):
         server = (ROOT / 'video_server.py').read_text()
         self.assertIn('def delete_local_media_many', server)
         self.assertIn("bare == '/api/delete'", server)
+
+    def test_wide_and_narrow_filter(self):
+        for name in ('index.html', 'photos.html'):
+            src = (ROOT / name).read_text()
+            self.assertIn('id="shapeFilter"', src, name)
+            self.assertIn('function setShape', src, name)
+            self.assertIn(">Wide</button>", src, name)
+            self.assertIn(">Narrow</button>", src, name)
+        server = (ROOT / 'video_server.py').read_text()
+        self.assertIn('def shaped_page', server)
+        self.assertIn("bare == '/api/shapes'", server)
+        self.assertIn("'narrow': 'vertical'", server)
 
     def test_recipe_script_is_served_from_the_app_folder(self):
         import video_server

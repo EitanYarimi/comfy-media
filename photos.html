@@ -18,6 +18,8 @@
         .nav a.active { background: #e60023; color: #fff; }
         .controls { display: flex; gap: 8px; align-items: center; flex: 1; justify-content: flex-end; flex-wrap: wrap; }
         .btn { padding: 8px 12px; border: 1px solid #2a2a2a; border-radius: 20px; background: #1a1a1a; color: #ccc; font-size: 0.8rem; cursor: pointer; transition: background 0.2s; white-space: nowrap; }
+        .shape-filter { display: inline-flex; gap: 4px; }
+        .shape-filter .btn[aria-pressed="true"] { background: #e60023; border-color: #e60023; color: #fff; }
         .btn:hover { background: #252525; border-color: #444; }
         .btn--active { background: #e60023; border-color: #e60023; color: #fff; }
         .btn--active:hover { background: #cc001f; border-color: #cc001f; }
@@ -416,6 +418,8 @@
             .controls { display: none; width: 100%; justify-content: stretch; padding: 0 10px 10px; }
             header.menu-open .controls { display: flex; }
             .controls .btn { flex: 1 1 calc(50% - 8px); min-height: 44px; text-align: center; }
+            .shape-filter { flex: 1 1 100%; display: flex; }
+            .controls .shape-filter .btn { flex: 1 1 0; }
             #searchInput { width: 100%; flex: 1 1 100%; order: -1; min-height: 44px; }
             .day-stepper { flex: 1 1 100%; min-width: 0; }
             .day-step { width: 44px; height: 44px; }
@@ -538,6 +542,11 @@
             </select>
             <button type="button" class="day-step" id="dayNextBtn" onclick="shiftDay(1)" title="Newer day" aria-label="Newer day">›</button>
         </div>
+        <div class="shape-filter" id="shapeFilter" role="group" aria-label="Shape">
+            <button type="button" class="btn" data-shape="" onclick="setShape('')" aria-pressed="true">All</button>
+            <button type="button" class="btn" data-shape="wide" onclick="setShape('wide')" aria-pressed="false">Wide</button>
+            <button type="button" class="btn" data-shape="narrow" onclick="setShape('narrow')" aria-pressed="false">Narrow</button>
+        </div>
         <button type="button" class="btn" id="selectModeBtn" onclick="toggleSelectMode()" aria-pressed="false">Select</button>
         <button class="btn" onclick="startSlideshow(false)" id="slideshowSeqBtn">▶ Slideshow</button>
         <button class="btn" onclick="startSlideshow(true)" id="slideshowRandomBtn">🎲 Random</button>
@@ -608,6 +617,7 @@ const selectedPaths = new Set();
 let searchResults = { items: [], total: 0, loading: false, hasMore: false };
 let activeMonth = null; // null = All (continuous chronological feed)
 let activeDay = null;   // null = every day in the selected month
+let activeShape = '';
 let lightboxIndex = 0;
 let monthPickerKey = '';
 let dayFilterKey = '';
@@ -831,8 +841,48 @@ function photoRowHeight() {
     return cell * (4 / 3) + gap;
 }
 
+function wantedOrientation() {
+    if (activeShape === 'narrow') return 'vertical';
+    if (activeShape === 'wide') return 'horizontal';
+    return '';
+}
+
+function shapeQuery() {
+    return activeShape ? `shape=${encodeURIComponent(activeShape)}&` : '';
+}
+
+function updateShapeButtons() {
+    document.querySelectorAll('#shapeFilter .btn').forEach(btn => {
+        const on = (btn.dataset.shape || '') === activeShape;
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+}
+
+function shapeEmptyTitle(noun) {
+    if (feedCache.shapeUnsupported || searchResults.shapeUnsupported) {
+        return 'Wide and Narrow work on the Mac gallery';
+    }
+    const pending = searchMode ? searchResults.pending : feedCache.pending;
+    if (activeShape === 'wide') return pending ? 'Measuring wide ' + noun + '…' : 'No wide ' + noun;
+    if (activeShape === 'narrow') return pending ? 'Measuring narrow ' + noun + '…' : 'No narrow ' + noun;
+    return '';
+}
+
+function setShape(shape) {
+    shape = shape === 'wide' || shape === 'narrow' ? shape : '';
+    if (shape === activeShape) return;
+    if (slideshowActive) stopSlideshow(true);
+    activeShape = shape;
+    updateShapeButtons();
+    syncFilterUrl();
+    searchResults = { items: [], total: 0, loading: false, hasMore: false, pending: 0 };
+    resetPhotoWindow();
+    if (searchMode) loadSearchPhotos(false);
+    else loadFeed(false);
+}
+
 function photoStoreKey(offset) {
-    return `${activeMonth || 'all'}|${activeDay || ''}|${offset}`;
+    return `${activeMonth || 'all'}|${activeDay || ''}|${activeShape || ''}|${offset}`;
 }
 
 function resetPhotoWindow() {
@@ -853,7 +903,10 @@ function desiredWindowOffset(total, limit) {
     }
     const startRow = Math.max(0, Math.floor(listY / Math.max(rowH, 1)) - 1);
     let offset = startRow * cols;
-    if (total) offset = Math.min(offset, Math.max(0, total - limit));
+    if (total) {
+        const maxOffset = feedCache.pending ? total : Math.max(0, total - limit);
+        offset = Math.min(offset, Math.max(0, maxOffset));
+    }
     return Math.floor(offset / cols) * cols;
 }
 
@@ -870,7 +923,8 @@ function windowSpacers(itemCount) {
 }
 
 async function fetchPhotoPage(offset, limit) {
-    const qs = (activeMonth ? `month=${encodeURIComponent(activeMonth)}&` : '') +
+    const qs = shapeQuery() +
+        (activeMonth ? `month=${encodeURIComponent(activeMonth)}&` : '') +
         (activeMonth && activeDay ? `day=${encodeURIComponent(activeDay)}&` : '') +
         `offset=${offset}&limit=${limit}`;
     const resp = await fetch(`${serverBaseUrl}/api/photos?${qs}`);
@@ -879,20 +933,28 @@ async function fetchPhotoPage(offset, limit) {
     const items = (data.photos || []).map(mapPhoto);
     registerPhotos(items);
     const total = data.total != null ? data.total : offset + items.length;
+    const pending = data.pending || 0;
+    let hasMore = data.hasMore != null ? !!data.hasMore : offset + items.length < total;
+    if (!items.length && !(pending && hasMore)) hasMore = false;
     return {
         items,
         total,
-        hasMore: offset + items.length < total,
+        hasMore,
+        pending,
+        shapeUnsupported: !!data.shapeUnsupported,
     };
 }
 
 function showPhotoWindow(offset, page) {
+    const pending = page.pending || 0;
     feedCache = {
         items: page.items,
-        total: page.total,
+        total: pending ? (page.total || 0) + photosPageSize() : page.total,
         loading: false,
-        hasMore: offset + page.items.length < page.total,
+        hasMore: page.hasMore != null ? page.hasMore : offset + page.items.length < page.total,
         offset,
+        pending,
+        shapeUnsupported: !!page.shapeUnsupported,
     };
     requestThumbWarm(page.items, true);
     renderGrid();
@@ -908,8 +970,9 @@ async function ensureWindow(depth = 0) {
         && feedCache.offset === offset
         && feedCache.total > 0
         && !feedCache.loading
+        && (!feedCache.pending || feedCache.items.length >= limit)
     ) return;
-    const cached = pageStore.get(photoStoreKey(offset));
+    const cached = !feedCache.pending && pageStore.get(photoStoreKey(offset));
     if (cached) {
         showPhotoWindow(offset, cached);
         return;
@@ -919,8 +982,17 @@ async function ensureWindow(depth = 0) {
     feedCache.loading = true;
     if (!feedCache.items.length) renderGrid();
     try {
-        const page = await fetchPhotoPage(offset, limit);
-        pageStore.set(photoStoreKey(offset), page);
+        let page = await fetchPhotoPage(offset, limit);
+        let spins = 0;
+        while (activeShape && page.pending && page.items.length < limit && spins < 8) {
+            spins += 1;
+            const again = await fetchPhotoPage(offset, limit);
+            const grew = again.items.length > page.items.length;
+            const progressed = (again.pending || 0) < (page.pending || 0);
+            page = again;
+            if (!grew && !progressed) break;
+        }
+        if (!page.pending) pageStore.set(photoStoreKey(offset), page);
         while (pageStore.size > 24) {
             const oldest = pageStore.keys().next().value;
             pageStore.delete(oldest);
@@ -957,7 +1029,7 @@ async function loadSearchPhotos(append = false) {
 
     try {
         const resp = await fetch(
-            `${serverBaseUrl}/api/photos?q=${encodeURIComponent(q)}&offset=${offset}&limit=${photosPageSize()}`
+            `${serverBaseUrl}/api/photos?${shapeQuery()}q=${encodeURIComponent(q)}&offset=${offset}&limit=${photosPageSize()}`
         );
         if (!resp.ok) throw new Error('Search failed');
         const data = await resp.json();
@@ -965,11 +1037,16 @@ async function loadSearchPhotos(append = false) {
         registerPhotos(items);
         const prevLen = append ? searchResults.items.length : 0;
         const mergedLen = append ? prevLen + items.length : items.length;
+        let hasMore = resolveHasMore(data, mergedLen);
+        const pending = data.pending || 0;
+        if (!items.length && !(pending && hasMore)) hasMore = false;
         searchResults = {
             items: append ? searchResults.items.concat(items) : items,
             total: data.total || 0,
             loading: false,
-            hasMore: resolveHasMore(data, mergedLen),
+            hasMore,
+            pending,
+            shapeUnsupported: !!data.shapeUnsupported,
         };
         filteredPhotos = searchResults.items;
         requestThumbWarm(items, !append);
@@ -1012,7 +1089,8 @@ async function filterPhotos() {
 function syncFilterUrl(replace = true) {
     const params = new URLSearchParams(location.search);
     const q = document.getElementById('searchInput')?.value.trim() || '';
-    ['month', 'day', 'q'].forEach(k => params.delete(k));
+    ['month', 'day', 'q', 'shape'].forEach(k => params.delete(k));
+    if (activeShape) params.set('shape', activeShape);
     if (searchMode && q) params.set('q', q);
     else {
         if (activeMonth) params.set('month', activeMonth);
@@ -1030,11 +1108,19 @@ function readFilterUrl() {
     const month = params.get('month');
     const day = params.get('day');
     const q = params.get('q');
-    return { month: month || null, day: month && day ? day : null, q: q || '' };
+    const shape = params.get('shape');
+    return {
+        month: month || null,
+        day: month && day ? day : null,
+        q: q || '',
+        shape: shape === 'wide' || shape === 'narrow' ? shape : '',
+    };
 }
 
 async function restoreFiltersFromUrl() {
-    const { month, day, q } = readFilterUrl();
+    const { month, day, q, shape } = readFilterUrl();
+    activeShape = shape || '';
+    updateShapeButtons();
     if (q) {
         const input = document.getElementById('searchInput');
         if (input) input.value = q;
@@ -1492,11 +1578,13 @@ function renderGrid() {
             return;
         }
         if (!searchResults.items.length) {
-            grid.innerHTML = '<div class="empty-state"><div class="icon">🔍</div><h2>No results</h2></div>';
-            stats.textContent = `${totalPhotoCount} photos total`;
+            grid.innerHTML = `<div class="empty-state"><div class="icon">🔍</div><h2>${shapeEmptyTitle('photos') || 'No results'}</h2></div>`;
+            stats.textContent = searchResults.pending ? 'Measuring shapes…' : `${totalPhotoCount} photos total`;
             return;
         }
-        stats.textContent = `${searchResults.items.length} of ${searchResults.total} results`;
+        const shapeWord = activeShape ? `${activeShape} ` : '';
+        stats.textContent = `${searchResults.items.length} of ${searchResults.total} ${shapeWord}results` +
+            (searchResults.pending ? ' · measuring shapes' : '');
         renderGrouped();
         return;
     }
@@ -1507,9 +1595,12 @@ function renderGrid() {
         stats.textContent = '';
         return;
     }
+    const shapeWord = activeShape ? `${activeShape} ` : '';
+    const shown = feedCache.items?.length || 0;
     stats.textContent = feedCache.total
-        ? `${(feedCache.offset || 0) + 1}–${(feedCache.offset || 0) + (feedCache.items?.length || 0)} of ${feedCache.total}`
-        : `${feedCache.items?.length || 0} photos`;
+        ? `${(feedCache.offset || 0) + 1}–${(feedCache.offset || 0) + shown} of ${feedCache.total} ${shapeWord}photos`
+        : `${shown} ${shapeWord}photos`;
+    if (feedCache.pending) stats.textContent += ' · measuring shapes';
     updateMonthPicker();
     updateDayFilter();
     renderGrouped();
@@ -1557,9 +1648,9 @@ function renderGrouped() {
     if (loading && !items.length) {
         html += '<div class="month-loading" style="grid-column:1/-1"><div class="loading-spinner"></div></div>';
     } else if (!items.length) {
-        const emptyMsg = activeDay
+        const emptyMsg = shapeEmptyTitle('photos') || (activeDay
             ? `No photos on ${getDayLabel(activeDay)}`
-            : (activeMonth ? 'No photos in this month' : 'No photos found');
+            : (activeMonth ? 'No photos in this month' : 'No photos found'));
         html += `<div class="empty-state" style="grid-column:1/-1"><div class="icon">🖼️</div><h2>${emptyMsg}</h2></div>`;
     } else {
         items.forEach(photo => { html += buildPhotoCardHtml(photo); });
@@ -1593,6 +1684,7 @@ async function maybeLoadMore() {
     if (!feedHasMore()) return false;
 
     const before = searchMode ? searchResults.items.length : feedCache.items.length;
+    const pendingBefore = searchMode ? (searchResults.pending || 0) : (feedCache.pending || 0);
     pageLoading = true;
     try {
         if (searchMode) await loadSearchPhotos(true);
@@ -1602,7 +1694,8 @@ async function maybeLoadMore() {
         showScrollLoader(false);
     }
     const after = searchMode ? searchResults.items.length : feedCache.items.length;
-    return after > before;
+    const pendingAfter = searchMode ? (searchResults.pending || 0) : (feedCache.pending || 0);
+    return after > before || pendingAfter < pendingBefore;
 }
 
 async function fillViewportIfNeeded() {
@@ -1868,18 +1961,22 @@ async function fetchPagedPhotos(baseParams, maxItems = 2000) {
             offset: String(offset),
             limit: String(pageSize),
         });
+        if (activeShape) params.set('shape', activeShape);
         const resp = await fetch(`${serverBaseUrl}/api/photos?${params}`);
         if (!resp.ok) throw new Error('Failed to load slideshow');
         const data = await resp.json();
         const batch = (data.photos || []).map(mapPhoto);
-        if (!batch.length) break;
+        if (!batch.length) {
+            if (data.pending && data.hasMore) continue;
+            break;
+        }
         registerPhotos(batch);
         for (const item of batch) {
             if (!collected.some(p => p.path === item.path)) collected.push(item);
         }
-        offset += batch.length;
+        offset = collected.length;
         if (!data.hasMore) break;
-        if (batch.length < pageSize) break;
+        if (!data.pending && batch.length < pageSize) break;
     }
     return collected.sort((a, b) => b.date - a.date);
 }

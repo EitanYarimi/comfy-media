@@ -30,6 +30,7 @@ import hashlib
 import subprocess
 import mimetypes
 import io
+import struct
 import tempfile
 import re
 import random
@@ -752,6 +753,7 @@ def delete_local_media(rel_path):
         raise
     removed_index = _remove_indexed_media(rel)
     _delete_cached_thumbs(rel, filepath)
+    _invalidate_basename_map()
     return removed_file or removed_index
 
 
@@ -1348,7 +1350,7 @@ def normalize_orientation(value):
     value = (value or '').strip().lower()
     aliases = {
         'landscape': 'horizontal', 'wide': 'horizontal', 'h': 'horizontal',
-        'portrait': 'vertical', 'tall': 'vertical', 'v': 'vertical',
+        'portrait': 'vertical', 'tall': 'vertical', 'narrow': 'vertical', 'v': 'vertical',
     }
     value = aliases.get(value, value)
     return value if value in ORIENTATIONS else None
@@ -1359,6 +1361,9 @@ def _orientation_from_thumb(filepath):
     cached = get_cached_video_thumbnail(filepath)
     if not cached:
         return None
+    size = image_size_from_bytes(cached[0])
+    if size:
+        return orientation_from_size(*size)
     try:
         from PIL import Image
         with Image.open(io.BytesIO(cached[0])) as img:
@@ -1367,7 +1372,7 @@ def _orientation_from_thumb(filepath):
         return None
 
 
-def _orientation_from_ffprobe(filepath):
+def _orientation_from_ffprobe(filepath, timeout=30):
     if not _ffprobe_path:
         return None
     try:
@@ -1377,7 +1382,7 @@ def _orientation_from_ffprobe(filepath):
                 '-show_entries', 'stream=width,height:stream_tags=rotate:stream_side_data=rotation',
                 '-of', 'json', str(filepath),
             ],
-            capture_output=True, text=True, timeout=30, check=False,
+            capture_output=True, text=True, timeout=timeout, check=False,
         )
         if result.returncode != 0 or not result.stdout.strip():
             return None
@@ -1401,22 +1406,29 @@ def _orientation_from_ffprobe(filepath):
         return None
 
 
-def video_orientation(item, allow_probe=False):
+def video_orientation(item, allow_probe=False, allow_thumb=True, probe_timeout=30):
     """Resolve 'horizontal'/'vertical' for a media item, cheapest source first.
 
     Returns None when it cannot be determined without more work than allowed.
+    allow_thumb=False skips opening a cached thumbnail. allow_probe also runs ffprobe.
     """
     known = orientation_from_size(item.get('width'), item.get('height'))
     if known:
         return known
+    stored = normalize_orientation(item.get('orientation'))
+    if stored:
+        return stored
     rel = item.get('path')
     if not rel:
         return None
+    _load_orientation_index()
     with _orientation_lock:
         cached = _orientation_cache.get(rel)
-    if cached:
+    if cached in ORIENTATIONS:
         return cached
     if STORAGE_MODE == 'drive':
+        return None
+    if not allow_thumb and not allow_probe:
         return None
     filepath = resolve_media_path(rel)
     try:
@@ -1426,15 +1438,343 @@ def video_orientation(item, allow_probe=False):
         return None
     cache_key = _video_cache_key(filepath)
     found = normalize_orientation(_read_thumb_meta(cache_key).get('orientation'))
-    if not found:
+    if not found and allow_thumb:
         found = _orientation_from_thumb(filepath)
     if not found and allow_probe:
-        found = _orientation_from_ffprobe(filepath)
+        found = _orientation_from_ffprobe(filepath, timeout=probe_timeout)
     if found:
         _update_thumb_meta(cache_key, {'orientation': found})
-        with _orientation_lock:
-            _orientation_cache[rel] = found
+        _remember_orientation(rel, found)
     return found
+
+
+ORIENTATION_INDEX_NAME = 'orientation_index_v1.json'
+# One Wide/Narrow page may open local thumbs or image headers, never the whole library.
+SHAPE_PROBE_LIMIT = 60
+SHAPE_PROBE_SECONDS = 0.45
+_orientation_index_loaded = False
+_orientation_index_dirty = False
+_shape_misses = set()
+
+
+def shape_name(orientation):
+    """UI words. Wide includes square; narrow is portrait."""
+    orientation = normalize_orientation(orientation)
+    if orientation == 'horizontal':
+        return 'wide'
+    if orientation == 'vertical':
+        return 'narrow'
+    return None
+
+
+def _orientation_index_path():
+    return THUMB_CACHE_DIR / ORIENTATION_INDEX_NAME
+
+
+def _load_orientation_index():
+    """Rel-path → shape, so a filter does not stat every file on Drive."""
+    global _orientation_index_loaded
+    if _orientation_index_loaded:
+        return
+    _orientation_index_loaded = True
+    try:
+        raw = json.loads(_orientation_index_path().read_text())
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return
+    if not isinstance(raw, dict):
+        return
+    with _orientation_lock:
+        for rel, value in raw.items():
+            orient = normalize_orientation(value)
+            if rel and orient and rel not in _orientation_cache:
+                _orientation_cache[rel] = orient
+
+
+def _remember_orientation(rel, orientation):
+    global _orientation_index_dirty
+    orientation = normalize_orientation(orientation)
+    rel = _norm_rel(rel) if rel else ''
+    if not rel or not orientation:
+        return
+    _load_orientation_index()
+    with _orientation_lock:
+        if _orientation_cache.get(rel) == orientation:
+            _shape_misses.discard(rel)
+            return
+        _orientation_cache[rel] = orientation
+        _shape_misses.discard(rel)
+        _orientation_index_dirty = True
+
+
+def _flush_orientation_index():
+    global _orientation_index_dirty
+    with _orientation_lock:
+        if not _orientation_index_dirty:
+            return
+        payload = {k: v for k, v in _orientation_cache.items() if v in ORIENTATIONS}
+        _orientation_index_dirty = False
+    try:
+        THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        _orientation_index_path().write_text(json.dumps(payload))
+    except OSError:
+        with _orientation_lock:
+            _orientation_index_dirty = True
+
+
+def _cached_shape(item):
+    """Shape already known without opening the media file."""
+    known = orientation_from_size(item.get('width'), item.get('height'))
+    if known:
+        return known
+    stored = normalize_orientation(item.get('orientation'))
+    if stored:
+        return stored
+    rel = item.get('path')
+    if not rel:
+        return None
+    _load_orientation_index()
+    with _orientation_lock:
+        cached = _orientation_cache.get(rel)
+    return cached if cached in ORIENTATIONS else None
+
+
+def image_size_from_bytes(data):
+    """Width and height from a file or thumb header. Does not decode the image."""
+    if not data or len(data) < 10:
+        return None
+    if data.startswith(b'\x89PNG\r\n\x1a\n') and len(data) >= 24:
+        width, height = struct.unpack('>II', data[16:24])
+        return (width, height) if width and height else None
+    if data.startswith((b'GIF87a', b'GIF89a')) and len(data) >= 10:
+        width, height = struct.unpack('<HH', data[6:10])
+        return (width, height) if width and height else None
+    if data.startswith(b'\xff\xd8'):
+        return _jpeg_size(data)
+    if len(data) >= 16 and data.startswith(b'RIFF') and data[8:12] == b'WEBP':
+        return _webp_size(data)
+    return None
+
+
+def _jpeg_size(data):
+    index = 2
+    limit = len(data)
+    while index + 8 < limit:
+        if data[index] != 0xFF:
+            index += 1
+            continue
+        while index < limit and data[index] == 0xFF:
+            index += 1
+        if index >= limit:
+            return None
+        marker = data[index]
+        index += 1
+        if marker in (0xD8, 0xD9) or 0xD0 <= marker <= 0xD7:
+            continue
+        if index + 2 > limit:
+            return None
+        segment = struct.unpack('>H', data[index:index + 2])[0]
+        if segment < 2 or index + segment > limit:
+            return None
+        if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+            if segment >= 7:
+                height, width = struct.unpack('>HH', data[index + 3:index + 7])
+                if width and height:
+                    return width, height
+            return None
+        index += segment
+    return None
+
+
+def _webp_size(data):
+    if len(data) < 30:
+        return None
+    chunk = data[12:16]
+    if chunk == b'VP8X':
+        width = 1 + int.from_bytes(data[24:27], 'little')
+        height = 1 + int.from_bytes(data[27:30], 'little')
+        return (width, height) if width and height else None
+    if chunk == b'VP8 ':
+        start = data.find(b'\x9d\x01\x2a', 20)
+        if start < 0 or start + 7 > len(data):
+            return None
+        width, height = struct.unpack('<HH', data[start + 3:start + 7])
+        width &= 0x3FFF
+        height &= 0x3FFF
+        return (width, height) if width and height else None
+    if chunk == b'VP8L' and data[20] == 0x2F:
+        bits = int.from_bytes(data[21:25], 'little')
+        width = (bits & 0x3FFF) + 1
+        height = ((bits >> 14) & 0x3FFF) + 1
+        return width, height
+    return None
+
+
+def _orientation_from_file_header(filepath, max_bytes=262144):
+    try:
+        with open(filepath, 'rb') as handle:
+            data = handle.read(max_bytes)
+    except OSError:
+        return None
+    size = image_size_from_bytes(data)
+    if not size:
+        return None
+    return orientation_from_size(*size)
+
+
+def _photo_meta_shape(item):
+    rel = item.get('path')
+    if not rel or STORAGE_MODE == 'drive':
+        return None
+    key = _cache_key_from_rel(rel, ':400webp')
+    return normalize_orientation(_read_thumb_meta(key).get('orientation'))
+
+
+def _probe_shape(item, kind):
+    """One local thumb or image header. Does not ffprobe and does not copy the file."""
+    if STORAGE_MODE == 'drive':
+        return None
+    rel = _norm_rel(item.get('path') or '')
+    if not rel or '..' in rel.split('/'):
+        return None
+    filepath = resolve_media_path(rel)
+    try:
+        if not filepath or not filepath.is_file():
+            return None
+    except OSError:
+        return None
+    suffix = filepath.suffix.lower()
+    if kind == 'photos' or suffix in IMAGE_EXTENSIONS:
+        key = _cache_key_from_rel(rel, ':400webp')
+        found = normalize_orientation(_read_thumb_meta(key).get('orientation'))
+        if not found:
+            cached = get_disk_thumb(key)
+            if cached:
+                size = image_size_from_bytes(cached[0])
+                found = orientation_from_size(*(size or (0, 0)))
+        if not found:
+            found = _orientation_from_file_header(filepath)
+        if found:
+            _update_thumb_meta(key, {'orientation': found})
+            _remember_orientation(rel, found)
+            item['orientation'] = found
+        return found
+    found = video_orientation(item, allow_probe=False, allow_thumb=True)
+    if not found:
+        # A few local headers per click. The result is remembered, so this does not
+        # walk the whole library with ffprobe.
+        found = video_orientation(item, allow_probe=True, allow_thumb=False, probe_timeout=3)
+    if found:
+        item['orientation'] = found
+    return found
+
+
+def _mark_shape_miss(rel):
+    rel = _norm_rel(rel) if rel else ''
+    if not rel:
+        return
+    with _orientation_lock:
+        _shape_misses.add(rel)
+
+
+def _is_shape_miss(rel):
+    rel = _norm_rel(rel) if rel else ''
+    if not rel:
+        return False
+    with _orientation_lock:
+        return rel in _shape_misses
+
+
+def shaped_page(items, shape, offset, limit, kind):
+    """Page of confirmed wide/narrow items, in library order.
+
+    Unknown files stay out of the page. A short time budget measures a few of
+    them per request and remembers the result, so the next page continues
+    instead of scanning the whole library.
+    Returns (confirmed_total, page, pending). pending > 0 means later files
+    are not classified yet, so this page is only a prefix.
+    """
+    shape = normalize_orientation(shape)
+    offset = max(0, int(offset or 0))
+    limit = max(1, int(limit or 40))
+    if not shape:
+        return len(items), items[offset:offset + limit], 0
+    if STORAGE_MODE == 'drive':
+        return 0, [], 0
+    _load_orientation_index()
+    confirmed = []
+    pending = 0
+    probes = 0
+    deadline = time.monotonic() + SHAPE_PROBE_SECONDS
+    for index, item in enumerate(items):
+        rel = _norm_rel(item.get('path') or '')
+        known = _cached_shape(item)
+        if not known and kind == 'photos' and rel and not _is_shape_miss(rel):
+            if probes == 0 or time.monotonic() < deadline:
+                known = _photo_meta_shape(item)
+                if known:
+                    item['orientation'] = known
+                    _remember_orientation(rel, known)
+        if known:
+            if known == shape:
+                confirmed.append(item)
+            continue
+        if _is_shape_miss(rel):
+            continue
+        if probes >= SHAPE_PROBE_LIMIT or (probes > 0 and time.monotonic() >= deadline):
+            pending = len(items) - index
+            break
+        probes += 1
+        found = _probe_shape(item, kind)
+        if found:
+            item['orientation'] = found
+            if found == shape:
+                confirmed.append(item)
+        else:
+            _mark_shape_miss(rel)
+    _flush_orientation_index()
+    return len(confirmed), confirmed[offset:offset + limit], pending
+
+
+def shapes_for_paths(paths, kind='videos'):
+    """Classify a short list (favorites). Returns (shapes, pending, unsupported)."""
+    if STORAGE_MODE == 'drive':
+        return {}, 0, True
+    kind = 'photos' if kind == 'photos' else 'videos'
+    library = get_photos_cached() if kind == 'photos' else get_videos_cached()
+    by_path = {}
+    for item in library:
+        rel = _norm_rel(item.get('path') or '')
+        if rel:
+            by_path[rel] = item
+    wanted = []
+    seen = set()
+    for raw in paths or []:
+        rel = _norm_rel(raw)
+        if not rel or '..' in rel.split('/') or rel in seen:
+            continue
+        seen.add(rel)
+        wanted.append(rel)
+    subset = [by_path[rel] for rel in wanted if rel in by_path]
+    if subset:
+        shaped_page(subset, 'horizontal', 0, 1, kind)
+        if any(not _cached_shape(item) and not _is_shape_miss(_norm_rel(item.get('path') or '')) for item in subset):
+            shaped_page(subset, 'vertical', 0, 1, kind)
+    shapes = {}
+    pending = 0
+    for rel in wanted:
+        item = by_path.get(rel)
+        if not item:
+            shapes[rel] = None
+            continue
+        known = _cached_shape(item)
+        if known:
+            shapes[rel] = known
+            continue
+        if _is_shape_miss(rel):
+            shapes[rel] = None
+            continue
+        pending += 1
+    return shapes, pending, False
 
 
 def _store_thumb(cache_key, ext, data, mime):
@@ -1694,6 +2034,7 @@ def _render_photo_thumbnail(filepath, cache_key):
         from PIL import Image
         source = hydrate_photo_source(filepath, wait=True)
         img = Image.open(source)
+        orient = orientation_from_size(img.width, img.height)
         if getattr(img, 'format', None) == 'JPEG' and hasattr(img, 'draft'):
             try:
                 img.draft('RGB', PHOTO_THUMB_SIZE)
@@ -1706,12 +2047,17 @@ def _render_photo_thumbnail(filepath, cache_key):
         img.save(buf, format='WEBP', quality=70, method=0)
         stored = _store_thumb(cache_key, '.webp', buf.getvalue(), 'image/webp')
         if stored:
+            if orient:
+                _update_thumb_meta(cache_key, {'orientation': orient})
             return stored
         if img.mode != 'RGB':
             img = img.convert('RGB')
         buf = io.BytesIO()
         img.save(buf, format='JPEG', quality=70)
-        return _store_thumb(cache_key, '.jpg', buf.getvalue(), 'image/jpeg')
+        stored = _store_thumb(cache_key, '.jpg', buf.getvalue(), 'image/jpeg')
+        if stored and orient:
+            _update_thumb_meta(cache_key, {'orientation': orient})
+        return stored
     except Exception:
         return None
 
@@ -3555,11 +3901,13 @@ def photo_month_catalog(month, force=False):
     }
 
 
-def paginate_media(items, month=None, q=None, offset=0, limit=40, kind='videos', day=None):
+def paginate_media(items, month=None, q=None, offset=0, limit=40, kind='videos', day=None, shape=None):
     filtered = filter_media_items(items, month=month, q=q, kind=kind, day=day)
-    total = len(filtered)
-    page = filtered[offset:offset + limit]
-    return total, page
+    shape = normalize_orientation(shape)
+    if not shape:
+        total = len(filtered)
+        return total, filtered[offset:offset + limit], 0
+    return shaped_page(filtered, shape, offset, limit, kind)
 
 
 def parse_media_api_query(query):
@@ -3568,6 +3916,7 @@ def parse_media_api_query(query):
     month = query.get('month', [''])[0]
     day = query.get('day', [''])[0]
     q = query.get('q', [''])[0]
+    shape = normalize_orientation(query.get('shape', [''])[0] or query.get('orientation', [''])[0])
     try:
         offset = max(0, int(query.get('offset', ['0'])[0] or 0))
     except ValueError:
@@ -3576,7 +3925,7 @@ def parse_media_api_query(query):
         limit = min(5000, max(1, int(query.get('limit', ['40'])[0] or 40)))
     except ValueError:
         limit = 40
-    return force, summary, month, q, offset, limit, day
+    return force, summary, month, q, offset, limit, day, shape
 
 
 _RANGE_RE = re.compile(r'bytes=(\d*)-(\d*)')
@@ -3889,6 +4238,31 @@ class VideoHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         bare = unquote(self.path).split('?', 1)[0]
+        if bare == '/api/shapes':
+            if SITE_PASSWORD and not is_authed(self):
+                send_http_bytes(self, 401, UNAUTHORIZED_JSON, 'application/json')
+                return
+            length = int(self.headers.get('Content-Length') or 0)
+            if length <= 0 or length > 512 * 1024:
+                send_http_json(self, 400, {'error': 'Expected a list of files'})
+                return
+            try:
+                data = json.loads(self.rfile.read(length).decode('utf-8'))
+            except (UnicodeError, json.JSONDecodeError, ValueError):
+                send_http_json(self, 400, {'error': 'Expected a list of files'})
+                return
+            paths = data.get('paths') if isinstance(data, dict) else None
+            if not isinstance(paths, list):
+                send_http_json(self, 400, {'error': 'Expected a list of files'})
+                return
+            kind = (data.get('kind') if isinstance(data, dict) else None) or 'videos'
+            shapes, pending, unsupported = shapes_for_paths(paths[:2000], kind)
+            send_http_json(self, 200, {
+                'shapes': shapes,
+                'pending': pending,
+                'shapeUnsupported': unsupported,
+            })
+            return
         if bare == '/api/delete':
             if SITE_PASSWORD and not is_authed(self):
                 send_http_bytes(self, 401, UNAUTHORIZED_JSON, 'application/json')
@@ -4015,8 +4389,24 @@ class VideoHandler(SimpleHTTPRequestHandler):
         # API endpoint: returns JSON list of videos sorted by date
         if path.split('?', 1)[0] == '/api/videos':
             query = parse_qs(urlparse(self.path).query)
-            force, summary, month, q, offset, limit, day = parse_media_api_query(query)
+            force, summary, month, q, offset, limit, day, shape = parse_media_api_query(query)
             if STORAGE_MODE == 'drive':
+                if shape and not summary:
+                    respond_json(self, {
+                        'total': 0,
+                        'offset': offset,
+                        'limit': limit,
+                        'videos': [],
+                        'pending': 0,
+                        'shape': shape_name(shape),
+                        'shapeUnsupported': True,
+                        'ffmpeg': bool(_ffmpeg_path),
+                        'vthumb': vthumb_available(),
+                        'indexing': bool(get_drive_storage().videos_indexing),
+                        'hasMore': False,
+                        'error': 'Wide and Narrow work on the Mac gallery. This server cannot measure shape.',
+                    })
+                    return
                 drive = get_drive_storage()
                 result = drive.list_videos(
                     month=month or None,
@@ -4071,16 +4461,22 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     'error': None,
                 })
                 return
-            total, page = paginate_media(videos, month=month or None, q=q or None, offset=offset, limit=limit, kind='videos', day=day or None)
+            total, page, pending = paginate_media(
+                videos, month=month or None, q=q or None, offset=offset, limit=limit,
+                kind='videos', day=day or None, shape=shape,
+            )
             respond_json(self, {
                 'total': total,
                 'offset': offset,
                 'limit': limit,
                 'videos': page,
+                'pending': pending,
+                'shape': shape_name(shape),
+                'shapeUnsupported': False,
                 'ffmpeg': bool(_ffmpeg_path),
                 'vthumb': vthumb_available(),
                 'indexing': indexing,
-                'hasMore': (offset + limit) < total,
+                'hasMore': (offset + limit) < total or pending > 0,
                 'error': None,
             })
             return
@@ -4088,9 +4484,23 @@ class VideoHandler(SimpleHTTPRequestHandler):
         # API endpoint: returns JSON list of photos sorted by date
         if path.split('?', 1)[0] == '/api/photos':
             query = parse_qs(urlparse(self.path).query)
-            force, summary, month, q, offset, limit, day = parse_media_api_query(query)
+            force, summary, month, q, offset, limit, day, shape = parse_media_api_query(query)
             catalog = query.get('catalog', [''])[0].lower() in ('1', 'true', 'yes')
             if STORAGE_MODE == 'drive':
+                if shape and not summary and not (catalog and month and not q):
+                    respond_json(self, {
+                        'total': 0,
+                        'offset': offset,
+                        'limit': limit,
+                        'photos': [],
+                        'pending': 0,
+                        'shape': shape_name(shape),
+                        'shapeUnsupported': True,
+                        'indexing': bool(get_drive_storage().photos_indexing),
+                        'hasMore': False,
+                        'error': 'Wide and Narrow work on the Mac gallery. This server cannot measure shape.',
+                    })
+                    return
                 drive = get_drive_storage()
                 result = drive.list_photos(
                     month=month or None,
@@ -4146,15 +4556,21 @@ class VideoHandler(SimpleHTTPRequestHandler):
                     'error': None,
                 })
                 return
-            total, page = paginate_media(photos, month=month or None, q=q or None, offset=offset, limit=limit, kind='photos', day=day or None)
+            total, page, pending = paginate_media(
+                photos, month=month or None, q=q or None, offset=offset, limit=limit,
+                kind='photos', day=day or None, shape=shape,
+            )
             _warm_photo_listing(page, offset, limit, month=month, q=q, day=day)
             respond_json(self, {
                 'total': total,
                 'offset': offset,
                 'limit': limit,
                 'photos': page,
+                'pending': pending,
+                'shape': shape_name(shape),
+                'shapeUnsupported': False,
                 'indexing': indexing,
-                'hasMore': (offset + limit) < total,
+                'hasMore': (offset + limit) < total or pending > 0,
                 'error': None,
             })
             return
