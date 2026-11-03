@@ -140,6 +140,58 @@
             box-shadow: 0 14px 32px rgba(0, 0, 0, 0.55);
             z-index: 5;
         }
+        .btn--danger {
+            background: #e60023;
+            border-color: #e60023;
+            color: #fff;
+        }
+        .btn--danger:hover { background: #cc001f; }
+        .btn--danger:disabled { opacity: 0.45; cursor: default; }
+        .select-check {
+            display: none;
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            z-index: 6;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            border: 2px solid #fff;
+            background: rgba(0, 0, 0, 0.45);
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+            pointer-events: none;
+        }
+        body.select-mode .select-check { display: block; }
+        .photo-card.is-selected { box-shadow: inset 0 0 0 3px #e60023; }
+        .photo-card.is-selected .select-check { background: #e60023; border-color: #e60023; }
+        .photo-card.is-selected .select-check::after {
+            content: '✓';
+            color: #fff;
+            font-size: 16px;
+            line-height: 24px;
+            display: block;
+            text-align: center;
+        }
+        body.select-mode .photo-overlay { opacity: 0; pointer-events: none; }
+        body.select-mode .photo-card:hover { transform: none; }
+        .select-bar {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 80;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+            padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+            background: #111;
+            border-top: 1px solid #2a2a2a;
+        }
+        .select-bar[hidden] { display: none !important; }
+        .select-bar .count { flex: 1 1 120px; color: #eee; font-size: 0.9rem; }
+        .select-bar .btn { min-height: 44px; }
+        body.select-mode { padding-bottom: 76px; }
 
         .photo-card .thumbnail-container {
             position: relative;
@@ -486,11 +538,18 @@
             </select>
             <button type="button" class="day-step" id="dayNextBtn" onclick="shiftDay(1)" title="Newer day" aria-label="Newer day">›</button>
         </div>
+        <button type="button" class="btn" id="selectModeBtn" onclick="toggleSelectMode()" aria-pressed="false">Select</button>
         <button class="btn" onclick="startSlideshow(false)" id="slideshowSeqBtn">▶ Slideshow</button>
         <button class="btn" onclick="startSlideshow(true)" id="slideshowRandomBtn">🎲 Random</button>
         <button class="btn" onclick="loadFromServer(false, true)">↻ Refresh</button>
     </div>
 </header>
+<div class="select-bar" id="selectBar" hidden>
+    <span class="count" id="selectCount">0 selected</span>
+    <button type="button" class="btn" id="selectShownBtn" onclick="selectShown()">Select shown</button>
+    <button type="button" class="btn btn--danger" id="deleteSelectedBtn" onclick="deleteSelected()" disabled>Delete</button>
+    <button type="button" class="btn" onclick="setSelectMode(false)">Done</button>
+</div>
 <div class="stats" id="stats"></div>
 <div class="month-picker-bar" id="monthPickerBar">
     <button type="button" class="month-nav" id="monthPrevBtn" onclick="shiftMonth(1)" title="Newer month" aria-label="Newer month">‹</button>
@@ -544,6 +603,8 @@ let windowToken = 0;
 let daySummaryCache = { month: null, days: [] };
 const thumbSrcCache = new Map();
 let searchMode = false;
+let selectMode = false;
+const selectedPaths = new Set();
 let searchResults = { items: [], total: 0, loading: false, hasMore: false };
 let activeMonth = null; // null = All (continuous chronological feed)
 let activeDay = null;   // null = every day in the selected month
@@ -1565,7 +1626,9 @@ function buildPhotoCardHtml(photo) {
     const cached = thumbSrcCache.get(photo.path);
     const srcAttr = cached ? ` src="${cached}"` : '';
     const loadedClass = cached ? ' is-loaded' : '';
-    return `<div class="photo-card" data-vid="${vid}" onclick="openLightbox('${vid}')">
+    const picked = selectedPaths.has(photo.path) ? ' is-selected' : '';
+    return `<div class="photo-card${picked}" data-vid="${vid}" data-path="${encodeURIComponent(photo.path || '')}" onclick="openLightbox('${vid}')">
+        <span class="select-check" aria-hidden="true"></span>
         <div class="thumbnail-container">
             <div class="thumbnail-placeholder"></div>
             <img class="thumb-lazy${loadedClass}" data-src="${thumb}"${srcAttr} alt="${escapeHtml(photo.name)}">
@@ -1628,6 +1691,11 @@ function setWatchingZoom(locked) {
 }
 
 function openLightbox(vid) {
+    if (selectMode) {
+        const photo = getPhotoByVid(vid);
+        if (photo) toggleSelectedPath(photo.path);
+        return;
+    }
     if (slideshowActive) stopSlideshow(false);
     thumbLoadPaused = true;
     const photo = getPhotoByVid(vid); if (!photo) return;
@@ -2100,6 +2168,110 @@ function removePhotoFromState(photo) {
 }
 
 // ========== DELETE ==========
+function currentPhotoItems() {
+    if (searchMode) return searchResults.items || [];
+    return window._visiblePhotos || feedCache.items || [];
+}
+
+function setSelectMode(on) {
+    selectMode = !!on;
+    document.body.classList.toggle('select-mode', selectMode);
+    const btn = document.getElementById('selectModeBtn');
+    if (btn) {
+        btn.textContent = selectMode ? 'Selecting' : 'Select';
+        btn.classList.toggle('btn--active', selectMode);
+        btn.setAttribute('aria-pressed', selectMode ? 'true' : 'false');
+    }
+    if (!selectMode) selectedPaths.clear();
+    const bar = document.getElementById('selectBar');
+    if (bar) bar.hidden = !selectMode;
+    updateSelectBar();
+    markSelectedCards();
+}
+
+function toggleSelectMode() {
+    setSelectMode(!selectMode);
+}
+
+function markSelectedCards() {
+    document.querySelectorAll('.photo-card').forEach(card => {
+        let path = '';
+        try { path = decodeURIComponent(card.dataset.path || ''); } catch (_) { path = ''; }
+        card.classList.toggle('is-selected', selectedPaths.has(path));
+    });
+}
+
+function toggleSelectedPath(path) {
+    if (!path) return;
+    if (selectedPaths.has(path)) selectedPaths.delete(path);
+    else selectedPaths.add(path);
+    markSelectedCards();
+    updateSelectBar();
+}
+
+function updateSelectBar() {
+    const n = selectedPaths.size;
+    const el = document.getElementById('selectCount');
+    if (el) el.textContent = n === 1 ? '1 selected' : `${n} selected`;
+    const del = document.getElementById('deleteSelectedBtn');
+    if (del) del.disabled = n === 0;
+}
+
+function selectShown() {
+    currentPhotoItems().forEach(item => { if (item && item.path) selectedPaths.add(item.path); });
+    markSelectedCards();
+    updateSelectBar();
+}
+
+function refreshPhotoStats() {
+    setStats(searchMode
+        ? `${searchResults.items.length} of ${searchResults.total} results`
+        : (feedCache.hasMore
+            ? `${feedCache.items.length} loaded — scroll for more`
+            : `${feedCache.items.length} photos`));
+}
+
+async function deleteSelected() {
+    const paths = [...selectedPaths];
+    if (!paths.length) return;
+    const noun = paths.length === 1 ? 'photo' : 'photos';
+    if (!confirm(`Delete ${paths.length} ${noun}?`)) return;
+    const btn = document.getElementById('deleteSelectedBtn');
+    if (btn) btn.disabled = true;
+    try {
+        const resp = await fetch(serverBaseUrl + '/api/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paths }),
+        });
+        let data = {};
+        try { data = await resp.json(); } catch (_) {}
+        if (resp.status === 403) {
+            alert(data.error || 'Delete is off on the cloud gallery.');
+            return;
+        }
+        if (!resp.ok) {
+            alert(data.error || 'Failed to delete');
+            return;
+        }
+        const gone = new Set(data.deleted || []);
+        for (const path of gone) {
+            const photo = allPhotos.find(p => p.path === path)
+                || (window._visiblePhotos || []).find(p => p.path === path);
+            if (photo) removePhotoFromState(photo);
+            selectedPaths.delete(path);
+        }
+        renderGrid();
+        updateSelectBar();
+        const failed = (data.failed || []).length;
+        if (failed) alert(`Deleted ${gone.size}. ${failed} could not be deleted.`);
+    } catch (err) {
+        alert('Delete failed: ' + err.message);
+    } finally {
+        if (btn) btn.disabled = selectedPaths.size === 0;
+    }
+}
+
 async function deletePhoto(event, vid) {
     event.stopPropagation();
     const photo = getPhotoByVid(vid); if (!photo) return;
@@ -2108,11 +2280,8 @@ async function deletePhoto(event, vid) {
         if (!r.ok) { alert('Failed to delete'); return; }
     } catch (e) { alert(e.message); return; }
     removePhotoFromState(photo);
-    setStats(searchMode
-        ? `${searchResults.items.length} of ${searchResults.total} results`
-        : (feedCache.hasMore
-            ? `${feedCache.items.length} loaded — scroll for more`
-            : `${feedCache.items.length} photos`));
+    selectedPaths.delete(photo.path);
+    refreshPhotoStats();
 }
 
 async function deleteFromLightbox() {
@@ -2245,7 +2414,12 @@ document.addEventListener('keydown', (e) => {
             e.preventDefault();
             toggleSlideshowPause();
         }
+    } else if (e.key === 'Escape' && selectMode) {
+        const header = document.querySelector('header');
+        if (header && header.classList.contains('menu-open')) return;
+        setSelectMode(false);
     } else if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+        if (selectMode) return;
         if (e.key === ' ') { e.preventDefault(); startSlideshow(false); }
         if (e.key === 'r' || e.key === 'R') { e.preventDefault(); startSlideshow(true); }
     }

@@ -85,6 +85,65 @@
             color: #fff;
         }
 
+        .btn--danger {
+            background: #e60023;
+            border-color: #e60023;
+            color: #fff;
+        }
+        .btn--danger:hover { background: #cc001f; }
+        .btn--danger:disabled { opacity: 0.45; cursor: default; }
+
+        .select-check {
+            display: none;
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            z-index: 6;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            border: 2px solid #fff;
+            background: rgba(0, 0, 0, 0.45);
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+            pointer-events: none;
+        }
+        body.select-mode .select-check { display: block; }
+        .video-card.is-selected { box-shadow: inset 0 0 0 3px #e60023; }
+        .video-card.is-selected .select-check {
+            background: #e60023;
+            border-color: #e60023;
+        }
+        .video-card.is-selected .select-check::after {
+            content: '✓';
+            color: #fff;
+            font-size: 16px;
+            line-height: 24px;
+            display: block;
+            text-align: center;
+        }
+        body.select-mode .video-overlay,
+        body.select-mode .fav-badge,
+        body.select-mode .play-overlay { opacity: 0; pointer-events: none; }
+        body.select-mode .video-card:hover { transform: none; }
+        .select-bar {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 80;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+            padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+            background: #111;
+            border-top: 1px solid #2a2a2a;
+        }
+        .select-bar[hidden] { display: none !important; }
+        .select-bar .count { flex: 1 1 120px; color: #eee; font-size: 0.9rem; }
+        .select-bar .btn { min-height: 44px; }
+        body.select-mode { padding-bottom: 76px; }
+
         .btn--active {
             background: #e60023;
             border-color: #e60023;
@@ -1373,6 +1432,7 @@
             <option value="size-desc">Largest</option>
             <option value="size-asc">Smallest</option>
         </select>
+        <button type="button" class="btn" id="selectModeBtn" onclick="toggleSelectMode()" aria-pressed="false">Select</button>
         <button class="btn" onclick="loadFromServer(false, true)">↻ Refresh</button>
         <button class="btn" onclick="startSlideshow(false)" id="slideshowSeqBtn">▶ Slideshow</button>
         <button class="btn" onclick="startSlideshow(true)" id="slideshowRandomBtn">🎲 Random</button>
@@ -1391,6 +1451,12 @@
 </div>
 
 <div id="recipeCard" hidden></div>
+<div class="select-bar" id="selectBar" hidden>
+    <span class="count" id="selectCount">0 selected</span>
+    <button type="button" class="btn" id="selectShownBtn" onclick="selectShown()">Select shown</button>
+    <button type="button" class="btn btn--danger" id="deleteSelectedBtn" onclick="deleteSelected()" disabled>Delete</button>
+    <button type="button" class="btn" onclick="setSelectMode(false)">Done</button>
+</div>
 <div class="video-grid" id="videoGrid">
     <div class="empty-state">
         <div class="icon">📂</div>
@@ -1564,7 +1630,9 @@ function getVideoByVid(vid) {
     return allVideos.find(v => v.name === name);
 }
 const THUMB_URL_VERSION = '4'; // bump when thumb pipeline changes (busts browser cache)
-const APP_BUILD = '2026-10-25-colab-link';
+const APP_BUILD = '2026-11-02-multi-delete';
+let selectMode = false;
+const selectedPaths = new Set();
 const FAVORITES_KEY = 'comfyVideoFavorites';
 const favoritesMode = new URLSearchParams(location.search).get('favorites') === '1';
 const DISABLE_THUMBS = new URLSearchParams(location.search).has('nothumbs');
@@ -2359,7 +2427,11 @@ function bindMobileMenu() {
         if (e.key !== 'Escape') return;
         const modal = document.getElementById('modalOverlay');
         if (modal && modal.classList.contains('active')) return;
-        if (document.querySelector('header').classList.contains('menu-open')) setMobileMenu(false);
+        if (document.querySelector('header').classList.contains('menu-open')) {
+            setMobileMenu(false);
+            return;
+        }
+        if (selectMode) setSelectMode(false);
     });
     window.addEventListener('resize', () => {
         if (!window.matchMedia('(max-width: 1200px)').matches) setMobileMenu(false);
@@ -2667,9 +2739,11 @@ function renderGrid() {
         stats.textContent = '';
         return;
     }
+    const shown = feedCache.items?.length || 0;
+    const videoWord = shown === 1 ? 'video' : 'videos';
     stats.textContent = feedCache.hasMore
-        ? `${feedCache.items?.length || 0} loaded — scroll for more`
-        : `${feedCache.items?.length || 0} videos` +
+        ? `${shown} loaded — scroll for more`
+        : `${shown} ${videoWord}` +
         (serverHasVthumb ? '' : ' (tap ▶ to play — thumbnails loading)');
     updateMonthPicker();
     updateDayFilter();
@@ -2798,7 +2872,9 @@ function buildVideoCardHtml(video) {
         ? `<img class="thumb-lazy video-thumb" data-src="${getVThumbSrc(video)}" alt="${escapeHtml(video.name)}" onload="onThumbLoaded(this)" onerror="fallbackThumbnail(this)">`
         : '';
     const favOn = isFavorite(video.path);
-    return `<div class="video-card" data-vid="${vid}" data-path="${pathEnc}">
+    const picked = selectedPaths.has(video.path) ? ' is-selected' : '';
+    return `<div class="video-card${picked}" data-vid="${vid}" data-path="${pathEnc}">
+        <span class="select-check" aria-hidden="true"></span>
         <div class="thumbnail-container" data-path="${pathEnc}">
             <button type="button" class="fav-badge${favOn ? ' is-on' : ''}" data-action="favorite" data-path="${pathEnc}" title="${favOn ? 'Remove from favorites' : 'Add to favorites'}" aria-label="Favorite" aria-pressed="${favOn ? 'true' : 'false'}">${favOn ? '♥' : '♡'}</button>
             ${thumbHtml}
@@ -4024,7 +4100,7 @@ function settleVideoZoom() {
 
 document.addEventListener('keydown', (e) => {
     // Panic: space/backtick (not when typing)
-    if ((e.key === ' ' || e.key === '`') && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA' && !document.getElementById('modalOverlay').classList.contains('active')) {
+    if ((e.key === ' ' || e.key === '`') && !selectMode && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA' && !document.getElementById('modalOverlay').classList.contains('active')) {
         e.preventDefault(); togglePanic(); return;
     }
     // Modal keys
@@ -4057,6 +4133,16 @@ document.addEventListener('keydown', (e) => {
 document.getElementById('modalOverlay').addEventListener('click', (e) => { if (e.target === e.currentTarget) closeModal(); });
 
 document.getElementById('videoGrid').addEventListener('click', (e) => {
+    if (selectMode) {
+        const card = e.target.closest('.video-card');
+        if (!card) return;
+        e.preventDefault();
+        e.stopPropagation();
+        let path = '';
+        try { path = decodeURIComponent(card.dataset.path || ''); } catch (_) { path = ''; }
+        toggleSelectedPath(path);
+        return;
+    }
     const btn = e.target.closest('[data-action]');
     if (btn) {
         e.stopPropagation();
@@ -4079,6 +4165,123 @@ document.getElementById('videoGrid').addEventListener('click', (e) => {
     if (container) playVideoByPath(container.dataset.path);
 });
 
+function currentVideoItems() {
+    if (favoritesMode) return favoriteItems();
+    if (searchMode) return searchResults.items || [];
+    return feedCache.items || [];
+}
+
+function dropDeletedVideo(video) {
+    if (!video) return;
+    forgetFavorite(video.path);
+    const ai = allVideos.indexOf(video);
+    if (ai > -1) allVideos.splice(ai, 1);
+    const fi = filteredVideos.indexOf(video);
+    if (fi > -1) filteredVideos.splice(fi, 1);
+    feedCache.items = (feedCache.items || []).filter(item => item.path !== video.path);
+    if (feedCache.total) feedCache.total = Math.max(0, feedCache.total - 1);
+    if (searchResults.items?.length) {
+        searchResults.items = searchResults.items.filter(item => item.path !== video.path);
+        if (searchResults.total) searchResults.total = Math.max(0, searchResults.total - 1);
+    }
+    if (window._visibleVideos) {
+        window._visibleVideos = window._visibleVideos.filter(item => item.path !== video.path);
+    }
+    selectedPaths.delete(video.path);
+}
+
+function setSelectMode(on) {
+    selectMode = !!on;
+    document.body.classList.toggle('select-mode', selectMode);
+    const btn = document.getElementById('selectModeBtn');
+    if (btn) {
+        btn.textContent = selectMode ? 'Selecting' : 'Select';
+        btn.classList.toggle('btn--active', selectMode);
+        btn.setAttribute('aria-pressed', selectMode ? 'true' : 'false');
+    }
+    if (!selectMode) selectedPaths.clear();
+    const bar = document.getElementById('selectBar');
+    if (bar) bar.hidden = !selectMode;
+    updateSelectBar();
+    markSelectedCards('.video-card');
+}
+
+function toggleSelectMode() {
+    setSelectMode(!selectMode);
+}
+
+function markSelectedCards(selector) {
+    document.querySelectorAll(selector).forEach(card => {
+        let path = '';
+        try { path = decodeURIComponent(card.dataset.path || card.dataset.vid || ''); }
+        catch (_) { path = ''; }
+        card.classList.toggle('is-selected', selectedPaths.has(path));
+    });
+}
+
+function toggleSelectedPath(path) {
+    if (!path) return;
+    if (selectedPaths.has(path)) selectedPaths.delete(path);
+    else selectedPaths.add(path);
+    markSelectedCards('.video-card');
+    updateSelectBar();
+}
+
+function updateSelectBar() {
+    const n = selectedPaths.size;
+    const el = document.getElementById('selectCount');
+    if (el) el.textContent = n === 1 ? '1 selected' : `${n} selected`;
+    const del = document.getElementById('deleteSelectedBtn');
+    if (del) del.disabled = n === 0;
+}
+
+function selectShown() {
+    currentVideoItems().forEach(item => { if (item && item.path) selectedPaths.add(item.path); });
+    markSelectedCards('.video-card');
+    updateSelectBar();
+}
+
+async function deleteSelected() {
+    const paths = [...selectedPaths];
+    if (!paths.length) return;
+    const noun = paths.length === 1 ? 'video' : 'videos';
+    if (!confirm(`Delete ${paths.length} ${noun}?`)) return;
+    const btn = document.getElementById('deleteSelectedBtn');
+    if (btn) btn.disabled = true;
+    try {
+        const resp = await fetch(serverBaseUrl + '/api/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paths }),
+        });
+        let data = {};
+        try { data = await resp.json(); } catch (_) {}
+        if (resp.status === 403) {
+            alert(data.error || 'Delete is off on the cloud gallery.');
+            return;
+        }
+        if (!resp.ok) {
+            alert(data.error || 'Failed to delete');
+            return;
+        }
+        const gone = new Set(data.deleted || []);
+        for (const path of gone) {
+            const video = allVideos.find(v => v.path === path)
+                || (window._visibleVideos || []).find(v => v.path === path);
+            if (video) dropDeletedVideo(video);
+            else selectedPaths.delete(path);
+        }
+        renderGrid();
+        updateSelectBar();
+        const failed = (data.failed || []).length;
+        if (failed) alert(`Deleted ${gone.size}. ${failed} could not be deleted.`);
+    } catch (err) {
+        alert('Delete failed: ' + err.message);
+    } finally {
+        if (btn) btn.disabled = selectedPaths.size === 0;
+    }
+}
+
 async function deleteVideoByPath(event, pathEnc) {
     event.stopPropagation();
     const video = getVideoByPath(pathEnc);
@@ -4087,13 +4290,7 @@ async function deleteVideoByPath(event, pathEnc) {
         const resp = await fetch(video.url, { method: 'DELETE' });
         if (!resp.ok) { alert('Failed to delete'); return; }
     } catch (err) { alert('Delete failed: ' + err.message); return; }
-    forgetFavorite(video.path);
-    allVideos.splice(allVideos.indexOf(video), 1);
-    const fi = filteredVideos.indexOf(video); if (fi > -1) filteredVideos.splice(fi, 1);
-    feedCache.items = (feedCache.items || []).filter(item => item.path !== video.path);
-    if (searchResults.items?.length) {
-        searchResults.items = searchResults.items.filter(item => item.path !== video.path);
-    }
+    dropDeletedVideo(video);
     renderGrid();
 }
 

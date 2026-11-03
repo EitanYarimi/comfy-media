@@ -755,6 +755,32 @@ def delete_local_media(rel_path):
     return removed_file or removed_index
 
 
+DELETE_BATCH_LIMIT = 400
+
+
+def delete_local_media_many(paths):
+    """Delete several local files. Returns (deleted paths, failed [{path, error}])."""
+    deleted = []
+    failed = []
+    seen = set()
+    for raw in paths or []:
+        rel = _norm_rel(raw)
+        if not rel or '..' in rel.split('/'):
+            failed.append({'path': str(raw or ''), 'error': 'Bad path'})
+            continue
+        if rel in seen:
+            continue
+        seen.add(rel)
+        try:
+            if delete_local_media(rel):
+                deleted.append(rel)
+            else:
+                failed.append({'path': rel, 'error': 'Not found'})
+        except OSError as exc:
+            failed.append({'path': rel, 'error': str(exc)})
+    return deleted, failed
+
+
 def _video_cache_key(filepath):
     return hashlib.md5((str(filepath.resolve()) + ':v400webp').encode()).hexdigest()
 
@@ -3863,6 +3889,32 @@ class VideoHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         bare = unquote(self.path).split('?', 1)[0]
+        if bare == '/api/delete':
+            if SITE_PASSWORD and not is_authed(self):
+                send_http_bytes(self, 401, UNAUTHORIZED_JSON, 'application/json')
+                return
+            if STORAGE_MODE == 'drive':
+                send_http_json(self, 403, {'error': 'Delete disabled in cloud/Drive mode'})
+                return
+            length = int(self.headers.get('Content-Length') or 0)
+            if length <= 0 or length > 512 * 1024:
+                send_http_json(self, 400, {'error': 'Expected a list of files'})
+                return
+            try:
+                data = json.loads(self.rfile.read(length).decode('utf-8'))
+            except (UnicodeError, json.JSONDecodeError, ValueError):
+                send_http_json(self, 400, {'error': 'Expected a list of files'})
+                return
+            paths = data.get('paths') if isinstance(data, dict) else None
+            if not isinstance(paths, list) or not paths:
+                send_http_json(self, 400, {'error': 'Choose at least one file'})
+                return
+            if len(paths) > DELETE_BATCH_LIMIT:
+                send_http_json(self, 400, {'error': f'Delete up to {DELETE_BATCH_LIMIT} files at a time'})
+                return
+            deleted, failed = delete_local_media_many(paths)
+            send_http_json(self, 200, {'deleted': deleted, 'failed': failed})
+            return
         if bare != '/login':
             send_http_empty(self, 404)
             return

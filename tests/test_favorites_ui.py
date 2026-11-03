@@ -49,7 +49,7 @@ class FavoritesMarkupTests(unittest.TestCase):
         self.assertIn('id="pageControls"', src)
         self.assertIn('id="zoomResetBtn"', src)
         self.assertIn('webkitEnterFullscreen', src)
-        self.assertIn("const APP_BUILD = '2026-10-25-colab-link'", src)
+        self.assertIn("const APP_BUILD = '2026-11-02-multi-delete'", src)
         self.assertIn('header.menu-open .controls { display: flex; }', src)
         self.assertNotIn('.modal-close--fs,\n            .modal-close--fit {\n                display: none;', src)
         photos = (ROOT / 'photos.html').read_text()
@@ -58,6 +58,18 @@ class FavoritesMarkupTests(unittest.TestCase):
         self.assertIn('function toggleLightboxFullscreen()', photos)
         run = (ROOT / 'run.html').read_text()
         self.assertIn('min-height: 44px', run)
+
+    def test_multi_delete_on_videos_and_photos(self):
+        for name in ('index.html', 'photos.html'):
+            src = (ROOT / name).read_text()
+            self.assertIn('id="selectModeBtn"', src, name)
+            self.assertIn('id="deleteSelectedBtn"', src, name)
+            self.assertIn('function deleteSelected()', src, name)
+            self.assertIn("'/api/delete'", src, name)
+            self.assertIn('function setSelectMode', src, name)
+        server = (ROOT / 'video_server.py').read_text()
+        self.assertIn('def delete_local_media_many', server)
+        self.assertIn("bare == '/api/delete'", server)
 
     def test_recipe_script_is_served_from_the_app_folder(self):
         import video_server
